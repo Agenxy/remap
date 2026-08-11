@@ -2,7 +2,7 @@ use std::ffi::OsString;
 
 use clap::error::ErrorKind;
 use clap::{Arg, ArgAction, Command};
-use portal_core::HostHeaderPolicy;
+use remap_core::HostHeaderPolicy;
 
 use crate::diagnostic::Diagnostic;
 
@@ -67,11 +67,11 @@ pub(crate) fn parse(arguments: Vec<OsString>) -> ParseOutcome {
 }
 
 pub(crate) fn command() -> Command {
-    Command::new("portal")
+    Command::new("remap")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Maps names to addresses and services on your own devices")
         .long_about(
-            "Portal is a local-first name override and service-routing utility.\n\
+            "Remap is a local-first name override and service-routing utility.\n\
              This build validates mappings and reports local capability; it does\n\
              not yet change DNS, install services, or modify trust.",
         )
@@ -114,9 +114,9 @@ pub(crate) fn command() -> Command {
         )
         .after_help(
             "Examples:\n  \
-             portal validate atlas http://127.0.0.1:5173\n  \
-             portal validate '*.lab' 10.0.0.8\n  \
-             portal --json doctor\n\n\
+             remap validate atlas http://127.0.0.1:5173\n  \
+             remap validate '*.lab' 10.0.0.8\n  \
+             remap --json doctor\n\n\
              Validation is offline. No command in this build changes system state.",
         )
 }
@@ -152,7 +152,7 @@ fn required_string(matches: &clap::ArgMatches, name: &str) -> Result<String, Dia
 mod tests {
     use std::ffi::OsString;
 
-    use portal_core::HostHeaderPolicy;
+    use remap_core::HostHeaderPolicy;
 
     use super::{Action, ParseOutcome, command, parse};
 
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn parses_explicit_host_policy() {
         let outcome = parse(arguments(&[
-            "portal",
+            "remap",
             "validate",
             "atlas",
             "https://example.com",
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn preserves_json_intent_for_usage_errors() {
-        let outcome = parse(arguments(&["portal", "--json", "not-a-command"]));
+        let outcome = parse(arguments(&["remap", "--json", "not-a-command"]));
         assert!(matches!(outcome, ParseOutcome::Failure { json: true, .. }));
     }
 }

@@ -110,29 +110,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
-name = "portal-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "portal-core",
- "serde_json",
-]
-
-[[package]]
-name = "portal-core"
-version = "0.1.0"
-
-[[package]]
-name = "portal-quality"
-version = "0.1.0"
-dependencies = [
- "clap",
- "proc-macro2",
- "serde_json",
- "syn",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -148,6 +125,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "remap"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "remap-core",
+ "serde_json",
+]
+
+[[package]]
+name = "remap-core"
+version = "0.1.0"
+
+[[package]]
+name = "remap-quality"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "proc-macro2",
+ "serde_json",
+ "syn",
 ]
 
 [[package]]

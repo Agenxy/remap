@@ -20,7 +20,7 @@ pub(crate) fn workspace_root() -> Result<PathBuf, String> {
             }
         }
         if !candidate.pop() {
-            return Err("cannot find Portal's workspace Cargo.toml from this directory".to_owned());
+            return Err("cannot find Remap's workspace Cargo.toml from this directory".to_owned());
         }
     }
 }

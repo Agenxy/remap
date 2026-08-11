@@ -1,4 +1,4 @@
-//! Portal's human and machine-readable command-line interface.
+//! Remap's human and machine-readable command-line interface.
 
 mod app;
 mod cli;
@@ -56,7 +56,7 @@ fn finish_write(result: io::Result<()>, success: ExitCode) -> ExitCode {
             let mut stderr = io::stderr().lock();
             drop(writeln!(
                 stderr,
-                "portal: cannot write command output: {error}"
+                "remap: cannot write command output: {error}"
             ));
             ExitCode::FAILURE
         }

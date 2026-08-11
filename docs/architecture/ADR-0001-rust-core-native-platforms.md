@@ -4,7 +4,7 @@ Status: accepted.
 
 ## Context
 
-Portal must support macOS and Linux without weakening either implementation.
+Remap must support macOS and Linux without weakening either implementation.
 Its shared code parses untrusted network input, routes long-lived connections,
 maintains security-sensitive state, and may execute inside a constrained macOS
 Network Extension. C++26 offers control but not memory safety; Go offers an
@@ -27,11 +27,11 @@ and uses Rust within K7.
   daemon.
 - Go and C++ are not initial implementation languages.
 - Tool versions are pinned exactly through `mise.toml`, following the useful
-  reproducibility convention in K7 without coupling Portal to K7's build.
+  reproducibility convention in K7 without coupling Remap to K7's build.
 
 ## Consequences
 
-Portal gains memory safety without garbage collection, deterministic resource
+Remap gains memory safety without garbage collection, deterministic resource
 control, one portable engine, Cargo-native testing and fuzzing, and a practical
 embedding story. The project accepts Rust's steeper learning curve and compile
 times. Apple SDK changes remain isolated in Swift rather than depending on

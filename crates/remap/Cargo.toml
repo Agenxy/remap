@@ -1,0 +1,27 @@
+[package]
+name = "remap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Map arbitrary hostnames to addresses and routed services"
+readme = "../../README.md"
+keywords = ["dns", "hostname", "networking", "proxy", "routing"]
+categories = ["command-line-utilities", "network-programming"]
+
+[[bin]]
+name = "remap"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+remap-core = { path = "../remap-core", version = "=0.1.0" }
+serde_json.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

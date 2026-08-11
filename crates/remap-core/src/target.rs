@@ -4,7 +4,7 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU16;
 use std::str::FromStr;
 
-use crate::{PortalName, PortalNameError};
+use crate::{RemapName, RemapNameError};
 
 /// Supported upstream HTTP schemes.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
@@ -24,10 +24,10 @@ impl Display for HttpScheme {
     }
 }
 
-/// How Portal constructs the upstream HTTP `Host` value and TLS SNI.
+/// How Remap constructs the upstream HTTP `Host` value and TLS SNI.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub enum HostHeaderPolicy {
-    /// Preserve the client-facing Portal name.
+    /// Preserve the client-facing Remap name.
     PreserveClient,
     /// Replace it with the configured upstream host.
     UseUpstream,
@@ -54,7 +54,7 @@ impl Display for HostHeaderPolicy {
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum UpstreamHost {
     /// A canonical hostname.
-    Name(PortalName),
+    Name(RemapName),
     /// An IPv4 or IPv6 address.
     Address(IpAddr),
 }
@@ -88,8 +88,8 @@ pub enum HttpUpstreamError {
     InvalidPort(String),
     /// IPv6 literals must use URL brackets.
     UnbracketedIpv6,
-    /// The hostname is invalid under Portal's canonical name policy.
-    InvalidHost(PortalNameError),
+    /// The hostname is invalid under Remap's canonical name policy.
+    InvalidHost(RemapNameError),
 }
 
 impl Display for HttpUpstreamError {
@@ -235,7 +235,7 @@ impl HttpUpstream {
             let close_index = bracketed.find(']').ok_or(HttpUpstreamError::MissingHost)?;
             let (raw_address, trailing) = bracketed.split_at(close_index);
             let address = raw_address.parse::<Ipv6Addr>().map_err(|_| {
-                HttpUpstreamError::InvalidHost(PortalNameError::AddressLiteral(
+                HttpUpstreamError::InvalidHost(RemapNameError::AddressLiteral(
                     raw_address.to_owned(),
                 ))
             })?;
@@ -266,7 +266,7 @@ impl HttpUpstream {
 
         let host = raw_host.parse::<IpAddr>().map_or_else(
             |_| {
-                PortalName::parse(raw_host)
+                RemapName::parse(raw_host)
                     .map(UpstreamHost::Name)
                     .map_err(HttpUpstreamError::InvalidHost)
             },
@@ -303,8 +303,8 @@ impl FromStr for HttpUpstream {
 /// A validation failure for an inferred mapping destination.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum MappingTargetError {
-    /// A DNS alias is not a valid Portal hostname.
-    InvalidName(PortalNameError),
+    /// A DNS alias is not a valid Remap hostname.
+    InvalidName(RemapNameError),
     /// An HTTP upstream is invalid.
     InvalidHttpUpstream(HttpUpstreamError),
 }
@@ -333,7 +333,7 @@ pub enum MappingTarget {
     /// Return an IPv4 or IPv6 DNS answer directly.
     DnsAddress(IpAddr),
     /// Resolve or return a DNS alias under the finalized DNS policy.
-    DnsAlias(PortalName),
+    DnsAlias(RemapName),
     /// Return loopback from DNS and route HTTP by Host or TLS SNI.
     Http(HttpUpstream),
 }
@@ -386,7 +386,7 @@ impl MappingTarget {
         if let Ok(address) = input.parse::<IpAddr>() {
             return Ok(Self::DnsAddress(address));
         }
-        PortalName::parse(input)
+        RemapName::parse(input)
             .map(Self::DnsAlias)
             .map_err(MappingTargetError::InvalidName)
     }

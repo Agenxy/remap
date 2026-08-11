@@ -1,6 +1,6 @@
-# Contributing to Portal
+# Contributing to Remap
 
-Thank you for helping. Portal welcomes careful bug reports, design criticism,
+Thank you for helping. Remap welcomes careful bug reports, design criticism,
 documentation, tests, accessibility improvements, platform work, and code.
 
 Read [VALUES.md](VALUES.md), [SECURITY.md](SECURITY.md), and
@@ -10,24 +10,24 @@ start with an ADR rather than an implementation surprise.
 
 ## Development setup
 
-Portal pins tools exactly with `mise`:
+Remap pins tools exactly with `mise`:
 
 ```text
 mise install
 mise exec -- cargo fmt --all --check
 mise exec -- cargo clippy --workspace --all-targets --all-features
 mise exec -- cargo test --workspace --all-targets
-mise exec -- cargo run -p portal-quality -- check
+mise exec -- cargo run -p remap-quality -- check
 mise exec -- cargo deny check
 ```
 
-`make install` writes the `portal` binary to `~/.local/bin` by default. Override
-the prefix with `PORTAL_INSTALL_ROOT=/another/prefix`; the selected prefix must
+`make install` writes the `remap` binary to `~/.local/bin` by default. Override
+the prefix with `REMAP_INSTALL_ROOT=/another/prefix`; the selected prefix must
 already have its `bin` directory on `PATH`.
 
 `make` provides a familiar, discoverable front door for common commands. Its
 targets remain thin: substantive behavior belongs in a typed native tool such
-as `portal-quality`. Shell is appropriate for initial bootstrap and concise
+as `remap-quality`. Shell is appropriate for initial bootstrap and concise
 terminal composition, not as a hidden product implementation. Python
 automation, when justified, uses a locked `uv` project; process execution stays
 explicit, minimal, and limited to genuine tool boundaries.

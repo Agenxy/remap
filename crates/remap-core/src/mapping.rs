@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
-use crate::{MappingTarget, NamePattern, PortalName};
+use crate::{MappingTarget, NamePattern, RemapName};
 
 /// One user-directed name mapping in an immutable registry revision.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -116,7 +116,7 @@ impl RegistrySnapshot {
 
     /// Resolves with exact-first, most-specific-wildcard precedence.
     #[must_use]
-    pub fn resolve(&self, name: &PortalName) -> Option<&Mapping> {
+    pub fn resolve(&self, name: &RemapName) -> Option<&Mapping> {
         self.mappings
             .iter()
             .find(|mapping| mapping.is_enabled() && mapping.pattern().matches(name))

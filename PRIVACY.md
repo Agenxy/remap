@@ -1,6 +1,6 @@
 # Privacy
 
-Portal is designed for local control and minimal knowledge.
+Remap is designed for local control and minimal knowledge.
 
 ## Baseline
 
@@ -31,7 +31,7 @@ exact data fields and deletion behavior.
 
 Peer synchronization is explicit and mutually authenticated. Registry data is
 shared only with enrolled peers selected by the user. The architecture does not
-require a Portal-operated coordination service.
+require a Remap-operated coordination service.
 
 This policy is an implementation contract. Changes require an architecture
 decision, threat analysis, documentation, and an explicit user-visible reason.

@@ -1,4 +1,4 @@
-use portal_core::{HostHeaderPolicy, MappingTarget, NamePattern};
+use remap_core::{HostHeaderPolicy, MappingTarget, NamePattern};
 
 use crate::cli::Action;
 use crate::diagnostic::Diagnostic;

@@ -1,4 +1,4 @@
-# `portal` command reference
+# `remap` command reference
 
 Status: M0 command contract.
 
@@ -10,9 +10,9 @@ registry.
 ## Discover the build
 
 ```text
-portal --help
-portal doctor
-portal --json doctor
+remap --help
+remap doctor
+remap --json doctor
 ```
 
 `doctor` is deliberately useful before privileged installation exists. It
@@ -22,10 +22,10 @@ posture without making a network request.
 ## Validate a mapping
 
 ```text
-portal validate atlas http://127.0.0.1:5173
-portal validate google.com 127.0.0.1
-portal validate '*.lab' https://example.com:9443/base
-portal validate atlas https://upstream.example --host-header use-upstream
+remap validate atlas http://127.0.0.1:5173
+remap validate google.com 127.0.0.1
+remap validate '*.lab' https://example.com:9443/base
+remap validate atlas https://upstream.example --host-header use-upstream
 ```
 
 The result shows the canonical name, destination, inferred destination type,
@@ -37,7 +37,7 @@ Every structured response includes schema identity and success state:
 
 ```json
 {
-  "schema": "portal.cli/v1",
+  "schema": "remap.cli/v1",
   "ok": true,
   "command": "validate",
   "result": {
@@ -54,12 +54,12 @@ Errors use the same envelope and stable codes:
 
 ```json
 {
-  "schema": "portal.cli/v1",
+  "schema": "remap.cli/v1",
   "ok": false,
   "error": {
-    "code": "P101",
+    "code": "R101",
     "message": "the mapping name is not valid",
-    "detail": "'127.0.0.1' is an address literal, not a DNS name that Portal can override",
+    "detail": "'127.0.0.1' is an address literal, not a DNS name that Remap can override",
     "hint": "Use a hostname such as 'atlas', 'api.lab', or '*.lab'; addresses belong on the target side."
   }
 }
@@ -80,4 +80,3 @@ credentials or hidden environment data.
 Mutation commands will be added only when they can call the authoritative
 daemon. They will support structured preview before any destructive, trust, or
 system-wide action.
-

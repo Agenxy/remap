@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "crates/portal-cli",
-    "crates/portal-core",
-    "crates/portal-quality",
+    "crates/remap",
+    "crates/remap-core",
+    "crates/remap-quality",
 ]
 resolver = "3"
 
@@ -11,6 +11,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97.1"
 license = "Apache-2.0"
+repository = "https://github.com/agenxy/remap"
+homepage = "https://github.com/agenxy/remap"
 
 [workspace.dependencies]
 clap = "=4.6.6"

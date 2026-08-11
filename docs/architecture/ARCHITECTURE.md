@@ -1,22 +1,22 @@
-# Portal architecture
+# Remap architecture
 
 Status: architecture bootstrap, August 2026.
 
-Portal is one portable policy and routing system with first-class native macOS
+Remap is one portable policy and routing system with first-class native macOS
 and Linux platform adapters. Cross-platform does not mean lowest-common-
 denominator: each operating system supplies its own correct resolver, service,
 identity, authorization, and packaging integration.
 
 ## Product boundary
 
-Portal owns four related concerns:
+Remap owns four related concerns:
 
 1. Resolve user-controlled DNS names on enrolled devices.
 2. Route HTTP and HTTPS names when the upstream scheme, address, or port differs.
 3. Persist and synchronize one authoritative mapping registry per node.
 4. Make certificate and trust operations explicit and inspectable.
 
-Portal is not a browser extension, hosts-file editor, general-purpose VPN, or
+Remap is not a browser extension, hosts-file editor, general-purpose VPN, or
 promise that an upstream application will tolerate a different origin.
 
 ## System shape
@@ -24,11 +24,11 @@ promise that an upstream application will tolerate a different origin.
 ```mermaid
 flowchart LR
     App["Native management app"] --> Control["Platform control adapter"]
-    CLI["Rust portal CLI"] --> Control
-    Control --> Daemon["Rust portald"]
+    CLI["Rust remap CLI"] --> Control
+    Control --> Daemon["Rust remapd"]
     Daemon --> DB["SQLite registry and operation log"]
     Daemon --> Gateway["Loopback HTTP(S) gateway"]
-    Daemon <-->|"mutual authentication"| Peer["Portal peer"]
+    Daemon <-->|"mutual authentication"| Peer["Remap peer"]
     Daemon -->|"immutable revisioned snapshot"| DNS["Native DNS adapter"]
     Client["System client"] --> DNS
     DNS -->|"direct address or loopback"| Client
@@ -49,7 +49,7 @@ Rust owns:
 
 Swift owns on macOS:
 
-- `Portal.app` in SwiftUI/AppKit.
+- `Remap.app` in SwiftUI/AppKit.
 - The `NEDNSProxyProvider` System Extension entry point.
 - System Extension activation and `SMAppService` lifecycle.
 - XPC surfaces where XPC is the correct native authority boundary.
@@ -68,21 +68,21 @@ database, async runtime, CA, or peer engine.
 
 ## Portable crate direction
 
-Only `portal-core` and `portal-cli` exist in M0. Later crates are introduced at
+Only `remap-core` and `remap` exist in M0. Later crates are introduced at
 their proof milestone, not as empty architecture theater.
 
 | Crate | Responsibility |
 |---|---|
-| `portal-core` | Side-effect-free names, mappings, precedence, revisions |
-| `portal-protocol` | Versioned local-control and snapshot contracts |
-| `portal-dns` | Bounded DNS parsing, synthesis, and forwarding policy |
-| `portal-registry` | SQLite materialization and signed operations |
-| `portal-gateway` | Loopback HTTP/TLS routing and connection lifecycle |
-| `portal-sync` | Peer identity, replication, conflict, and revocation |
-| `portal-platform-macos` | Narrow C/Swift adapters for Apple facilities |
-| `portal-platform-linux` | Resolver, service, credential, and key adapters |
-| `portald` | Single authoritative host daemon |
-| `portal-cli` | Stable human and machine-readable command surface |
+| `remap-core` | Side-effect-free names, mappings, precedence, revisions |
+| `remap-protocol` | Versioned local-control and snapshot contracts |
+| `remap-dns` | Bounded DNS parsing, synthesis, and forwarding policy |
+| `remap-registry` | SQLite materialization and signed operations |
+| `remap-gateway` | Loopback HTTP/TLS routing and connection lifecycle |
+| `remap-sync` | Peer identity, replication, conflict, and revocation |
+| `remap-platform-macos` | Narrow C/Swift adapters for Apple facilities |
+| `remap-platform-linux` | Resolver, service, credential, and key adapters |
+| `remapd` | Single authoritative host daemon |
+| `remap` | Stable human and machine-readable command surface |
 
 ## Mapping model
 
@@ -99,7 +99,7 @@ Resolution order is deterministic:
 
 Destinations are direct IP addresses, DNS aliases, or HTTP upstreams. HTTP host
 behavior is explicit per mapping: preserve the client-facing host or use the
-upstream host. Portal never silently rewrites bodies, redirects, cookies, CSP,
+upstream host. Remap never silently rewrites bodies, redirects, cookies, CSP,
 CORS, or absolute URLs.
 
 The initial name policy accepts ASCII hostname labels and removes one terminal
@@ -108,7 +108,7 @@ is shared by DNS, SNI, certificates, URLs, storage, and every UI.
 
 ## Authority and state
 
-`portald` is the only writer of registry, route, peer, and certificate state.
+`remapd` is the only writer of registry, route, peer, and certificate state.
 Clients submit commands; they never edit SQLite or snapshots. SQLite in WAL
 mode is the local materialized view. Accepted mutations append signed,
 origin-attributed operations and advance a monotonic registry revision.
@@ -126,8 +126,8 @@ Network Extension lifecycle and flow APIs. Unmapped packets are forwarded with
 bounded timeouts and recursion avoidance. Provider failure must not capture DNS
 indefinitely.
 
-On Linux, Portal integrates natively with the active resolver manager. The
-reference systemd-resolved path directs queries through a loopback Portal DNS
+On Linux, Remap integrates natively with the active resolver manager. The
+reference systemd-resolved path directs queries through a loopback Remap DNS
 listener, which answers owned names and forwards all others. NetworkManager and
 non-systemd systems receive explicit adapters rather than shell-command fallbacks
 hidden in the core.
@@ -139,7 +139,7 @@ HTTP names point there; Host or TLS SNI selects the mapping. Streaming,
 backpressure, cancellation, HTTP/1.1, HTTP/2, WebSocket, and server-sent events
 are acceptance requirements.
 
-Portal distinguishes Apple code signing, the optional local HTTPS certificate
+Remap distinguishes Apple code signing, the optional local HTTPS certificate
 authority, and peer node identity. These are unrelated keys and operations.
 Declining CA trust is valid and leaves normal TLS errors visible.
 
@@ -149,4 +149,3 @@ Unit tests establish policy, not platform operation. Implementation claims
 require live proof of unmatched DNS forwarding, daemon restart behavior,
 privileged listener supervision, browser and non-browser routing, local client
 authentication, package installation, update, rollback, and complete removal.
-

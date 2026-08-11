@@ -1,4 +1,4 @@
-//! Native repository-quality gates for Portal.
+//! Native repository-quality gates for Remap.
 
 mod discover;
 mod limits;
@@ -24,8 +24,8 @@ fn main() -> ExitCode {
 }
 
 fn command() -> Command {
-    Command::new("portal-quality")
-        .about("Runs Portal's native structural quality gates")
+    Command::new("remap-quality")
+        .about("Runs Remap's native structural quality gates")
         .long_about(
             "Checks first-party source files without shelling out to language tools.\n\
              Diagnostics are deterministic and every finding fails the command.",
@@ -64,7 +64,7 @@ fn render_success(json_output: bool) {
     if json_output {
         println!("{}", json!({"ok": true, "violations": []}));
     } else {
-        println!("Portal quality: all structural gates passed");
+        println!("Remap quality: all structural gates passed");
     }
 }
 
@@ -96,7 +96,7 @@ fn render_violations(json_output: bool, violations: &[Violation]) {
         eprintln!("  help: {}", violation.rule.help());
     }
     eprintln!(
-        "Portal quality: {} structural violation(s)",
+        "Remap quality: {} structural violation(s)",
         violations.len()
     );
 }
@@ -114,6 +114,6 @@ fn render_failure(json_output: bool, error: &str) {
             })
         );
     } else {
-        eprintln!("portal-quality: {error}");
+        eprintln!("remap-quality: {error}");
     }
 }

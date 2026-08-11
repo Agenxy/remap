@@ -11,17 +11,17 @@ pub(crate) struct Diagnostic {
 impl Diagnostic {
     pub(crate) fn usage(detail: &str) -> Self {
         Self {
-            code: "P001",
+            code: "R001",
             message: "the command could not be understood",
             detail: detail.trim().to_owned(),
-            hint: "Run 'portal --help' to see the complete command surface.",
+            hint: "Run 'remap --help' to see the complete command surface.",
             exit_code: 2,
         }
     }
 
     pub(crate) fn invalid_pattern(detail: String) -> Self {
         Self {
-            code: "P101",
+            code: "R101",
             message: "the mapping name is not valid",
             detail,
             hint: "Use a hostname such as 'atlas', 'api.lab', or '*.lab'; addresses belong on the target side.",
@@ -31,7 +31,7 @@ impl Diagnostic {
 
     pub(crate) fn invalid_target(detail: String) -> Self {
         Self {
-            code: "P102",
+            code: "R102",
             message: "the mapping target is not valid",
             detail,
             hint: "Use an IPv4/IPv6 address, DNS hostname, or an http(s) upstream URL without credentials, a query, or a fragment.",
@@ -41,10 +41,10 @@ impl Diagnostic {
 
     pub(crate) fn internal(detail: impl Into<String>) -> Self {
         Self {
-            code: "P900",
-            message: "Portal encountered an internal command-state error",
+            code: "R900",
+            message: "Remap encountered an internal command-state error",
             detail: detail.into(),
-            hint: "Please report this with the Portal version and command, but remove private names and addresses first.",
+            hint: "Please report this with the Remap version and command, but remove private names and addresses first.",
             exit_code: 70,
         }
     }

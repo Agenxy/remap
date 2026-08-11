@@ -1,21 +1,21 @@
-# What Portal stands for
+# What Remap stands for
 
-Portal exists to give people direct, comprehensible control over names and
+Remap exists to give people direct, comprehensible control over names and
 routes on their own machines. That narrow purpose carries broader obligations.
 
 ## Users are the authority
 
-Portal executes explicit intent. It does not reserve a namespace, moralize
+Remap executes explicit intent. It does not reserve a namespace, moralize
 about technically valid mappings, disguise certificate failures, or introduce
 artificial product restrictions. Power should be legible and reversible.
 
-That is not an excuse for careless defaults. Portal must distinguish user
+That is not an excuse for careless defaults. Remap must distinguish user
 intent from accidents, authenticate mutations, preserve an audit trail, and
 make consequences understandable without becoming paternalistic.
 
 ## Privacy is architecture
 
-Portal should know as little as possible about how it is used. Names, routes,
+Remap should know as little as possible about how it is used. Names, routes,
 peers, certificates, request metadata, and traffic patterns remain local unless
 the user explicitly synchronizes them. Logs exclude names and traffic content
 by default. Diagnostics describe system state without quietly becoming usage
@@ -30,12 +30,12 @@ source code is expected; private user behavior is not part of the product.
 
 ## Open means free to use and inspect
 
-Portal has no trials, DRM, activation server, artificial limits, or hidden
+Remap has no trials, DRM, activation server, artificial limits, or hidden
 tiers. Its foundations must not depend on paid, proprietary, subscription-only,
 or irreplaceable hosted services. Monetization is not forbidden, but it must be
 obvious, optional, honest, and subordinate to the people using the software.
 
-Portal is licensed under Apache-2.0. Legally required notices must be preserved;
+Remap is licensed under Apache-2.0. Legally required notices must be preserved;
 additional credit and citation are warmly appreciated, never extracted through
 dark patterns.
 
@@ -53,7 +53,7 @@ and we add complexity only when it earns its permanent cost.
 
 ## People come first
 
-Portal aims to be international, accessible, inclusive, kind, and useful. We
+Remap aims to be international, accessible, inclusive, kind, and useful. We
 will not exploit, deceive, betray, or knowingly harm users or contributors for
 commercial, political, organizational, or personal advantage. A project that
 cannot keep that promise should stop rather than normalize the breach.

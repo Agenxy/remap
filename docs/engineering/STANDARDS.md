@@ -18,7 +18,7 @@ standard library or a focused, established crate when either is clearly better
 than bespoke security-sensitive machinery. Reject dependencies whose purpose,
 license, provenance, maintenance, build behavior, or transitive cost is unclear.
 
-Portal does not depend on proprietary or paid services. Network protocols and
+Remap does not depend on proprietary or paid services. Network protocols and
 storage formats must have open implementations and a practical migration path.
 
 ## Warnings and static analysis
@@ -35,7 +35,7 @@ aliasing, threading, and lifetime behavior.
 
 ## Structural ceilings
 
-The native `portal-quality` analyzer enforces the same starting ceilings used by
+The native `remap-quality` analyzer enforces the same starting ceilings used by
 K7:
 
 | Metric | Maximum |
@@ -53,7 +53,7 @@ remain outside first-party source paths and carry explicit provenance.
 
 When a new implementation language enters the repository, its native parser or
 first-class analyzer must enforce equivalent limits in the same change. Swift
-will use current SwiftLint structural rules plus Portal-owned checks for any gap.
+will use current SwiftLint structural rules plus Remap-owned checks for any gap.
 Python, if introduced, runs only through a locked `uv` project with Ruff and
 Pyright in strict mode.
 
@@ -95,7 +95,7 @@ default. Diagnostics are inspectable before export.
 
 Security-sensitive code receives property tests, fuzzing, malformed-input tests,
 and platform evidence appropriate to its boundary. Parser and authorization
-failures are fail-closed; DNS interception fails open for names Portal does not
+failures are fail-closed; DNS interception fails open for names Remap does not
 own. Those are different properties and must not be conflated.
 
 ## Performance and efficiency

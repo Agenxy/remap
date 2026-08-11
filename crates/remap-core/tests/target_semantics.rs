@@ -4,8 +4,8 @@ use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 
-use portal_core::{
-    HostHeaderPolicy, HttpScheme, HttpUpstream, MappingTarget, PortalName, UpstreamHost,
+use remap_core::{
+    HostHeaderPolicy, HttpScheme, HttpUpstream, MappingTarget, RemapName, UpstreamHost,
 };
 
 #[test]
@@ -23,7 +23,7 @@ fn infers_canonical_dns_aliases() -> Result<(), Box<dyn Error>> {
     let target = MappingTarget::from_str("NAS.Home.")?;
     assert_eq!(
         target,
-        MappingTarget::DnsAlias(PortalName::parse("nas.home")?)
+        MappingTarget::DnsAlias(RemapName::parse("nas.home")?)
     );
     Ok(())
 }
@@ -37,7 +37,7 @@ fn parses_http_routes_with_explicit_policy() -> Result<(), Box<dyn Error>> {
     assert_eq!(upstream.scheme(), HttpScheme::Https);
     assert_eq!(
         upstream.host(),
-        &UpstreamHost::Name(PortalName::parse("example.com")?)
+        &UpstreamHost::Name(RemapName::parse("example.com")?)
     );
     assert_eq!(upstream.port().map(Into::into), Some(9443));
     assert_eq!(upstream.base_path(), "/base");

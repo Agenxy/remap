@@ -4,12 +4,12 @@ Status: accepted.
 
 ## Context
 
-Portal is a user-directed name override layer, not a manager for a branded
+Remap is a user-directed name override layer, not a manager for a branded
 private namespace.
 
 ## Decision
 
-Portal accepts valid single-label and multi-label hostnames without imposing a
+Remap accepts valid single-label and multi-label hostnames without imposing a
 suffix. It permits invented suffixes, wildcard suffixes, and existing public
 domains:
 
@@ -31,10 +31,10 @@ component.
 
 ## Consequences
 
-- There is no mandatory `.portal` namespace.
+- There is no mandatory `.remap` namespace.
 - Exact matches outrank wildcards; the most specific wildcard wins.
 - Unmapped names follow the normal forwarding path.
 - Mapping a public name intentionally shadows its public result.
-- HTTPS success depends on trust and upstream origin behavior; Portal does not
+- HTTPS success depends on trust and upstream origin behavior; Remap does not
   conceal failures or claim arbitrary applications are relocatable.
 

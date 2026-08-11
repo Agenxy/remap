@@ -4,14 +4,14 @@ Status: accepted at architecture level; platform transports require prototypes.
 
 ## Context
 
-Portal combines a privileged system service, a DNS interception component,
+Remap combines a privileged system service, a DNS interception component,
 user-facing clients, and eventually mutually authenticated peers. Multiple
 writers or policy implementations would make authorization and recovery
 ambiguous.
 
 ## Decision
 
-- `portald` is the sole writer for registry, route, peer, and CA state.
+- `remapd` is the sole writer for registry, route, peer, and CA state.
 - Apps and CLIs submit authenticated commands; they do not edit databases or
   snapshots directly.
 - DNS components consume immutable snapshots and cannot write authority state.
@@ -24,7 +24,7 @@ ambiguous.
 
 ## Consequences
 
-The M0 CLI offers offline validation only. A fake `portal map` that edits a JSON
+The M0 CLI offers offline validation only. A fake `remap set` that edits a JSON
 file would establish the wrong ownership and concurrency contract, so mutation
 commands wait for the daemon milestone.
 
@@ -33,4 +33,3 @@ Swift host embedding the Rust engine—must be decided by an entitlement-bearing
 prototype measuring XPC authentication, extension snapshot delivery, crash
 isolation, update behavior, and FFI lifecycle. It is not decided by aesthetic
 language purity.
-

@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use crate::app::{DoctorReport, Report, ValidationReport};
 use crate::diagnostic::Diagnostic;
 
-const SCHEMA: &str = "portal.cli/v1";
+const SCHEMA: &str = "remap.cli/v1";
 
 pub(crate) fn write_report(
     writer: &mut dyn Write,
@@ -57,7 +57,7 @@ fn write_human_report(writer: &mut dyn Write, report: &Report) -> io::Result<()>
 }
 
 fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()> {
-    writeln!(writer, "Portal {} — local diagnostics", report.version)?;
+    writeln!(writer, "Remap {} — local diagnostics", report.version)?;
     writeln!(writer)?;
     writeln!(
         writer,
@@ -70,7 +70,7 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
     writeln!(writer, "  Telemetry  none")?;
     writeln!(writer)?;
     writeln!(writer, "Nothing is installed or modified by this build.")?;
-    writeln!(writer, "Try: portal validate atlas http://127.0.0.1:5173")
+    writeln!(writer, "Try: remap validate atlas http://127.0.0.1:5173")
 }
 
 fn write_validation(writer: &mut dyn Write, report: &ValidationReport) -> io::Result<()> {
@@ -144,7 +144,7 @@ mod tests {
         let mut bytes = Vec::new();
         write_report(&mut bytes, &report, true)?;
         let value: Value = serde_json::from_slice(&bytes)?;
-        assert_eq!(value["schema"], "portal.cli/v1");
+        assert_eq!(value["schema"], "remap.cli/v1");
         assert_eq!(value["ok"], true);
         assert_eq!(value["result"]["system_state_changed"], false);
         Ok(())

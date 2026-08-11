@@ -1,6 +1,6 @@
 # Security
 
-Portal changes system-wide name resolution and may terminate local TLS. A flaw
+Remap changes system-wide name resolution and may terminate local TLS. A flaw
 can redirect traffic, disclose routing configuration, weaken trust, or disrupt
 network access. Security work is therefore ordinary product work, not a final
 release phase.
@@ -19,7 +19,7 @@ Include, when available:
 - A minimal reproducer using synthetic names and addresses.
 - Security impact and required preconditions.
 - The observed and expected behavior.
-- Toolchain, operating system, architecture, and Portal revision.
+- Toolchain, operating system, architecture, and Remap revision.
 - A proposed fix or mitigation, if you have one.
 
 We will acknowledge good-faith reports, preserve credit if desired, avoid
@@ -27,7 +27,7 @@ retaliation for responsible research, and communicate uncertainty honestly.
 
 ## Security invariants
 
-- `portald` is the sole writer of authoritative state.
+- `remapd` is the sole writer of authoritative state.
 - Every local mutation is authenticated and authorized.
 - DNS consumers receive complete, versioned, immutable snapshots.
 - Unmapped DNS fails open; failure of a mapped upstream never silently falls

@@ -3,9 +3,9 @@ use std::fmt::{self, Display, Formatter};
 use std::net::IpAddr;
 use std::str::FromStr;
 
-/// A validation failure for a Portal lookup name or pattern.
+/// A validation failure for a Remap lookup name or pattern.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum PortalNameError {
+pub enum RemapNameError {
     /// The supplied name is empty.
     Empty,
     /// The canonical name exceeds the DNS wire limit.
@@ -31,7 +31,7 @@ pub enum PortalNameError {
     WildcardWithoutSuffix,
 }
 
-impl Display for PortalNameError {
+impl Display for RemapNameError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Empty => formatter.write_str("a mapped name cannot be empty"),
@@ -63,7 +63,7 @@ impl Display for PortalNameError {
             ),
             Self::AddressLiteral(value) => write!(
                 formatter,
-                "'{value}' is an address literal, not a DNS name that Portal can override"
+                "'{value}' is an address literal, not a DNS name that Remap can override"
             ),
             Self::WildcardWithoutSuffix => {
                 formatter.write_str("a wildcard must include a suffix, for example '*.lab'")
@@ -72,41 +72,41 @@ impl Display for PortalNameError {
     }
 }
 
-impl Error for PortalNameError {}
+impl Error for RemapNameError {}
 
-/// A canonical ASCII hostname used as a Portal lookup key.
+/// A canonical ASCII hostname used as a Remap lookup key.
 ///
 /// Single-label names and arbitrary suffixes are valid. A final DNS root dot is
 /// accepted and removed. Unicode input is deferred until one explicit IDNA
 /// conversion and display policy can be shared by DNS, TLS, URLs, storage, and
 /// user interfaces.
 #[derive(Debug, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct PortalName(String);
+pub struct RemapName(String);
 
-impl PortalName {
-    /// Parses and canonicalizes a Portal lookup name.
+impl RemapName {
+    /// Parses and canonicalizes a Remap lookup name.
     ///
     /// # Errors
     ///
-    /// Returns a precise [`PortalNameError`] when the input is empty, an
+    /// Returns a precise [`RemapNameError`] when the input is empty, an
     /// address literal, too large for DNS, or violates the ASCII label policy.
-    pub fn parse(input: &str) -> Result<Self, PortalNameError> {
+    pub fn parse(input: &str) -> Result<Self, RemapNameError> {
         if input.is_empty() {
-            return Err(PortalNameError::Empty);
+            return Err(RemapNameError::Empty);
         }
 
         let without_root_dot = input.strip_suffix('.').unwrap_or(input);
         if without_root_dot.is_empty() {
-            return Err(PortalNameError::Empty);
+            return Err(RemapNameError::Empty);
         }
 
         if without_root_dot.parse::<IpAddr>().is_ok() {
-            return Err(PortalNameError::AddressLiteral(input.to_owned()));
+            return Err(RemapNameError::AddressLiteral(input.to_owned()));
         }
 
         let canonical = without_root_dot.to_ascii_lowercase();
         if canonical.len() > 253 {
-            return Err(PortalNameError::NameTooLong(canonical.len()));
+            return Err(RemapNameError::NameTooLong(canonical.len()));
         }
 
         for label in canonical.split('.') {
@@ -128,23 +128,23 @@ impl PortalName {
         self.0.split('.').count()
     }
 
-    fn validate_label(label: &str) -> Result<(), PortalNameError> {
+    fn validate_label(label: &str) -> Result<(), RemapNameError> {
         if label.is_empty() {
-            return Err(PortalNameError::EmptyLabel);
+            return Err(RemapNameError::EmptyLabel);
         }
         if label.len() > 63 {
-            return Err(PortalNameError::LabelTooLong(label.to_owned()));
+            return Err(RemapNameError::LabelTooLong(label.to_owned()));
         }
         if label.starts_with('-') {
-            return Err(PortalNameError::LabelStartsWithHyphen(label.to_owned()));
+            return Err(RemapNameError::LabelStartsWithHyphen(label.to_owned()));
         }
         if label.ends_with('-') {
-            return Err(PortalNameError::LabelEndsWithHyphen(label.to_owned()));
+            return Err(RemapNameError::LabelEndsWithHyphen(label.to_owned()));
         }
 
         for character in label.chars() {
             if !character.is_ascii_alphanumeric() && character != '-' {
-                return Err(PortalNameError::InvalidCharacter {
+                return Err(RemapNameError::InvalidCharacter {
                     character,
                     label: label.to_owned(),
                 });
@@ -154,14 +154,14 @@ impl PortalName {
     }
 }
 
-impl Display for PortalName {
+impl Display for RemapName {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
 
-impl FromStr for PortalName {
-    type Err = PortalNameError;
+impl FromStr for RemapName {
+    type Err = RemapNameError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         Self::parse(input)
@@ -172,9 +172,9 @@ impl FromStr for PortalName {
 #[derive(Debug, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum NamePattern {
     /// Matches one canonical name exactly.
-    Exact(PortalName),
+    Exact(RemapName),
     /// Matches descendants of a suffix, but not the suffix itself.
-    Wildcard(PortalName),
+    Wildcard(RemapName),
 }
 
 impl NamePattern {
@@ -182,24 +182,24 @@ impl NamePattern {
     ///
     /// # Errors
     ///
-    /// Returns a [`PortalNameError`] when the exact name or wildcard suffix is
+    /// Returns a [`RemapNameError`] when the exact name or wildcard suffix is
     /// missing or violates the canonical hostname policy.
-    pub fn parse(input: &str) -> Result<Self, PortalNameError> {
+    pub fn parse(input: &str) -> Result<Self, RemapNameError> {
         if input == "*" {
-            return Err(PortalNameError::WildcardWithoutSuffix);
+            return Err(RemapNameError::WildcardWithoutSuffix);
         }
         if let Some(suffix) = input.strip_prefix("*.") {
             if suffix.is_empty() {
-                return Err(PortalNameError::WildcardWithoutSuffix);
+                return Err(RemapNameError::WildcardWithoutSuffix);
             }
-            return PortalName::parse(suffix).map(Self::Wildcard);
+            return RemapName::parse(suffix).map(Self::Wildcard);
         }
-        PortalName::parse(input).map(Self::Exact)
+        RemapName::parse(input).map(Self::Exact)
     }
 
     /// Returns whether this pattern owns the supplied canonical name.
     #[must_use]
-    pub fn matches(&self, name: &PortalName) -> bool {
+    pub fn matches(&self, name: &RemapName) -> bool {
         match self {
             Self::Exact(candidate) => candidate == name,
             Self::Wildcard(suffix) => {
@@ -240,7 +240,7 @@ impl Display for NamePattern {
 }
 
 impl FromStr for NamePattern {
-    type Err = PortalNameError;
+    type Err = RemapNameError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         Self::parse(input)

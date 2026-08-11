@@ -103,4 +103,4 @@ conflict, and enforce revocation.
 - Clean update, rollback, disable, and complete uninstall behavior.
 
 Exit: clean machines on both platforms can install, approve, operate, update,
-disable, and completely remove Portal without orphaned state.
+disable, and completely remove Remap without orphaned state.

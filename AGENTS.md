@@ -1,6 +1,6 @@
-# Portal agent briefing
+# Remap agent briefing
 
-Portal is a power-user name override and service-routing utility for macOS and
+Remap is a power-user name override and service-routing utility for macOS and
 Linux. It maps arbitrary user-selected hostnames to DNS addresses or routed
 services. It never imposes a product namespace and does not hide normal TLS,
 origin, cookie, redirect, or content-security failures.
@@ -9,7 +9,7 @@ origin, cookie, redirect, or content-security failures.
 
 - Exact user intent wins. Single-label names, arbitrary suffixes, wildcard
   suffixes, and deliberate public-domain shadowing are valid.
-- `portald` is the sole writer of authoritative registry, route, peer, and
+- `remapd` is the sole writer of authoritative registry, route, peer, and
   certificate state.
 - DNS consumers receive immutable, versioned snapshots and fail open for names
   they do not own.
@@ -33,7 +33,7 @@ make setup
 make check
 ```
 
-Every warning is an error. `portal-quality` enforces the K7 ceilings for files,
+Every warning is an error. `remap-quality` enforces the K7 ceilings for files,
 functions, type bodies, parameters, complexity, and nesting. Never weaken or
 suppress a gate to land code. Keep the core safe Rust. Any future FFI `unsafe`
 must live in a narrowly scoped interop crate, state its safety invariants, and

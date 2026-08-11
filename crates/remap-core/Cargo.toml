@@ -1,0 +1,18 @@
+[package]
+name = "remap-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Safe domain and policy primitives for Remap"
+readme = "../../README.md"
+keywords = ["dns", "hostname", "networking", "routing"]
+categories = ["network-programming"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
