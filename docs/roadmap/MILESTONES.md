@@ -1,5 +1,7 @@
 # Implementation milestones
 
+Status: M0 complete; M1 next.
+
 Every platform milestone ends with observable system evidence. Unit tests are
 necessary but never sufficient for resolver, privilege, routing, or packaging
 claims.
@@ -102,4 +104,3 @@ conflict, and enforce revocation.
 
 Exit: clean machines on both platforms can install, approve, operate, update,
 disable, and completely remove Portal without orphaned state.
-

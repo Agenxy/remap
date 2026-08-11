@@ -3,6 +3,7 @@ name = "portal-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish = false
 
 [[bin]]
@@ -10,8 +11,9 @@ name = "portal"
 path = "src/main.rs"
 
 [dependencies]
-portal-core = { path = "../portal-core" }
+clap.workspace = true
+portal-core = { path = "../portal-core", version = "=0.1.0" }
+serde_json.workspace = true
 
 [lints]
 workspace = true
-

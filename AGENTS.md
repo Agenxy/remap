@@ -23,17 +23,23 @@ origin, cookie, redirect, or content-security failures.
 
 ## Toolchain and workflow
 
-Rust is pinned in `mise.toml`; it is the toolchain source of truth. Use:
+Read `VALUES.md`, `PRIVACY.md`, `SECURITY.md`, and
+`docs/engineering/STANDARDS.md` before changing architecture, trust, data, or
+user-facing behavior. Rust and quality tools are pinned in `mise.toml`; it is
+the toolchain source of truth. Use the thin Make front end:
 
 ```sh
-mise install
-mise exec -- cargo fmt --all --check
-mise exec -- cargo clippy --workspace --all-targets --all-features -- -D warnings
-mise exec -- cargo test --workspace --all-targets
+make setup
+make check
 ```
 
-Keep the core safe Rust. Any future FFI `unsafe` must live in a narrowly scoped
-interop crate, state its safety invariants, and have boundary tests. Add tests
-and an ADR with any change to a wire format, authority boundary, privilege,
-trust operation, or platform contract.
+Every warning is an error. `portal-quality` enforces the K7 ceilings for files,
+functions, type bodies, parameters, complexity, and nesting. Never weaken or
+suppress a gate to land code. Keep the core safe Rust. Any future FFI `unsafe`
+must live in a narrowly scoped interop crate, state its safety invariants, and
+have boundary tests. Add tests and an ADR with any change to a wire format,
+authority boundary, privilege, trust operation, or platform contract.
 
+Make and shell are acceptable for thin orchestration and bootstrap. Substantive
+logic belongs in native typed tools; product platform behavior never shells out
+when a maintained native API or binding exists.

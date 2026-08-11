@@ -1,3 +1,5 @@
+//! Executable specifications for typed mapping destinations.
+
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;

@@ -1,3 +1,5 @@
+//! Executable specifications for deterministic registry resolution.
+
 use std::error::Error;
 use std::str::FromStr;
 

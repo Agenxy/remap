@@ -33,6 +33,23 @@ pub enum HostHeaderPolicy {
     UseUpstream,
 }
 
+impl HostHeaderPolicy {
+    /// Returns the stable machine-readable value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PreserveClient => "preserve-client",
+            Self::UseUpstream => "use-upstream",
+        }
+    }
+}
+
+impl Display for HostHeaderPolicy {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// A validated HTTP upstream host.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum UpstreamHost {
@@ -126,11 +143,21 @@ pub struct HttpUpstream {
 
 impl HttpUpstream {
     /// Parses an upstream with the default preserve-client host policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a precise [`HttpUpstreamError`] when the URL uses an unsupported
+    /// scheme, malformed authority, credentials, query, fragment, or bad port.
     pub fn parse(input: &str) -> Result<Self, HttpUpstreamError> {
         Self::parse_with_policy(input, HostHeaderPolicy::PreserveClient)
     }
 
     /// Parses an upstream with an explicit host policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a precise [`HttpUpstreamError`] when the URL uses an unsupported
+    /// scheme, malformed authority, credentials, query, fragment, or bad port.
     pub fn parse_with_policy(
         input: &str,
         host_header_policy: HostHeaderPolicy,
@@ -172,26 +199,31 @@ impl HttpUpstream {
     }
 
     /// Returns the upstream scheme.
+    #[must_use]
     pub const fn scheme(&self) -> HttpScheme {
         self.scheme
     }
 
     /// Returns the upstream host.
+    #[must_use]
     pub const fn host(&self) -> &UpstreamHost {
         &self.host
     }
 
     /// Returns an explicitly configured port.
+    #[must_use]
     pub const fn port(&self) -> Option<NonZeroU16> {
         self.port
     }
 
     /// Returns the base path prepended by the future gateway.
+    #[must_use]
     pub fn base_path(&self) -> &str {
         &self.base_path
     }
 
     /// Returns the explicit upstream host policy.
+    #[must_use]
     pub const fn host_header_policy(&self) -> HostHeaderPolicy {
         self.host_header_policy
     }
@@ -306,6 +338,70 @@ pub enum MappingTarget {
     Http(HttpUpstream),
 }
 
+/// The stable category of a mapping destination.
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+pub enum MappingTargetKind {
+    /// A direct IPv4 or IPv6 DNS answer.
+    DnsAddress,
+    /// A DNS alias destination.
+    DnsAlias,
+    /// A locally routed HTTP or HTTPS service.
+    Http,
+}
+
+impl MappingTargetKind {
+    /// Returns the stable machine-readable value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DnsAddress => "dns-address",
+            Self::DnsAlias => "dns-alias",
+            Self::Http => "http",
+        }
+    }
+}
+
+impl Display for MappingTargetKind {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl MappingTarget {
+    /// Parses a destination and applies an explicit policy to HTTP upstreams.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the input is neither an IP address, a
+    /// valid alias hostname, nor a supported HTTP upstream.
+    pub fn parse_with_http_policy(
+        input: &str,
+        host_header_policy: HostHeaderPolicy,
+    ) -> Result<Self, MappingTargetError> {
+        if input.contains("://") {
+            return HttpUpstream::parse_with_policy(input, host_header_policy)
+                .map(Self::Http)
+                .map_err(MappingTargetError::InvalidHttpUpstream);
+        }
+        if let Ok(address) = input.parse::<IpAddr>() {
+            return Ok(Self::DnsAddress(address));
+        }
+        PortalName::parse(input)
+            .map(Self::DnsAlias)
+            .map_err(MappingTargetError::InvalidName)
+    }
+
+    /// Returns the stable destination category.
+    #[must_use]
+    pub const fn kind(&self) -> MappingTargetKind {
+        match self {
+            Self::DnsAddress(_) => MappingTargetKind::DnsAddress,
+            Self::DnsAlias(_) => MappingTargetKind::DnsAlias,
+            Self::Http(_) => MappingTargetKind::Http,
+        }
+    }
+}
+
 impl Display for MappingTarget {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -320,16 +416,6 @@ impl FromStr for MappingTarget {
     type Err = MappingTargetError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        if input.contains("://") {
-            return HttpUpstream::parse(input)
-                .map(Self::Http)
-                .map_err(MappingTargetError::InvalidHttpUpstream);
-        }
-        if let Ok(address) = input.parse::<IpAddr>() {
-            return Ok(Self::DnsAddress(address));
-        }
-        PortalName::parse(input)
-            .map(Self::DnsAlias)
-            .map_err(MappingTargetError::InvalidName)
+        Self::parse_with_http_policy(input, HostHeaderPolicy::PreserveClient)
     }
 }

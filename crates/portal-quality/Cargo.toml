@@ -1,10 +1,17 @@
 [package]
-name = "portal-core"
+name = "portal-quality"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[dependencies]
+clap.workspace = true
+proc-macro2.workspace = true
+serde_json.workspace = true
+syn.workspace = true
+
 [lints]
 workspace = true
+

@@ -1,3 +1,5 @@
+//! Executable specifications for Portal lookup-name semantics.
+
 use std::error::Error;
 
 use portal_core::{NamePattern, PortalName, PortalNameError};

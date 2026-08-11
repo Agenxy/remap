@@ -19,7 +19,12 @@ pub enum PortalNameError {
     /// A label ends with a hyphen.
     LabelEndsWithHyphen(String),
     /// A label contains a character outside the initial ASCII hostname policy.
-    InvalidCharacter { character: char, label: String },
+    InvalidCharacter {
+        /// The rejected character.
+        character: char,
+        /// The complete label containing the character.
+        label: String,
+    },
     /// Address literals are destinations, not names clients resolve through DNS.
     AddressLiteral(String),
     /// A wildcard must identify a suffix.
@@ -80,6 +85,11 @@ pub struct PortalName(String);
 
 impl PortalName {
     /// Parses and canonicalizes a Portal lookup name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a precise [`PortalNameError`] when the input is empty, an
+    /// address literal, too large for DNS, or violates the ASCII label policy.
     pub fn parse(input: &str) -> Result<Self, PortalNameError> {
         if input.is_empty() {
             return Err(PortalNameError::Empty);
@@ -107,11 +117,13 @@ impl PortalName {
     }
 
     /// Returns the canonical hostname bytes as text.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
     /// Returns the number of DNS labels in the canonical name.
+    #[must_use]
     pub fn label_count(&self) -> usize {
         self.0.split('.').count()
     }
@@ -167,6 +179,11 @@ pub enum NamePattern {
 
 impl NamePattern {
     /// Parses an exact name or a wildcard such as `*.lab`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PortalNameError`] when the exact name or wildcard suffix is
+    /// missing or violates the canonical hostname policy.
     pub fn parse(input: &str) -> Result<Self, PortalNameError> {
         if input == "*" {
             return Err(PortalNameError::WildcardWithoutSuffix);
@@ -181,6 +198,7 @@ impl NamePattern {
     }
 
     /// Returns whether this pattern owns the supplied canonical name.
+    #[must_use]
     pub fn matches(&self, name: &PortalName) -> bool {
         match self {
             Self::Exact(candidate) => candidate == name,
@@ -196,6 +214,7 @@ impl NamePattern {
     }
 
     /// Returns wildcard suffix specificity, or `None` for an exact pattern.
+    #[must_use]
     pub fn wildcard_specificity(&self) -> Option<usize> {
         match self {
             Self::Exact(_) => None,

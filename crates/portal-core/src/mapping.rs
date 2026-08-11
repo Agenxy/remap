@@ -14,6 +14,7 @@ pub struct Mapping {
 
 impl Mapping {
     /// Creates an enabled mapping.
+    #[must_use]
     pub const fn new(pattern: NamePattern, target: MappingTarget) -> Self {
         Self {
             pattern,
@@ -23,16 +24,19 @@ impl Mapping {
     }
 
     /// Returns the lookup pattern.
+    #[must_use]
     pub const fn pattern(&self) -> &NamePattern {
         &self.pattern
     }
 
     /// Returns the mapping destination.
+    #[must_use]
     pub const fn target(&self) -> &MappingTarget {
         &self.target
     }
 
     /// Returns whether the mapping participates in resolution.
+    #[must_use]
     pub const fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -76,6 +80,11 @@ pub struct RegistrySnapshot {
 
 impl RegistrySnapshot {
     /// Validates and orders a complete registry revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::DuplicatePattern`] when two records claim the
+    /// same canonical exact or wildcard pattern.
     pub fn new(revision: u64, mut mappings: Vec<Mapping>) -> Result<Self, SnapshotError> {
         let mut patterns = BTreeSet::new();
         for mapping in &mappings {
@@ -94,16 +103,19 @@ impl RegistrySnapshot {
     }
 
     /// Returns the monotonic authoritative registry revision.
+    #[must_use]
     pub const fn revision(&self) -> u64 {
         self.revision
     }
 
     /// Returns the deterministically ordered mappings.
+    #[must_use]
     pub fn mappings(&self) -> &[Mapping] {
         &self.mappings
     }
 
     /// Resolves with exact-first, most-specific-wildcard precedence.
+    #[must_use]
     pub fn resolve(&self, name: &PortalName) -> Option<&Mapping> {
         self.mappings
             .iter()
