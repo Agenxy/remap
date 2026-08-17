@@ -4,7 +4,7 @@ Status: accepted.
 
 ## Context
 
-Remap is a user-directed name override layer, not a manager for a branded
+Remap is a user-directed name override layer. It does not manage a branded
 private namespace.
 
 ## Decision
