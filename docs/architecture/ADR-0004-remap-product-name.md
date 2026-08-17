@@ -6,8 +6,8 @@ Status: accepted.
 
 The original working name, Portal, expressed movement between destinations but
 collided with an existing Homebrew formula and executable. Ionic also ships a
-developer CLI named `portals`. Those are operational installation conflicts,
-not merely unrelated uses of a common word.
+developer CLI named `portals`. Those conflicts are operational: two
+installers competing for one name on one machine.
 
 Remap directly describes the product's operation: associate a user-selected
 name with an address or routed service, and change that association without

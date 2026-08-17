@@ -32,7 +32,7 @@ source code is expected; private user behavior is not part of the product.
 
 Remap has no trials, DRM, activation server, artificial limits, or hidden
 tiers. Its foundations must not depend on paid, proprietary, subscription-only,
-or irreplaceable hosted services. Monetization is not forbidden, but it must be
+or irreplaceable hosted services. Monetization is allowed where it is
 obvious, optional, honest, and subordinate to the people using the software.
 
 Remap is licensed under Apache-2.0. Legally required notices must be preserved;
