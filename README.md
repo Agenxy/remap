@@ -1,34 +1,46 @@
 # Remap
 
-Remap is a serious, cross-platform name override and service-routing utility
-for technical users.
+A cross-platform name override and service-routing utility for technical users.
 
-Its contract is direct:
+**0.1.0 validates mappings offline. It does not yet resolve them.** Milestone
+M0 is complete: the Rust domain model, deterministic exact and wildcard
+matching, immutable registry snapshots, executable specifications and a stable
+CLI contract. It does not alter DNS, bind privileged ports, install a daemon,
+or modify trust. M1, the authoritative daemon and local protocol, is next.
+
+What the released binary does today:
+
+```sh
+remap doctor                                   # build, platform, capabilities
+remap validate atlas http://127.0.0.1:5173
+remap validate google.com 127.0.0.1
+remap validate '*.lab' https://example.com:9443/base
+```
+
+`doctor` reports the build, platform, current capabilities, DNS impact and
+telemetry posture without making a network request. Nothing above changes
+system state. Full reference: [docs/cli/remap.md](docs/cli/remap.md).
+
+## Install
+
+```sh
+brew install agenxy/tap/remap        # macOS, Linux
+cargo install remap                  # from crates.io
+```
+
+## The contract, once M1 lands
 
 > Map any valid hostname you choose to a network-accessible address or service,
 > and apply that mapping on enrolled devices.
 
-Remap does not reserve a suffix or prevent users from shadowing public names:
+Remap will not reserve a suffix or prevent users from shadowing public names,
+so `google.com` is a mapping you are allowed to make. If a browser then rejects
+the resulting certificate, origin, redirect, cookie or content-security policy,
+that failure stays visible: Remap provides routing, and does not pretend
+arbitrary web applications are relocatable.
 
-```sh
-remap set atlas http://127.0.0.1:5173
-remap set builds.lab https://10.0.0.12:9443
-remap set database 192.168.1.40
-remap set google.com http://127.0.0.1:9000
-```
-
-If a browser rejects the resulting certificate, origin, redirect, cookie, or
-content-security policy, that failure remains visible. Remap provides routing;
-it does not pretend arbitrary web applications are relocatable.
-
-## Status
-
-Remap has completed foundation milestone M0. The repository contains the first
-safe Rust domain model, deterministic exact/wildcard matching, an immutable
-registry snapshot, executable specifications, a stable offline CLI contract,
-and enforced engineering and dependency gates. M1—the authoritative daemon and
-local protocol—is next. Remap does not yet alter DNS, bind privileged ports,
-install services, or mutate trust.
+This section describes intent, not shipped behaviour. `remap set` does not
+exist yet.
 
 ## Architecture
 
