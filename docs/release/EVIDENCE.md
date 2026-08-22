@@ -66,13 +66,14 @@ is committed at `docs/release/remap-release-signing-key.pub`; its SHA-256
 fingerprint is `SHA256:bG9pik9VV1jT2rZrsC7sYJCZOfc0tiuSrL05/v6FmtI`.
 
 The builder refuses to overwrite an existing artifact, verifies the complete
-detached signature after publication, expands the package, checks the exact
-identifier and version, requires native Mach-O installer actions, compares the
-canonical internal release manifest byte for byte, and revalidates every
-expanded payload node. The outer Apple package is intentionally not Developer
-ID signed or notarized. On the target Mac, a root native installer verifies the
-signed internal manifest and signs the verified executables with a durable
-local System-keychain identity before native publication.
+detached signature after publication, rejects noncanonical and AppleDouble
+members from the unexpanded payload listing, expands the package, checks the
+exact identifier and version, requires native Mach-O installer actions,
+compares the canonical internal release manifest byte for byte, and revalidates
+every expanded payload node. The outer Apple package is intentionally not
+Developer ID signed or notarized. On the target Mac, a root native installer
+verifies the signed internal manifest and signs the verified executables with a
+durable local System-keychain identity before native publication.
 
 ## SBOM coverage and evidence classes
 

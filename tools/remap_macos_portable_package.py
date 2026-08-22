@@ -22,6 +22,11 @@ from tools.remap_app import build as build_app
 from tools.remap_app import verify_structure as verify_app_structure
 from tools.remap_freshness import verify_selected_xcode
 from tools.remap_macos_artifact import expected_macos_sdk, normalize_macos_sdk_metadata
+from tools.remap_macos_package_metadata import (
+    normalize_package_extended_attributes,
+    normalize_package_timestamps,
+    verify_payload_member_names,
+)
 from tools.remap_native_package import MANPAGE_NAMES
 
 PACKAGE_IDENTIFIER = "org.agenxy.Remap.PortableInstaller"
@@ -30,7 +35,6 @@ PACKAGE_NAMESPACE = "remap-package-v1"
 RELEASE_SIGNER_IDENTITY = "remap-release"
 MAXIMUM_FILE_BYTES = 134_217_728
 MAXIMUM_SIGNATURE_BYTES = 16_384
-NORMALIZED_PACKAGE_MTIME = 946_684_800
 NORMALIZED_PACKAGE_TIME = "2000-01-01T00:00:00"
 XAR_HEADER = struct.Struct(">IHHQQI")
 XAR_MAGIC = 0x78617221
@@ -103,6 +107,7 @@ def build(
         os.chmod(component_plist, 0o400)
         for package_input in (package_root, scripts, component_plist):
             normalize_package_timestamps(package_input)
+            normalize_package_extended_attributes(package_input)
         unsigned = workspace / "Remap.pkg"
         _run_pkgbuild(
             (
@@ -260,8 +265,8 @@ def _build_products(root: Path, version: str, workspace: Path) -> Path:
     for name, identifier in identifiers.items():
         _strip_and_ad_hoc_sign(products / name, identifier=identifier, root=root)
     app = products / "Remap.app"
-    _strip_mach_o(app / "Contents/MacOS/Remap", root=root)
     _remove_copied_bundle_signature(app)
+    _strip_mach_o(app / "Contents/MacOS/Remap", root=root)
     _ad_hoc_sign(app, identifier="org.agenxy.Remap", root=root)
     verify_no_local_build_paths(app / "Contents/MacOS/Remap")
     verify_app_structure(root, app)
@@ -292,6 +297,7 @@ def _strip_and_ad_hoc_sign(path: Path, *, identifier: str, root: Path) -> None:
 
 def _strip_mach_o(path: Path, *, root: Path) -> None:
     os.chmod(path, 0o700)
+    _run(("/usr/bin/codesign", "--remove-signature", str(path)), root=root)
     _run(("/usr/bin/xcrun", "strip", "-S", str(path)), root=root)
 
 
@@ -654,6 +660,17 @@ def _verify_package(
         raise RuntimeError(
             "the portable package does not have the expected unsigned identity"
         )
+    payload_listing = subprocess.run(
+        ("/usr/sbin/pkgutil", "--payload-files", str(package)),
+        cwd=package.parent,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if payload_listing.returncode != 0 or payload_listing.stderr:
+        raise RuntimeError("the portable package payload listing failed")
+    verify_payload_member_names(payload_listing.stdout)
     _run(
         ("/usr/sbin/pkgutil", "--expand-full", str(package), str(expanded)),
         root=package.parent,
@@ -730,23 +747,6 @@ def _verify_tree(root: Path, *, script_root: bool = False) -> None:
             raise RuntimeError(
                 f"portable package node has unsafe mode {mode:o}: {path}"
             )
-
-
-def normalize_package_timestamps(root: Path) -> None:
-    """Give every pkgbuild input one stable metadata timestamp."""
-    paths = (root, *root.rglob("*"))
-    for path in paths:
-        information = path.lstat()
-        if path.is_symlink() or not (
-            stat.S_ISREG(information.st_mode) or stat.S_ISDIR(information.st_mode)
-        ):
-            raise RuntimeError(f"portable package timestamp input is unsafe: {path}")
-    for path in paths:
-        os.utime(
-            path,
-            (NORMALIZED_PACKAGE_MTIME, NORMALIZED_PACKAGE_MTIME),
-            follow_symlinks=False,
-        )
 
 
 def canonicalize_xar_metadata(package: Path) -> None:

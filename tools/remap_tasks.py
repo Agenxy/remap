@@ -77,6 +77,7 @@ PYTHON_PATHS = (
     "tools/remap_macos_installer_signing.py",
     "tools/remap_macos_signing.py",
     "tools/remap_macos_native_setup.py",
+    "tools/remap_macos_package_metadata.py",
     "tools/remap_macos_protocol.py",
     "tools/remap_macos_portable_package.py",
     "tools/remap_native_package.py",
