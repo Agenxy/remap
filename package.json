@@ -1,0 +1,16 @@
+{
+  "name": "remap-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "app:build": "bun tools/build-app.ts --write",
+    "app:check": "biome check crates/remap-mcp/app tools tests/app playwright.config.ts && tsc --noEmit && bun tools/build-app.ts --check && env -u NO_COLOR playwright test && env -u NO_COLOR playwright test tests/app/dashboard.spec.ts -g 'applies host layout changes' --repeat-each=20"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.10",
+    "@playwright/test": "1.62.1",
+    "@types/node": "26.2.0",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

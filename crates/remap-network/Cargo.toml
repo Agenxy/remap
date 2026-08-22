@@ -1,0 +1,33 @@
+[package]
+name = "remap-network"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Bounded DNS and gateway runtime for Remap"
+readme = "../../README.md"
+
+[dependencies]
+arc-swap.workspace = true
+bytes.workspace = true
+getrandom.workspace = true
+hmac.workspace = true
+hickory-proto.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-rustls.workspace = true
+hyper-util.workspace = true
+remap-core = { path = "../remap-core", version = "=0.2.0" }
+sha2.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tower-service.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

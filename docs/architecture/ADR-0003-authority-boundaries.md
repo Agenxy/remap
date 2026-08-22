@@ -28,8 +28,8 @@ The M0 CLI offers offline validation only. A fake `remap set` that edits a JSON
 file would establish the wrong ownership and concurrency contract, so mutation
 commands wait for the daemon milestone.
 
-The exact macOS daemon hosting choice—Rust executable with a native adapter or a
-Swift host embedding the Rust engine—must be decided by an entitlement-bearing
+The exact macOS daemon hosting choice, whether a Rust executable with a native
+adapter or a Swift host embedding the Rust engine, must be decided by an entitlement-bearing
 prototype measuring XPC authentication, extension snapshot delivery, crash
 isolation, update behavior, and FFI lifecycle. It is not decided by aesthetic
 language purity.

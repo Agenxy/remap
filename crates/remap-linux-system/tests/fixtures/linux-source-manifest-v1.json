@@ -1,0 +1,16 @@
+{
+  "schema": "remap.linux-source-manifest-fixture/v1",
+  "sources": [
+    {
+      "path": "LICENSE",
+      "mode": 420,
+      "contentHex": "616263"
+    },
+    {
+      "path": "remap",
+      "mode": 493,
+      "contentHex": "00ff"
+    }
+  ],
+  "sha256": "3aa1524c4968b5439656252e68cae55ec79fa8436944ab7b896d998fc03b5fd7"
+}

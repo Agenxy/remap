@@ -20,8 +20,12 @@ ignore = []
 confidence-threshold = 0.93
 allow = [
     "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
     "MIT",
+    "MIT-0",
     "Unicode-3.0",
+    "Zlib",
 ]
 exceptions = []
 
@@ -38,7 +42,13 @@ external-default-features = "allow"
 allow-workspace = true
 allow = []
 deny = []
-skip = []
+skip = [
+    # rmcp 3.1.2 depends on tracing 0.1.44 with its attribute macros enabled;
+    # tracing-attributes has not yet migrated to syn 3. Owner: Agenxy Remap
+    # maintainers. Expiry: 2026-10-01. Remove this exact exception as soon as
+    # that upstream edge converges; the public remediation is the rmcp upgrade.
+    { crate = "syn@2.0.119", reason = "official MCP SDK tracing macro edge" },
+]
 skip-tree = []
 
 [sources]

@@ -2,7 +2,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SOURCE_ROOTS: [&str; 2] = ["crates", "platforms"];
+const SOURCE_ROOTS: [&str; 4] = ["crates", "platforms", "tests", "tools"];
+const ROOT_SOURCE_FILES: [&str; 1] = ["playwright.config.ts"];
 const SOURCE_EXTENSIONS: [&str; 14] = [
     "c", "cc", "cpp", "cxx", "go", "h", "hh", "hpp", "py", "rs", "swift", "ts", "tsx", "mts",
 ];
@@ -33,6 +34,12 @@ pub(crate) fn source_files(root: &Path) -> Result<Vec<PathBuf>, String> {
             collect_directory(&path, &mut files)?;
         }
     }
+    for source_file in ROOT_SOURCE_FILES {
+        let path = root.join(source_file);
+        if path.is_file() {
+            files.push(path);
+        }
+    }
     files.sort();
     Ok(files)
 }
@@ -59,4 +66,43 @@ fn is_source_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| SOURCE_EXTENSIONS.contains(&extension))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    use super::source_files;
+
+    #[test]
+    fn discovers_root_tool_test_and_crate_sources() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        for relative in [
+            "playwright.config.ts",
+            "tools/build.ts",
+            "tests/app.spec.ts",
+            "crates/example/src/lib.rs",
+        ] {
+            let path = directory.path().join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, "const value = true;\n")?;
+        }
+        let files = source_files(directory.path())?
+            .into_iter()
+            .filter_map(|path| {
+                path.strip_prefix(directory.path())
+                    .ok()
+                    .map(Path::to_path_buf)
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(files.len(), 4);
+        assert!(files.contains(Path::new("playwright.config.ts")));
+        assert!(files.contains(Path::new("tools/build.ts")));
+        assert!(files.contains(Path::new("tests/app.spec.ts")));
+        assert!(files.contains(Path::new("crates/example/src/lib.rs")));
+        Ok(())
+    }
 }

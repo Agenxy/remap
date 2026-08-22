@@ -1,0 +1,45 @@
+[package]
+name = "remapd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Authoritative per-user Remap daemon"
+readme = "../../README.md"
+
+[[bin]]
+name = "remapd"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+nix.workspace = true
+remap-core = { path = "../remap-core", version = "=0.2.0" }
+remap-network = { path = "../remap-network", version = "=0.2.0" }
+remap-protocol = { path = "../remap-protocol", version = "=0.2.0" }
+remap-registry = { path = "../remap-registry", version = "=0.2.0" }
+tokio.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+raunch.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+remap-linux = { path = "../remap-linux", version = "=0.2.0" }
+
+[lib]
+name = "remapd"
+path = "src/lib.rs"
+
+[dev-dependencies]
+hickory-proto.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

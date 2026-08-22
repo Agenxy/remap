@@ -11,6 +11,8 @@ pub(crate) enum Rule {
     Parameters,
     Complexity,
     Nesting,
+    EmDash,
+    ShellScript,
 }
 
 impl Rule {
@@ -22,6 +24,8 @@ impl Rule {
             Self::Parameters => "Q004",
             Self::Complexity => "Q005",
             Self::Nesting => "Q006",
+            Self::EmDash => "Q007",
+            Self::ShellScript => "Q008",
         }
     }
 
@@ -33,6 +37,8 @@ impl Rule {
             Self::Parameters => "function has too many parameters",
             Self::Complexity => "function is too complex",
             Self::Nesting => "function is nested too deeply",
+            Self::EmDash => "first-party prose contains an em dash",
+            Self::ShellScript => "repository contains a shell script",
         }
     }
 
@@ -44,6 +50,8 @@ impl Rule {
             Self::Parameters => "introduce a meaningful parameter object or simplify the operation",
             Self::Complexity => "replace branching with smaller decisions or explicit state",
             Self::Nesting => "use guard clauses and extract nested control flow",
+            Self::EmDash => "replace the punctuation with the relationship it represents",
+            Self::ShellScript => "move maintained automation into a typed tool",
         }
     }
 }

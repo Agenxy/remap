@@ -10,20 +10,29 @@ start with an ADR rather than an implementation surprise.
 
 ## Development setup
 
-Remap pins tools exactly with `mise`:
+Remap pins tools exactly with `mise`. Development requires GNU Make and the
+exact `mise` release named by `make setup`. Native macOS work also requires the
+full Xcode version and build in
+[`platforms/macos/XCODE_VERSION`](platforms/macos/XCODE_VERSION); Xcode's
+command-line-tools-only package is insufficient, although the IDE need not be
+opened. The supported entry point installs every other pinned development
+dependency and runs the complete release gate:
 
 ```text
-mise install
-mise exec -- cargo fmt --all --check
-mise exec -- cargo clippy --workspace --all-targets --all-features
-mise exec -- cargo test --workspace --all-targets
-mise exec -- cargo run -p remap-quality -- check
-mise exec -- cargo deny check
+make setup
+make check
 ```
 
-`make install` writes the `remap` binary to `~/.local/bin` by default. Override
-the prefix with `REMAP_INSTALL_ROOT=/another/prefix`; the selected prefix must
-already have its `bin` directory on `PATH`.
+People installing the native source product without a contributor environment
+can use `make setup-install`. It installs only the pinned Rust, Python, and `uv`
+tools needed by `make install`, then verifies the exact selected Xcode. It does
+not download the browser test runtimes or contributor linters.
+
+`make install` builds, previews, installs, activates, and verifies the complete
+native macOS product. `make install-cli` writes only the `remap` binary to
+`~/.local/bin` by default. Override that development-only prefix with
+`REMAP_INSTALL_ROOT=/another/prefix`; the selected `bin` directory must already
+be on `PATH`.
 
 `make` provides a familiar, discoverable front door for common commands. Its
 targets remain thin: substantive behavior belongs in a typed native tool such

@@ -47,6 +47,13 @@ fn parses_http_routes_with_explicit_policy() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn http_routes_use_the_destination_host_by_default() -> Result<(), Box<dyn Error>> {
+    let upstream = HttpUpstream::parse("http://127.0.0.1:4270")?;
+    assert_eq!(upstream.host_header_policy(), HostHeaderPolicy::UseUpstream);
+    Ok(())
+}
+
+#[test]
 fn renders_bracketed_ipv6_upstreams() -> Result<(), Box<dyn Error>> {
     let upstream = HttpUpstream::parse("http://[2001:db8::1]:8080")?;
     assert_eq!(upstream.to_string(), "http://[2001:db8::1]:8080/");
@@ -59,4 +66,6 @@ fn rejects_credentials_queries_fragments_and_zero_ports() {
     assert!(HttpUpstream::parse("https://example.com/?query=yes").is_err());
     assert!(HttpUpstream::parse("https://example.com/#fragment").is_err());
     assert!(HttpUpstream::parse("https://example.com:0").is_err());
+    assert!(HttpUpstream::parse("https://example.com/a\r\nHost: evil").is_err());
+    assert!(HttpUpstream::parse("https://example.com/a b").is_err());
 }
