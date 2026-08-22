@@ -10,18 +10,25 @@ import subprocess
 import tempfile
 import unittest
 import zlib
+from collections.abc import Callable
 from pathlib import Path
-from typing import final, override
+from typing import cast, final, override
+from unittest.mock import call, patch
 
-from tools.remap_macos_portable_package import (
+import tools.remap_macos_portable_package as portable_package
+from tools.remap_macos_package_metadata import (
     NORMALIZED_PACKAGE_MTIME,
+    normalize_package_extended_attributes,
+    normalize_package_timestamps,
+    verify_payload_member_names,
+)
+from tools.remap_macos_portable_package import (
     PACKAGE_NAMESPACE,
     XAR_HEADER,
     XAR_MAGIC,
     canonical_release_json,
     canonical_release_public_key,
     canonicalize_xar_metadata,
-    normalize_package_timestamps,
     publish_release_artifacts,
     release_entries,
     release_manifest,
@@ -104,6 +111,82 @@ class PortablePackageTests(unittest.TestCase):
         child.symlink_to("missing")
         with self.assertRaisesRegex(RuntimeError, "timestamp input is unsafe"):
             normalize_package_timestamps(payload)
+
+    def test_package_extended_attributes_are_removed(self) -> None:
+        payload = self.directory / "payload"
+        child = payload / "child"
+        payload.mkdir(mode=0o700)
+        _ = child.write_bytes(b"remap")
+        for path, value in ((payload, "directory"), (child, "file")):
+            _ = subprocess.run(
+                (
+                    "/usr/bin/xattr",
+                    "-w",
+                    "com.agenxy.remap-test",
+                    value,
+                    str(path),
+                ),
+                check=True,
+                timeout=30,
+            )
+
+        normalize_package_extended_attributes(payload)
+
+        for path in (payload, child):
+            result = subprocess.run(
+                ("/usr/bin/xattr", str(path)),
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.stdout, "")
+
+    def test_payload_members_are_canonical_and_not_appledouble(self) -> None:
+        verify_payload_member_names(
+            """.
+./Library
+./Library/Application Support
+./Library/Application Support/Agenxy/Remap/remap
+"""
+        )
+        for listing in (
+            ".\n./Library/._Application Support\n",
+            ".\n./Library/Application Support/._remap\n",
+            ".\n./Library/../private/file\n",
+            ".\n./Library//file\n",
+            ".\nLibrary/file\n",
+            ".\n./Library/file\x00suffix\n",
+        ):
+            with (
+                self.subTest(listing=listing),
+                self.assertRaisesRegex(RuntimeError, "unsafe member"),
+            ):
+                verify_payload_member_names(listing)
+
+    def test_strip_removes_existing_signature_before_mutating_binary(self) -> None:
+        binary = self.directory / "signed-binary"
+        _ = binary.write_bytes(b"Mach-O fixture")
+        strip_mach_o = cast(
+            "Callable[..., None]", vars(portable_package)["_strip_mach_o"]
+        )
+
+        with patch.object(portable_package, "_run") as runner:
+            strip_mach_o(binary, root=self.directory)
+
+        self.assertEqual(
+            runner.call_args_list,
+            [
+                call(
+                    ("/usr/bin/codesign", "--remove-signature", str(binary)),
+                    root=self.directory,
+                ),
+                call(
+                    ("/usr/bin/xcrun", "strip", "-S", str(binary)),
+                    root=self.directory,
+                ),
+            ],
+        )
 
     def test_xar_metadata_is_canonical_across_build_instances(self) -> None:
         first = self.directory / "first.pkg"

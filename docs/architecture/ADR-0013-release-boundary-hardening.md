@@ -88,6 +88,17 @@ passes those exact bytes to the fixed system `security` tool through
 The durable identities remain separate for code signing and Installer signing.
 This is local self-signing, not Apple notarization or public Apple trust.
 
+### package inputs are metadata-neutral
+
+The portable package builder normalizes timestamps and then removes every
+inherited extended attribute from its already-verified staging tree, native
+scripts, and component metadata immediately before invoking `pkgbuild`. The
+order is security-relevant because another metadata mutation can restore the
+protected provenance attribute. Verification independently lists the unexpanded
+payload and rejects noncanonical paths and every AppleDouble `._` member.
+Expanded-package inspection alone is insufficient because macOS can restore
+those sidecars as extended attributes and hide their archive identity.
+
 ## Consequences
 
 The next macOS package must replace both launchd jobs together because the old
@@ -102,3 +113,6 @@ population with working UDP DNS, a stalled HTTP body followed by recovered
 capacity, a direct self-route, launchd socket-path substitution, and exact
 certificate/trust identity verification. Public-forwarding acceptance must use
 at least one resolver that refuses non-recursive cache misses.
+Release distribution inspection must also prove that the package contains no
+AppleDouble members, regardless of the build host's Finder or provenance
+metadata.

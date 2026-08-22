@@ -169,7 +169,7 @@ again.
 ## Build from source instead
 
 Contributors can use the source lifecycle, which requires GNU Make, `mise`
-2026.8.10, and the exact full Xcode build in
+2026.8.13, and the exact full Xcode build in
 [`platforms/macos/XCODE_VERSION`](../../platforms/macos/XCODE_VERSION):
 
 ```sh
