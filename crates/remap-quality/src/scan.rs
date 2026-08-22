@@ -7,7 +7,7 @@ use crate::rust_metrics;
 
 pub(crate) fn workspace(root: &Path) -> Result<Vec<Violation>, String> {
     crate::toolchain::verify(root)?;
-    let mut violations = Vec::new();
+    let mut violations = crate::repository_policy::check(root)?;
     for path in crate::discover::source_files(root)? {
         let source = fs::read_to_string(&path)
             .map_err(|error| format!("cannot read {} as UTF-8: {error}", path.display()))?;

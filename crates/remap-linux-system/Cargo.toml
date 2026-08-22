@@ -1,0 +1,36 @@
+[package]
+name = "remap-linux-system"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Privileged native Linux lifecycle service for Remap"
+publish = false
+
+[[bin]]
+name = "remap-linux-system"
+path = "src/main.rs"
+
+[dependencies]
+blake3.workspace = true
+clap = { workspace = true, features = ["derive"] }
+futures.workspace = true
+nix.workspace = true
+remap-linux = { path = "../remap-linux", version = "=0.2.0" }
+remap-protocol = { path = "../remap-protocol", version = "=0.2.0" }
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+xattr.workspace = true
+zbus.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

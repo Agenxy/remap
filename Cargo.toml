@@ -2,23 +2,60 @@
 members = [
     "crates/remap",
     "crates/remap-core",
+    "crates/remap-linux",
+    "crates/remap-linux-system",
+    "crates/remap-mcp",
+    "crates/remap-network",
+    "crates/remap-protocol",
     "crates/remap-quality",
+    "crates/remap-registry",
+    "crates/remapd",
 ]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-rust-version = "1.97.1"
+rust-version = "1.98.0"
 license = "Apache-2.0"
 repository = "https://github.com/agenxy/remap"
 homepage = "https://github.com/agenxy/remap"
 
 [workspace.dependencies]
+arc-swap = "=1.9.2"
+bytes = "=1.12.1"
+blake3 = "=1.8.7"
 clap = "=4.6.6"
+clap_complete = "=4.6.9"
+clap_mangen = "=0.3.3"
+futures = "=0.3.34"
+getrandom = "=0.4.3"
+hmac = { version = "=0.13.0", features = ["zeroize"] }
+hickory-proto = { version = "=0.26.1", default-features = false, features = ["std"] }
+http-body-util = "=0.1.5"
+hyper = { version = "=1.11.0", features = ["client", "http1", "http2", "server"] }
+hyper-rustls = { version = "=0.27.9", default-features = false, features = ["aws-lc-rs", "http1", "http2", "native-tokio", "tls12"] }
+hyper-util = { version = "=0.1.20", features = ["client-legacy", "http1", "http2", "server", "tokio"] }
+jsonschema = { version = "=0.50.0", default-features = false }
+nix = { version = "=0.31.3", default-features = false, features = ["fs", "net", "signal", "socket", "user"] }
 proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
+raunch = "=1.0.1"
+rmcp = { version = "=3.1.4", default-features = false, features = ["macros", "schemars", "server", "transport-io"] }
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "limits"] }
+rustix = { version = "=1.1.4", features = ["fs", "linux_4_11"] }
+schemars = "=1.2.2"
+serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
+sha2 = "=0.11.0"
 syn = { version = "=3.0.3", default-features = false, features = ["full", "parsing", "printing", "visit"] }
+tempfile = "=3.27.0"
+tokio = { version = "=1.53.1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "=0.7.19", features = ["codec", "rt"] }
+tower-service = "=0.3.3"
+uuid = { version = "=1.24.1", features = ["serde", "v4"] }
+xattr = "=1.6.1"
+zeroize = "=1.9.0"
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 
 [workspace.lints.rust]
 warnings = "deny"

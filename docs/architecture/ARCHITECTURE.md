@@ -25,6 +25,7 @@ promise that an upstream application will tolerate a different origin.
 flowchart LR
     App["Native management app"] --> Control["Platform control adapter"]
     CLI["Rust remap CLI"] --> Control
+    MCP["Rust MCP server"] --> Control
     Control --> Daemon["Rust remapd"]
     Daemon --> DB["SQLite registry and operation log"]
     Daemon --> Gateway["Loopback HTTP(S) gateway"]
@@ -45,6 +46,8 @@ Rust owns:
 - Registry persistence and signed operation-log replication.
 - HTTP/TLS gateway protocol machinery and peer transport.
 - The portable daemon, CLI command model, and Linux implementation.
+- The MCP server and its revision-specific presentation over the same local
+  control client used by other surfaces.
 - A narrow C ABI for code that must execute inside Apple-native processes.
 
 Swift owns on macOS:
@@ -68,15 +71,18 @@ database, async runtime, CA, or peer engine.
 
 ## Portable crate direction
 
-Only `remap-core` and `remap` exist in M0. Later crates are introduced at
-their proof milestone, not as empty architecture theater.
+The M1 authority slice now includes `remap-core`, `remap-protocol`,
+`remap-registry`, `remapd`, `remap-mcp`, `remap`, and the structural
+`remap-quality` gate. Later routing, synchronization, and platform crates are
+introduced only at their proof milestone.
 
 | Crate | Responsibility |
 |---|---|
 | `remap-core` | Side-effect-free names, mappings, precedence, revisions |
 | `remap-protocol` | Versioned local-control and snapshot contracts |
+| `remap-mcp` | MCP tools, resources, Apps metadata, and compatibility policy |
 | `remap-dns` | Bounded DNS parsing, synthesis, and forwarding policy |
-| `remap-registry` | SQLite materialization and signed operations |
+| `remap-registry` | SQLite materialization and bounded local operation journals |
 | `remap-gateway` | Loopback HTTP/TLS routing and connection lifecycle |
 | `remap-sync` | Peer identity, replication, conflict, and revocation |
 | `remap-platform-macos` | Narrow C/Swift adapters for Apple facilities |
@@ -109,9 +115,11 @@ is shared by DNS, SNI, certificates, URLs, storage, and every UI.
 ## Authority and state
 
 `remapd` is the only writer of registry, route, peer, and certificate state.
-Clients submit commands; they never edit SQLite or snapshots. SQLite in WAL
-mode is the local materialized view. Accepted mutations append signed,
-origin-attributed operations and advance a monotonic registry revision.
+CLI, native-app, and MCP clients submit commands; they never edit SQLite or
+snapshots. SQLite in WAL mode is the local materialized view. Accepted
+mutations append bounded, origin-attributed journal entries and advance a
+monotonic registry revision. Replicated operations become signed at M7, when
+peer identity, enrollment, rotation, and revocation exist as one design.
 
 DNS and gateway readers consume complete immutable snapshots. A consumer swaps
 a validated newer snapshot atomically, rejects unknown schema versions, and
@@ -149,3 +157,8 @@ Unit tests establish policy, not platform operation. Implementation claims
 require live proof of unmatched DNS forwarding, daemon restart behavior,
 privileged listener supervision, browser and non-browser routing, local client
 authentication, package installation, update, rollback, and complete removal.
+
+MCP claims require official-client interoperability for
+`2026-07-28` and `2025-11-25`, mixed-version access to one authority, schema
+reachability checks, private caching for machine state, and rendered inspection
+of the MCP Apps surface. See ADR-0005.

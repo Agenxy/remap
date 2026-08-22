@@ -79,6 +79,15 @@ pub struct RegistrySnapshot {
 }
 
 impl RegistrySnapshot {
+    /// Returns an empty initial snapshot before authority state is published.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            revision: 0,
+            mappings: Vec::new(),
+        }
+    }
+
     /// Validates and orders a complete registry revision.
     ///
     /// # Errors

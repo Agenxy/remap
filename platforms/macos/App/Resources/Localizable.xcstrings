@@ -1,0 +1,582 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ maps to %@, disabled" : {
+      "comment" : "Accessibility value. The first placeholder is a hostname pattern and the second is its destination.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ maps to %2$@, disabled"
+          }
+        }
+      }
+    },
+    "%@ maps to %@, enabled" : {
+      "comment" : "Accessibility value. The first placeholder is a hostname pattern and the second is its destination.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ maps to %2$@, enabled"
+          }
+        }
+      }
+    },
+    "%lld owned resolver service" : {
+      "comment" : "Count of macOS resolver services currently owned by Remap.",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld owned resolver service"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld owned resolver services"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%llu mapping enabled" : {
+      "comment" : "Count of mappings that currently affect name resolution.",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%llu mapping enabled"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%llu mappings enabled"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "A URL routes HTTP requests through Remap. An IP address or hostname creates a direct DNS mapping." : {
+
+    },
+    "Account" : {
+
+    },
+    "Active" : {
+
+    },
+    "Active on loopback" : {
+
+    },
+    "Address or service URL" : {
+
+    },
+    "After" : {
+      "comment" : "Label for a mapping value after a reviewed operation."
+    },
+    "Agenxy cloud dependency" : {
+
+    },
+    "Applies the exact effects shown in this review" : {
+
+    },
+    "Apply" : {
+      "comment" : "Confirmation button that commits the exact effects shown in a review."
+    },
+    "Apply change" : {
+
+    },
+    "Apply removal" : {
+
+    },
+    "Tries to reconnect to Remap" : {
+
+    },
+    "Authenticated UDP and TCP DNS runtime identity" : {
+
+    },
+    "Authenticated local HTTP gateway runtime identity" : {
+
+    },
+    "Authenticated on loopback" : {
+
+    },
+    "Authenticated over UDP and TCP" : {
+
+    },
+    "Saved mapping version" : {
+
+    },
+    "Changes saved" : {
+
+    },
+    "Nothing changed" : {
+
+    },
+    "Remap service" : {
+
+    },
+    "Remap service unavailable" : {
+
+    },
+    "Before" : {
+      "comment" : "Label for a mapping value before a reviewed operation."
+    },
+    "Calculates the exact effects again" : {
+
+    },
+    "Calculates the exact effects without changing state" : {
+
+    },
+    "Calculating exact scope…" : {
+
+    },
+    "Cancel" : {
+
+    },
+    "Change" : {
+      "comment" : "Fallback name for an operation effect whose specific kind is unknown."
+    },
+    "Change Applied" : {
+
+    },
+    "Checking" : {
+
+    },
+    "Checking UDP and TCP" : {
+
+    },
+    "Choose a mapping to inspect its exact routing policy." : {
+
+    },
+    "Close" : {
+
+    },
+    "Closes this review without changing state" : {
+
+    },
+    "Connected" : {
+
+    },
+    "Connecting" : {
+
+    },
+    "Connecting to Remap" : {
+
+    },
+    "Connection to the Remap background service" : {
+
+    },
+    "Controls the Host header sent to an HTTP upstream" : {
+
+    },
+    "Copies the complete local diagnostic" : {
+
+    },
+    "Copy" : {
+
+    },
+    "Copy the error code, message, and recovery hint" : {
+
+    },
+    "Create" : {
+
+    },
+    "Create Mapping" : {
+
+    },
+    "Create a mapping and review its exact effect before applying it" : {
+
+    },
+    "DNS listener" : {
+
+    },
+    "Service version" : {
+
+    },
+    "Destination" : {
+
+    },
+    "Disable" : {
+
+    },
+    "Disable Mapping" : {
+
+    },
+    "Disabled" : {
+
+    },
+    "Disabled mappings remain stored but do not affect resolution." : {
+
+    },
+    "Disabled mappings remain stored but do not route traffic" : {
+
+    },
+    "Dismiss error" : {
+
+    },
+    "Done" : {
+
+    },
+    "Edit" : {
+
+    },
+    "Edit Mapping" : {
+
+    },
+    "Enable" : {
+
+    },
+    "Enable Mapping" : {
+
+    },
+    "Enabled" : {
+      "comment" : "Title-case status shown for an enabled mapping."
+    },
+    "Enter an IP address, hostname, or HTTP service URL" : {
+
+    },
+    "Enter an exact hostname or wildcard pattern" : {
+
+    },
+    "Error" : {
+
+    },
+    "Filter mappings" : {
+
+    },
+    "HTTP gateway" : {
+
+    },
+    "Hides this diagnostic" : {
+
+    },
+    "Host policy" : {
+
+    },
+    "Hostname or wildcard" : {
+
+    },
+    "Identity unavailable" : {
+
+    },
+    "Inactive" : {
+
+    },
+    "Inspecting native state" : {
+
+    },
+    "Inspection failed" : {
+
+    },
+    "Install or repair the Remap service, then refresh." : {
+
+    },
+    "Keep the operation ID if you need to verify an uncertain retry." : {
+
+    },
+    "Kind" : {
+
+    },
+    "Map a hostname to an address or routed service." : {
+
+    },
+    "Mapping" : {
+      "comment" : "A hostname pattern and its destination."
+    },
+    "Mapping Applied" : {
+
+    },
+    "Mapping status" : {
+
+    },
+    "Mappings" : {
+      "comment" : "Navigation title for the collection of hostname mappings."
+    },
+    "Mappings unavailable" : {
+
+    },
+    "Names go where you point them" : {
+
+    },
+    "Native resolver configuration owned by Remap" : {
+
+    },
+    "Navigation" : {
+
+    },
+    "Needs attention" : {
+
+    },
+    "New Mapping" : {
+
+    },
+    "No mappings yet" : {
+
+    },
+    "No stored mapping changes." : {
+
+    },
+    "None" : {
+      "comment" : "Value meaning that no service, account, or dependency is used."
+    },
+    "Not available" : {
+
+    },
+    "Not required" : {
+
+    },
+    "Nothing will change" : {
+
+    },
+    "Opens a destructive review before removing this mapping" : {
+
+    },
+    "Opens a review of the exact state change" : {
+
+    },
+    "Opens the mapping editor" : {
+
+    },
+    "Opens this mapping in the editor" : {
+
+    },
+    "Operation ID" : {
+
+    },
+    "Operation receipt" : {
+
+    },
+    "Overview" : {
+
+    },
+    "Preserve client name" : {
+
+    },
+    "Preserve the client-facing Host header" : {
+
+    },
+    "Privacy" : {
+
+    },
+    "Projected at registry revision %llu." : {
+
+    },
+    "Checking Remap and your Mac's network settings." : {
+
+    },
+    "Checks Remap and your Mac's network settings again" : {
+
+    },
+    "Ready" : {
+
+    },
+    "Remap isn't responding. Try Refresh. If that doesn't work, repair the Remap installation." : {
+
+    },
+    "Refresh" : {
+
+    },
+    "Refresh Remap and network status" : {
+
+    },
+    "Refresh the app. If the problem remains, run remap doctor." : {
+
+    },
+    "Registry revision %llu" : {
+
+    },
+    "Remap" : {
+      "comment" : "Product name. Keep unchanged in real translations.",
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remap"
+          }
+        }
+      },
+      "shouldTranslate" : false
+    },
+    "Remap has no telemetry and sends no registry data to Agenxy." : {
+
+    },
+    "Remap isn't responding" : {
+
+    },
+    "Remap refuses VPN or split DNS when it cannot preserve the configuration." : {
+
+    },
+    "Remap system status" : {
+
+    },
+    "Remove" : {
+      "comment" : "Destructive action that removes a mapping after review."
+    },
+    "Remove Mapping" : {
+
+    },
+    "Requests for this name use the exact destination and host policy below." : {
+
+    },
+    "Retry" : {
+
+    },
+    "Review" : {
+      "comment" : "Button that calculates and opens an exact change preview without mutating state."
+    },
+    "Review Mapping" : {
+
+    },
+    "Review the exact change" : {
+
+    },
+    "Review this effect before applying the operation" : {
+
+    },
+    "Revision" : {
+
+    },
+    "Revision %llu to %llu" : {
+      "comment" : "Receipt summary. The first number is the previous registry revision and the second is the new revision.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revision %1$llu to %2$llu"
+          }
+        }
+      }
+    },
+    "Routing needs attention" : {
+
+    },
+    "Select a mapping" : {
+
+    },
+    "Select to inspect this mapping" : {
+
+    },
+    "Show disabled mappings" : {
+
+    },
+    "Shows this section" : {
+
+    },
+    "Shows whether this mapping affects name resolution" : {
+
+    },
+    "Source builds support one ordinary macOS resolver scope." : {
+
+    },
+    "Source-build resolver boundary" : {
+
+    },
+    "Summarizes Remap and macOS network readiness" : {
+
+    },
+    "System" : {
+      "comment" : "Navigation title for verified Remap service, resolver, DNS, and gateway state."
+    },
+    "System DNS" : {
+
+    },
+    "Telemetry" : {
+
+    },
+    "Remap's background service isn't responding." : {
+
+    },
+    "Remap isn't responding. Your mappings are still saved." : {
+
+    },
+    "The app could not complete the operation." : {
+
+    },
+    "The Remap app and background service aren't communicating correctly." : {
+
+    },
+    "Remap and your Mac's network settings are ready." : {
+
+    },
+    "The system status Remap can check without exposing your private mappings." : {
+
+    },
+    "The registry changed while the app refreshed." : {
+
+    },
+    "This projection was calculated at registry revision %llu." : {
+
+    },
+    "Unavailable" : {
+
+    },
+    "Update" : {
+
+    },
+    "Update the Remap app and service together, then retry." : {
+
+    },
+    "Updated" : {
+
+    },
+    "Upstream Host" : {
+
+    },
+    "Use Copy to place these diagnostic details on the clipboard" : {
+
+    },
+    "Use the entitled DNS System Extension for multiple resolver scopes." : {
+
+    },
+    "Use the upstream Host header" : {
+
+    },
+    "Use upstream name" : {
+
+    },
+    "Version reported by the running Remap service" : {
+
+    },
+    "Wait a moment, then refresh again." : {
+
+    },
+    "Your mappings are available, but at least one routing component is not ready." : {
+
+    },
+    "atlas.test" : {
+      "comment" : "Example hostname shown as a text-field prompt.",
+      "shouldTranslate" : false
+    },
+    "disabled" : {
+
+    },
+    "enabled" : {
+      "comment" : "Lowercase state appended to a mapping value in an operation effect."
+    },
+    "http://127.0.0.1:4270" : {
+      "comment" : "Example local service URL shown as a text-field prompt.",
+      "shouldTranslate" : false
+    },
+    "macOS DNS" : {
+
+    },
+    "macOS resolver unchanged" : {
+
+    }
+  },
+  "version" : "1.3"
+}

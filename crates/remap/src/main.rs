@@ -3,7 +3,11 @@
 mod app;
 mod cli;
 mod diagnostic;
+#[cfg(target_os = "linux")]
+mod linux_lifecycle;
 mod output;
+mod runtime;
+mod runtime_health;
 
 use std::env;
 use std::ffi::OsString;
@@ -12,15 +16,25 @@ use std::process::ExitCode;
 
 use crate::cli::ParseOutcome;
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     let arguments = env::args_os().collect::<Vec<OsString>>();
     match cli::parse(arguments) {
         ParseOutcome::Display(text) => write_display(&text),
         ParseOutcome::Failure { diagnostic, json } => write_failure(&diagnostic, json),
-        ParseOutcome::Run(invocation) => match app::execute(invocation.action) {
-            Ok(report) => write_success(&report, invocation.json),
-            Err(diagnostic) => write_failure(&diagnostic, invocation.json),
-        },
+        ParseOutcome::Run(invocation) => {
+            if let cli::Action::SystemLifecycle { command } = &invocation.action {
+                return match runtime::run_native_lifecycle(*command, invocation.json) {
+                    Ok(code) => ExitCode::from(code),
+                    Err(diagnostic) => write_failure(&diagnostic, invocation.json),
+                };
+            }
+            match runtime::execute(invocation.action, invocation.data_dir.as_deref()).await {
+                Ok(Some(report)) => write_success(&report, invocation.json),
+                Ok(None) => ExitCode::SUCCESS,
+                Err(diagnostic) => write_failure(&diagnostic, invocation.json),
+            }
+        }
     }
 }
 

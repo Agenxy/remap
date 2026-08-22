@@ -84,6 +84,8 @@ pub enum HttpUpstreamError {
     QueryNotSupported,
     /// An upstream base URL cannot include a fragment.
     FragmentNotSupported,
+    /// Raw whitespace and control characters must be percent-encoded.
+    InvalidCharacter,
     /// The port is missing, zero, non-numeric, or greater than 65535.
     InvalidPort(String),
     /// IPv6 literals must use URL brackets.
@@ -110,6 +112,9 @@ impl Display for HttpUpstreamError {
             Self::FragmentNotSupported => {
                 formatter.write_str("an upstream base URL cannot contain a fragment")
             }
+            Self::InvalidCharacter => formatter.write_str(
+                "an upstream URL cannot contain raw whitespace or control characters; percent-encode them",
+            ),
             Self::InvalidPort(port) => write!(
                 formatter,
                 "the upstream port '{port}' must be an integer from 1 through 65535"
@@ -142,14 +147,15 @@ pub struct HttpUpstream {
 }
 
 impl HttpUpstream {
-    /// Parses an upstream with the default preserve-client host policy.
+    /// Parses an upstream with the default use-upstream host policy.
     ///
     /// # Errors
     ///
     /// Returns a precise [`HttpUpstreamError`] when the URL uses an unsupported
-    /// scheme, malformed authority, credentials, query, fragment, or bad port.
+    /// scheme, malformed authority, credentials, raw whitespace, control
+    /// character, query, fragment, or bad port.
     pub fn parse(input: &str) -> Result<Self, HttpUpstreamError> {
-        Self::parse_with_policy(input, HostHeaderPolicy::PreserveClient)
+        Self::parse_with_policy(input, HostHeaderPolicy::UseUpstream)
     }
 
     /// Parses an upstream with an explicit host policy.
@@ -157,11 +163,18 @@ impl HttpUpstream {
     /// # Errors
     ///
     /// Returns a precise [`HttpUpstreamError`] when the URL uses an unsupported
-    /// scheme, malformed authority, credentials, query, fragment, or bad port.
+    /// scheme, malformed authority, credentials, raw whitespace, control
+    /// character, query, fragment, or bad port.
     pub fn parse_with_policy(
         input: &str,
         host_header_policy: HostHeaderPolicy,
     ) -> Result<Self, HttpUpstreamError> {
+        if input
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+        {
+            return Err(HttpUpstreamError::InvalidCharacter);
+        }
         let (raw_scheme, remainder) = input
             .split_once("://")
             .ok_or_else(|| HttpUpstreamError::InvalidUrl(input.to_owned()))?;
@@ -416,6 +429,6 @@ impl FromStr for MappingTarget {
     type Err = MappingTargetError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        Self::parse_with_http_policy(input, HostHeaderPolicy::PreserveClient)
+        Self::parse_with_http_policy(input, HostHeaderPolicy::UseUpstream)
     }
 }

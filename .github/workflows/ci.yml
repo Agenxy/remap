@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [xcode-27, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+    steps:
+      # Third-party actions are pinned to immutable commits. The comments are
+      # human-readable versions; the SHA is the authority.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          version: 2026.8.10
+          experimental: true
+      - name: Install pinned development and browser dependencies
+        run: |
+          mise exec -- bun install --frozen-lockfile
+          mise exec -- bunx playwright install --with-deps chromium webkit
+      - name: Install Linux documentation renderer
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes mandoc
+      - name: Complete release gate
+        run: make check
+      - name: Prove the release gate did not rewrite tracked inputs
+        run: git diff --exit-code
