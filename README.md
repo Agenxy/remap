@@ -1,3 +1,5 @@
+<img src="docs/icon.svg" width="72" height="72" alt="">
+
 # Remap
 
 A cross-platform name override and service-routing utility for technical users.
