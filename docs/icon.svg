@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Remap">
+  <title>Remap</title>
+  <!-- A route that does not go where it would have gone: a name enters on its
+       own lane, is diverted at the mapping, and leaves on another. That is the
+       product's one sentence — a name resolves to somewhere you chose.
+
+       Orthogonal on purpose. Dibs' mark is diagonal because two lanes CONVERGE
+       there; this one turns a right angle because nothing merges, one path is
+       redirected. Two marks in the same family should not be told apart by
+       reading them, only by their silhouette.
+
+       Tile, stroke weight and accent rule follow docs/icon.svg in Agenxy/dibs:
+       the tile is carried rather than inherited, because an external SVG loaded
+       through <img> gets its own document context, `currentColor` renders black,
+       and a prefers-color-scheme block keys off the OS rather than the surface
+       actually behind the image.
+
+       The accent is Agenxy's own the pigment-1 token (madder), converted from
+       oklch(70% 0.145 32) — the dark-surface variant, since the tile is dark.
+       It marks the diversion because that is the event; the lanes are state. -->
+  <rect width="32" height="32" rx="7.5" fill="#131518"/>
+  <g fill="none" stroke="#dcdee2" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6.5 9.5 H16 V22.5 H24.2"/>
+    <path d="M21.6 19.9 l2.6 2.6 l-2.6 2.6"/>
+  </g>
+  <circle cx="16" cy="16" r="2.9" fill="#ea7963"/>
+</svg>
