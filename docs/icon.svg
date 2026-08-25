@@ -9,13 +9,13 @@
        redirected. Two marks in the same family should not be told apart by
        reading them, only by their silhouette.
 
-       Tile, stroke weight and accent rule follow docs/icon.svg in Agenxy/dibs:
+       Tile, stroke weight and accent rule are the shared mark conventions:
        the tile is carried rather than inherited, because an external SVG loaded
        through <img> gets its own document context, `currentColor` renders black,
        and a prefers-color-scheme block keys off the OS rather than the surface
        actually behind the image.
 
-       The accent is Agenxy's own the pigment-1 token (madder), converted from
+       The accent is the madder pigment, converted from
        oklch(70% 0.145 32) — the dark-surface variant, since the tile is dark.
        It marks the diversion because that is the event; the lanes are state. -->
   <rect width="32" height="32" rx="7.5" fill="#131518"/>
