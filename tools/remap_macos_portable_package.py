@@ -108,8 +108,6 @@ def build(
         _ = manifest_path.write_bytes(manifest_bytes)
         os.chmod(manifest_path, 0o400)
         _sign_file(manifest_path, signing_key, namespace=RELEASE_NAMESPACE)
-        signature = manifest_path.with_suffix(manifest_path.suffix + ".sig")
-        os.chmod(signature, 0o400)
         portable_installer = products / "remap-portable-installer"
         for script in ("preinstall", "postinstall"):
             _copy_file(portable_installer, scripts / script, mode=0o555)
@@ -163,7 +161,6 @@ def build(
         )
         _sign_file(signed, signing_key, namespace=PACKAGE_NAMESPACE)
         signed_signature = signed.with_suffix(signed.suffix + ".sig")
-        os.chmod(signed_signature, 0o400)
         pinned_public_key = (
             root / "docs/release/remap-release-signing-key.pub"
         ).read_text(encoding="utf-8")
@@ -509,7 +506,9 @@ def _write_generated_signature(signature: Path, data: bytes) -> None:
             incoming.unlink()
 
 
-def _detached_copy_without_attributes(source: Path, destination: Path, data: bytes) -> None:
+def _detached_copy_without_attributes(
+    source: Path, destination: Path, data: bytes
+) -> None:
     label = f"org.agenxy.remap.signature-copy.{uuid.uuid4().hex}"
     result = subprocess.run(
         (
