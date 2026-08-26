@@ -22,12 +22,62 @@ def normalize_package_timestamps(root: Path) -> None:
             stat.S_ISREG(information.st_mode) or stat.S_ISDIR(information.st_mode)
         ):
             raise RuntimeError(f"portable package timestamp input is unsafe: {path}")
-    for path in paths:
-        os.utime(
-            path,
-            (NORMALIZED_PACKAGE_MTIME, NORMALIZED_PACKAGE_MTIME),
-            follow_symlinks=False,
+    _set_timestamps_without_inherited_attributes(root, paths)
+
+
+def _set_timestamps_without_inherited_attributes(
+    root: Path, paths: tuple[Path, ...]
+) -> None:
+    reference = root.parent / f".{root.name}.timestamp.{uuid.uuid4().hex}"
+    with reference.open("xb") as output_file:
+        _ = output_file.write(b"remap-package-timestamp\n")
+        output_file.flush()
+        os.fsync(output_file.fileno())
+    os.utime(reference, (NORMALIZED_PACKAGE_MTIME, NORMALIZED_PACKAGE_MTIME))
+    label = f"org.agenxy.remap.package-timestamp.{uuid.uuid4().hex}"
+    result = subprocess.run(
+        (
+            "/bin/launchctl",
+            "submit",
+            "-l",
+            label,
+            "--",
+            "/bin/zsh",
+            "-c",
+            '/usr/bin/find "$1" -exec /usr/bin/touch -h -r "$2" {} +; '
+            + "/bin/sleep 300",
+            "remap-package-timestamp",
+            str(root),
+            str(reference),
+        ),
+        cwd=root.parent,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0 or result.stdout or result.stderr:
+        reference.unlink()
+        raise RuntimeError("launchd could not normalize package timestamps")
+    deadline = time.monotonic() + 30
+    try:
+        while time.monotonic() < deadline:
+            if all(
+                path.stat().st_mtime_ns == NORMALIZED_PACKAGE_MTIME * 10**9
+                for path in paths
+            ):
+                return
+            time.sleep(0.05)
+    finally:
+        _ = subprocess.run(
+            ("/bin/launchctl", "remove", label),
+            cwd=root.parent,
+            check=False,
+            capture_output=True,
+            timeout=30,
         )
+        reference.unlink()
+    raise RuntimeError("launchd did not normalize package timestamps")
 
 
 def normalize_package_extended_attributes(root: Path) -> None:
