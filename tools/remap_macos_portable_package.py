@@ -12,6 +12,8 @@ import stat
 import struct
 import subprocess
 import tempfile
+import time
+import uuid
 import xml.etree.ElementTree as ET
 import zlib
 from dataclasses import dataclass
@@ -490,11 +492,89 @@ def _sign_file(path: Path, private_key: Path, *, namespace: str) -> None:
         )
     if not result.stdout or len(result.stdout) > MAXIMUM_SIGNATURE_BYTES:
         raise RuntimeError("ssh-keygen returned an unsafe release signature")
-    with signature.open("xb") as output_file:
-        _ = output_file.write(result.stdout)
+    _write_generated_signature(signature, result.stdout)
+
+
+def _write_generated_signature(signature: Path, data: bytes) -> None:
+    incoming = signature.with_name(f".{signature.name}.{uuid.uuid4().hex}.incoming")
+    with incoming.open("xb") as output_file:
+        _ = output_file.write(data)
         output_file.flush()
         os.fsync(output_file.fileno())
-    os.chmod(signature, 0o400)
+    os.chmod(incoming, 0o400)
+    try:
+        _detached_copy_without_attributes(incoming, signature, data)
+    finally:
+        if incoming.is_file() and not incoming.is_symlink():
+            incoming.unlink()
+
+
+def _detached_copy_without_attributes(source: Path, destination: Path, data: bytes) -> None:
+    label = f"org.agenxy.remap.signature-copy.{uuid.uuid4().hex}"
+    result = subprocess.run(
+        (
+            "/bin/launchctl",
+            "submit",
+            "-l",
+            label,
+            "--",
+            "/bin/zsh",
+            "-c",
+            '/bin/dd if="$1" of="$2" bs=4096 2>/dev/null; '
+            + '/bin/chmod 0400 "$2"; /bin/sleep 300',
+            "remap-signature-copy",
+            str(source),
+            str(destination),
+        ),
+        cwd=destination.parent,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0 or result.stdout or result.stderr:
+        raise RuntimeError("launchd could not publish the generated signature")
+    deadline = time.monotonic() + 30
+    try:
+        while time.monotonic() < deadline:
+            if _generated_signature_matches(destination, data):
+                return
+            time.sleep(0.05)
+    finally:
+        _ = subprocess.run(
+            ("/bin/launchctl", "remove", label),
+            cwd=destination.parent,
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
+    raise RuntimeError("launchd did not publish the generated signature")
+
+
+def _generated_signature_matches(path: Path, data: bytes) -> bool:
+    if not path.exists() or path.is_symlink() or not path.is_file():
+        return False
+    information = path.stat()
+    return (
+        information.st_nlink == 1
+        and information.st_uid == os.getuid()
+        and stat.S_IMODE(information.st_mode) == 0o400
+        and information.st_size == len(data)
+        and not _extended_attribute_names(path)
+        and hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(data).digest()
+    )
+
+
+def _extended_attribute_names(path: Path) -> str:
+    result = subprocess.run(
+        ("/usr/bin/xattr", str(path)),
+        cwd=path.parent,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return result.stdout.strip()
 
 
 def verify_detached_package_signature(
