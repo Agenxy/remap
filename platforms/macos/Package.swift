@@ -149,7 +149,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RemapPortableInstallerTests",
-            dependencies: ["RemapPortableInstaller"],
+            dependencies: ["RemapPortableInstaller", "RemapSystemKit"],
             swiftSettings: strictSwift
         ),
         .testTarget(

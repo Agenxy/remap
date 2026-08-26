@@ -4,6 +4,15 @@ import RemapInstallKit
 import RemapLifecycleKit
 import RemapSystemKit
 
+enum PortableResolverPlanSelection: Equatable {
+    case activation
+    case ordinary
+
+    init(phase: ActivationPhase?) {
+        self = phase == .active ? .activation : .ordinary
+    }
+}
+
 struct PortablePreparedProduct: Sendable {
     let sourcePackage: MacOSPortableSourcePackage
     let bootstrapPath: String
@@ -126,9 +135,15 @@ struct PortableProductPreparer: Sendable {
 
     private func resolverUpstreams() throws -> [String] {
         let resolver = SystemResolver()
-        let plan: DNSPlan = if let record = try resolver.activeRecord() {
+        let record = try resolver.activeRecord()
+        let selection = PortableResolverPlanSelection(phase: record?.payload.phase)
+        let plan: DNSPlan = if selection == .activation, let record {
             try resolver.reconciliationPlan(record: record)
         } else {
+            // A prepared record means macOS is deliberately using ordinary
+            // DNS. Its service identity may have disappeared during the
+            // bypassed network transition, so prepare an update from the live
+            // effective resolver instead of reviving the stale capture.
             try resolver.plan()
         }
         return try MacOSInstallerResolverPlan(

@@ -46,6 +46,13 @@ filesystem alias as lexical traversal rejects Apple's own root-owned staging
 path. Dot components, duplicate separators, relative paths, and embedded nulls
 remain invalid.
 
+Package preparation also distinguishes active resolver ownership from a
+prepared safe-bypass record. An active record remains the authority for
+network reconciliation. A prepared record means macOS is already using its
+ordinary resolver, so an update captures the live effective service instead.
+This permits recovery after macOS replaces a service identifier during a
+network transition without reviving DNS data bound to the departed service.
+
 ### A state token is freshness evidence, not consent
 
 The signed lifecycle CLI still obtains and internally carries the exact
