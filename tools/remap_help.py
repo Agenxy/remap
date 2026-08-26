@@ -17,6 +17,7 @@ def print_task_help() -> None:
   make dependencies  Audit advisories, licenses, sources, and versions
   make docs          Build warning-free API documentation
   make package-macos Build the target-Mac-self-signed installer (release key required)
+  make install-package-macos Verify, root-pin, and install REMAP_MACOS_PACKAGE
   make release-evidence        Build crates and create unsigned local evidence
   make release-evidence-verify Verify existing crate bytes and evidence
   make install       Preview, install, activate, and verify native Remap

@@ -22,6 +22,7 @@ public struct RemapLifecycleUninstallPreview: Codable, Equatable, Sendable {
             "Remove Remap's locally signed installer source package.",
             "Remove Remap's privileged lifecycle service and launchd registration.",
             "Remove Remap's private installer storage; keep its empty transaction lock.",
+            "Remove Remap's local code-signing key and System-keychain trust.",
             "Remove Remap from macOS's installed-package records."
         ]
         guard effects.count <= 20,
@@ -114,7 +115,8 @@ struct RemapPortableUninstaller: Sendable {
             productPreview: installer.previewUninstall(generationID: generationID),
             authorityState: MacOSPortableAuthorityCleanupState.capture(
                 sourcePackageRoot: configuration.sourcePackageRoot,
-                sourceManifestDigest: configuration.sourceManifestDigest
+                sourceManifestDigest: configuration.sourceManifestDigest,
+                signingCertificateSHA256: configuration.app.certificateSHA256
             )
         )
     }

@@ -46,23 +46,11 @@ enum RemapLifecycleCLIError: Error, Equatable {
 }
 
 enum RemapLifecycleCLIApproval {
-    static func prompt(for token: InstallApprovalToken, interactive: Bool) -> String {
-        if interactive {
-            return "Type approve \(token.description.prefix(12)) to continue: "
-        }
-        return "Send the complete approval token on standard input to continue.\n"
-    }
-
-    static func validate(
-        _ input: String?,
-        token: InstallApprovalToken,
-        interactive: Bool
-    ) throws {
-        let expected = interactive
-            ? "approve \(token.description.prefix(12))"
-            : token.description
-        guard input == expected else {
-            throw RemapLifecycleCLIError.approval("approval did not match the reviewed changes")
+    static func requireInteractive(_ interactive: Bool) throws {
+        guard interactive else {
+            throw RemapLifecycleCLIError.approval(
+                "mutating lifecycle commands require an interactive terminal"
+            )
         }
     }
 }
@@ -81,8 +69,8 @@ enum RemapLifecycleCLIOutput {
       recover     Review and repair an interrupted Remap lifecycle operation.
       uninstall   Review and remove the installed Remap product.
 
-    Mutating commands show every planned change and require an exact approval.
-    Piped use requires the complete approval token on standard input.
+    Mutating commands show every planned change and require macOS user
+    authentication. Text input and piped use cannot authorize a change.
     """
 
     static func status(_ status: MacOSInstallerStatus) -> String {
@@ -122,7 +110,7 @@ struct RemapLifecycleCLIErrorDocument: Encodable {
             case let .approval(detail):
                 category = .approval
                 message = detail
-                hint = "Request a fresh preview and approve the exact token."
+                hint = "Request a fresh preview and approve through macOS authentication."
             case let .integrity(detail):
                 category = .integrity
                 message = detail

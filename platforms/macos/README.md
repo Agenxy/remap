@@ -21,11 +21,15 @@ Groups, and provisioning profiles are not guessed or claimed.
 
 `make package-macos` builds `dist/Remap-0.2.0-arm64.pkg` and its detached SSH
 signature. The package uses native Mach-O `preinstall` and `postinstall`
-executables; there is no installer shell script. The package itself is unsigned
-by Apple and is not notarized. Remap instead signs the complete package bytes
-with its dedicated Ed25519 release key under the `remap-package-v1` namespace.
+executables; there is no installer shell script. The package is not Developer
+ID signed or notarized. Remap signs the complete XAR with a pinned self-signed
+`Remap Release Installer` certificate so Apple Installer validates its scripts,
+and independently signs the same final bytes with its dedicated Ed25519 release
+key under the `remap-package-v1` namespace.
 The pinned public key is
 [`docs/release/remap-release-signing-key.pub`](../../docs/release/remap-release-signing-key.pub).
+The separate public Installer certificate is
+[`docs/release/remap-release-installer.pem`](../../docs/release/remap-release-installer.pem).
 
 The package carries a signed, canonical release manifest. On the target Mac,
 the native installer verifies that manifest and every payload entry before
@@ -33,8 +37,8 @@ creating or reusing a root-managed `Remap Local Codesign` identity in the System
 keychain. That identity is a 3072-bit RSA code-signing certificate, is trusted
 only on that Mac, and grants private-key use to `/usr/bin/codesign`. It signs the
 verified app, CLI, daemon, resolver, installer, and lifecycle executables before
-publication. The identity is retained across uninstall so reinstall and update
-do not repeatedly ask for key access.
+publication. Updates reuse it; uninstall removes its exact private key,
+certificate, and System-keychain trust while preserving user mappings.
 
 This model deliberately separates two questions:
 
@@ -43,10 +47,9 @@ This model deliberately separates two questions:
 - The Mac's durable local identity gives macOS stable code identity for those
   verified bytes without a paid Apple account.
 
-It does not claim Apple review, Developer ID identity, or notarization. A user
-must make one explicit Gatekeeper exception for the downloaded package in
-System Settings > Privacy & Security. Remap never asks the user to disable
-Gatekeeper globally.
+It does not claim Apple review, Developer ID identity, or notarization. The
+supported installer workflow root-pins and re-verifies the package before
+invoking Apple Installer; it never asks the user to disable Gatekeeper globally.
 
 The package builds and tests with `xcrun swift`; the Xcode IDE is optional.
 The exact full Xcode version and build in [`XCODE_VERSION`](XCODE_VERSION) must

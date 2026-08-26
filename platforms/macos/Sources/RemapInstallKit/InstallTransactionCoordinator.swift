@@ -17,7 +17,8 @@ public struct InstallTransactionCoordinator: Sendable {
         publications: PublicationStore,
         journal: InstallJournalStore,
         effects: any InstallSystemEffectAdapting,
-        approvalVerifier: any InstallApprovalVerifying
+        approvalVerifier: any InstallApprovalVerifying,
+        validateManifest: @escaping @Sendable (InstallManifest) throws -> Void = { _ in }
     ) {
         self.init(
             lockConfiguration: InstallLockConfiguration(
@@ -30,7 +31,8 @@ public struct InstallTransactionCoordinator: Sendable {
             journal: journal,
             effects: effects,
             approvalVerifier: approvalVerifier,
-            prepareStorage: {}
+            prepareStorage: {},
+            validateManifest: validateManifest
         )
     }
 
@@ -41,9 +43,13 @@ public struct InstallTransactionCoordinator: Sendable {
         journal: InstallJournalStore,
         effects: any InstallSystemEffectAdapting,
         approvalVerifier: any InstallApprovalVerifying,
-        prepareStorage: @escaping @Sendable () throws -> Void = {}
+        prepareStorage: @escaping @Sendable () throws -> Void = {},
+        validateManifest: @escaping @Sendable (InstallManifest) throws -> Void = { _ in }
     ) {
-        let publicationReconciler = PublicationReconciler(store: publications)
+        let publicationReconciler = PublicationReconciler(
+            store: publications,
+            validateManifest: validateManifest
+        )
         let journalWriter = InstallJournalWriter(store: journal)
         self.lockConfiguration = lockConfiguration
         self.generations = generations

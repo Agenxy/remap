@@ -36,19 +36,21 @@ public struct MacOSPortableAuthorityCleanupState: Codable, Equatable, Sendable {
     public static let installerPathString = "Library/Application Support/Agenxy/Remap/Installer"
     public static let sourcesPathString = installerPathString + "/Sources"
     public static let planPathString =
-        "Library/Application Support/Agenxy/.remap-portable-uninstall-v2.json"
+        "Library/Application Support/Agenxy/.remap-portable-uninstall-v3.json"
     public static let stableLockPathString =
         "Library/Application Support/Agenxy/.remap-lifecycle-authority.lock"
 
     public let schemaVersion: UInt32
     public let sourcePackageRoot: InstallAbsolutePath
     public let sourceManifestDigest: InstallDigest
+    public let signingCertificateSHA256: InstallDigest
     public let packageReceiptVersion: String?
     public let files: [MacOSPortableAuthorityFileState]
 
     public init(
         sourcePackageRoot: InstallAbsolutePath,
         sourceManifestDigest: InstallDigest,
+        signingCertificateSHA256: InstallDigest,
         packageReceiptVersion: String? = nil,
         files: [MacOSPortableAuthorityFileState]
     ) throws {
@@ -71,21 +73,24 @@ public struct MacOSPortableAuthorityCleanupState: Codable, Equatable, Sendable {
         else {
             throw InstallError.integrity("portable authority cleanup state is incomplete")
         }
-        schemaVersion = 1
+        schemaVersion = 2
         self.sourcePackageRoot = sourcePackageRoot
         self.sourceManifestDigest = sourceManifestDigest
+        self.signingCertificateSHA256 = signingCertificateSHA256
         self.packageReceiptVersion = packageReceiptVersion
         self.files = ordered
     }
 
     public static func capture(
         sourcePackageRoot: InstallAbsolutePath,
-        sourceManifestDigest: InstallDigest
+        sourceManifestDigest: InstallDigest,
+        signingCertificateSHA256: InstallDigest
     ) throws -> Self {
         try capture(
             authority: FileSystemAuthority(systemRootPath: "/"),
             sourcePackageRoot: sourcePackageRoot,
             sourceManifestDigest: sourceManifestDigest,
+            signingCertificateSHA256: signingCertificateSHA256,
             packageReceiptVersion: MacOSPackageReceiptStore.production().version(),
             expectedUID: 0,
             expectedGID: 0
@@ -96,6 +101,7 @@ public struct MacOSPortableAuthorityCleanupState: Codable, Equatable, Sendable {
         authority: FileSystemAuthority,
         sourcePackageRoot: InstallAbsolutePath,
         sourceManifestDigest: InstallDigest,
+        signingCertificateSHA256: InstallDigest,
         packageReceiptVersion: String? = nil,
         expectedUID: UInt32,
         expectedGID: UInt32
@@ -103,6 +109,7 @@ public struct MacOSPortableAuthorityCleanupState: Codable, Equatable, Sendable {
         let state = try Self(
             sourcePackageRoot: sourcePackageRoot,
             sourceManifestDigest: sourceManifestDigest,
+            signingCertificateSHA256: signingCertificateSHA256,
             packageReceiptVersion: packageReceiptVersion,
             files: MacOSPortableAuthorityFileState.specifications
                 .map { pathString, mode in
@@ -272,7 +279,7 @@ public struct MacOSPortableAuthorityCleanupPlan: Codable, Equatable, Sendable {
             throw InstallError.integrity("portable authority cleanup transaction is malformed")
         }
         try InstallManifest.validateIdentifier(generationID, field: "portable cleanup generation ID")
-        schemaVersion = 2
+        schemaVersion = 3
         self.transactionID = transactionID
         self.approvalToken = approvalToken
         self.generationID = generationID
@@ -280,10 +287,11 @@ public struct MacOSPortableAuthorityCleanupPlan: Codable, Equatable, Sendable {
         let validatedState = try MacOSPortableAuthorityCleanupState(
             sourcePackageRoot: state.sourcePackageRoot,
             sourceManifestDigest: state.sourceManifestDigest,
+            signingCertificateSHA256: state.signingCertificateSHA256,
             packageReceiptVersion: state.packageReceiptVersion,
             files: state.files
         )
-        guard state.schemaVersion == 1, state == validatedState else {
+        guard state.schemaVersion == 2, state == validatedState else {
             throw InstallError.integrity("portable authority cleanup state is not canonical")
         }
         self.state = validatedState
@@ -305,7 +313,7 @@ public struct MacOSPortableAuthorityCleanupPlan: Codable, Equatable, Sendable {
             productApprovalToken: decoded.productApprovalToken,
             state: decoded.state
         )
-        guard decoded.schemaVersion == 2,
+        guard decoded.schemaVersion == 3,
               decoded == rebuilt,
               try rebuilt.canonicalData() == data
         else {
@@ -382,6 +390,7 @@ public struct MacOSPortableAuthorityCleanup: Sendable {
     private let productIsAbsent: @Sendable () throws -> Bool
     private let productMatchesApproval: @Sendable (String, InstallApprovalToken) throws -> Bool
     private let packageReceipt: any MacOSPackageReceiptControlling
+    private let removeSigningIdentity: @Sendable (InstallDigest) throws -> Void
 
     public static func production() throws -> Self {
         try Self(
@@ -400,7 +409,8 @@ public struct MacOSPortableAuthorityCleanup: Sendable {
                 try MacOSInstaller.production()
                     .previewUninstall(generationID: generationID).approvalToken == approvalToken
             },
-            packageReceipt: MacOSPackageReceiptStore.production()
+            packageReceipt: MacOSPackageReceiptStore.production(),
+            removeSigningIdentity: MacOSLocalCodeSigningIdentityCleanup.remove
         )
     }
 
@@ -415,7 +425,8 @@ public struct MacOSPortableAuthorityCleanup: Sendable {
         ) throws -> Bool = { _, _ in false },
         packageReceipt: any MacOSPackageReceiptControlling = MacOSPackageReceiptStore(
             runner: MissingMacOSPackageReceiptRunner()
-        )
+        ),
+        removeSigningIdentity: @escaping @Sendable (InstallDigest) throws -> Void = { _ in }
     ) {
         self.authority = authority
         self.expectedUID = expectedUID
@@ -423,6 +434,7 @@ public struct MacOSPortableAuthorityCleanup: Sendable {
         self.productIsAbsent = productIsAbsent
         self.productMatchesApproval = productMatchesApproval
         self.packageReceipt = packageReceipt
+        self.removeSigningIdentity = removeSigningIdentity
     }
 
     public func prepare(_ plan: MacOSPortableAuthorityCleanupPlan) throws {
@@ -527,6 +539,7 @@ public struct MacOSPortableAuthorityCleanup: Sendable {
             try authority.removeEmptyDirectory(at: sourcesPath)
         }
         try beforeRemovingHelper()
+        try removeSigningIdentity(plan.state.signingCertificateSHA256)
         let helper = plan.state.files.first(where: { $0.path == helperPath })
         let helperIsPresent = try authority.metadata(at: helperPath) != nil
         if let helper, helperIsPresent {

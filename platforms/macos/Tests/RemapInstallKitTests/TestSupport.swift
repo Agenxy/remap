@@ -241,7 +241,8 @@ final class InstallTransactionHarness: @unchecked Sendable {
 
     func recovery(
         journal: InstallJournalStore,
-        effects: any InstallSystemEffectAdapting
+        effects: any InstallSystemEffectAdapting,
+        validateManifest: @escaping @Sendable (InstallManifest) throws -> Void = { _ in }
     ) -> InstallCrashRecoveryExecutor {
         InstallCrashRecoveryExecutor(
             lockAuthority: authority,
@@ -249,7 +250,8 @@ final class InstallTransactionHarness: @unchecked Sendable {
             generations: generations,
             publications: publications,
             journal: journal,
-            effects: effects
+            effects: effects,
+            validateManifest: validateManifest
         )
     }
 }

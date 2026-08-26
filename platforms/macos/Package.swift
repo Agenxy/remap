@@ -57,7 +57,8 @@ let package = Package(
         .executableTarget(
             name: "RemapInstall",
             dependencies: ["RemapInstallKit", "RemapSystemKit"],
-            swiftSettings: strictSwift
+            swiftSettings: strictSwift,
+            linkerSettings: [.linkedFramework("LocalAuthentication")]
         ),
         .executableTarget(
             name: "RemapInstallerBootstrap",
@@ -72,7 +73,8 @@ let package = Package(
         .executableTarget(
             name: "RemapLifecycleCLI",
             dependencies: ["RemapLifecycleKit"],
-            swiftSettings: strictSwift
+            swiftSettings: strictSwift,
+            linkerSettings: [.linkedFramework("LocalAuthentication")]
         ),
         .executableTarget(
             name: "RemapPortableInstaller",

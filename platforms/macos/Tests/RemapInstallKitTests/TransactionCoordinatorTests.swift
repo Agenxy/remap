@@ -62,6 +62,85 @@ private struct RejectingInstallApprovalVerifier: InstallApprovalVerifying {
 }
 
 @Test
+func crashRecoveryValidatesManifestBeforeRestoringPublications() async throws {
+    let harness = try InstallTransactionHarness()
+    let data = Data("installed".utf8)
+    let source = try harness.source(data: data, name: "recovery-validation-source")
+    let manifest = try harness.manifest(
+        generationID: "recovery-validation",
+        previousGenerationID: nil,
+        data: data
+    )
+    try harness.prepareInstalled(
+        manifest: manifest,
+        source: source,
+        transactionID: "recovery-validation-setup"
+    )
+    let journal = harness.journal()
+    let context = try InstallTransitionContext(
+        operation: .uninstall,
+        current: manifest,
+        previous: nil
+    )
+    try InstallJournalWriter(store: journal).appendInitial(
+        transactionID: "recovery-validation",
+        context: context,
+        phase: .uninstallPrepared
+    )
+    let effects = TestSystemEffectAdapter()
+    await #expect(throws: InstallError.invalidManifest("rejected recovery manifest")) {
+        try await harness.recovery(
+            journal: journal,
+            effects: effects,
+            validateManifest: { _ in
+                throw InstallError.invalidManifest("rejected recovery manifest")
+            }
+        ).recover(transactionID: "recovery-validation")
+    }
+    #expect(effects.calls.isEmpty)
+    #expect(try harness.publications.classify(manifest.publications[0]) == .owned)
+}
+
+@Test
+func committedPurgeRecoveryValidatesManifestBeforeRemovingGenerationBytes() async throws {
+    let harness = try InstallTransactionHarness()
+    let data = Data("purge-validation".utf8)
+    let source = try harness.source(data: data, name: "purge-validation-source")
+    let manifest = try harness.manifest(
+        generationID: "purge-validation",
+        previousGenerationID: nil,
+        data: data
+    )
+    try harness.prepareInstalled(
+        manifest: manifest,
+        source: source,
+        transactionID: "purge-validation-setup"
+    )
+    let transactionID = "purge-validation"
+    await #expect(throws: InstallError.faultInjected("journal-append-7")) {
+        try await harness.coordinator(
+            journal: harness.journal(
+                faultInjector: CountingCheckpointFaultInjector(failureOrdinal: 7)
+            ),
+            effects: TestSystemEffectAdapter()
+        ).uninstall(transactionID: transactionID, manifest: manifest)
+    }
+    await #expect(throws: InstallError.invalidManifest("rejected purge manifest")) {
+        try await harness.recovery(
+            journal: harness.journal(),
+            effects: TestSystemEffectAdapter(),
+            validateManifest: { _ in
+                throw InstallError.invalidManifest("rejected purge manifest")
+            }
+        ).recover(transactionID: transactionID)
+    }
+    #expect(
+        try harness.generations.classifyRetired(manifest, transactionID: transactionID)
+            == .owned(manifest.digest())
+    )
+}
+
+@Test
 func updateCommitsWithExactPreviousGenerationOwnership() async throws {
     let harness = try InstallTransactionHarness()
     let previousData = Data("previous".utf8)

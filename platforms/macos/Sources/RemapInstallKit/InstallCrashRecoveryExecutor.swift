@@ -6,6 +6,7 @@ public struct InstallCrashRecoveryExecutor: Sendable {
     private let generations: GenerationStore
     private let journalStore: InstallJournalStore
     private let steps: InstallTransactionSteps
+    private let validateManifest: @Sendable (InstallManifest) throws -> Void
 
     public init(
         lockAuthority: FileSystemAuthority,
@@ -13,7 +14,8 @@ public struct InstallCrashRecoveryExecutor: Sendable {
         generations: GenerationStore,
         publications: PublicationStore,
         journal: InstallJournalStore,
-        effects: any InstallSystemEffectAdapting
+        effects: any InstallSystemEffectAdapting,
+        validateManifest: @escaping @Sendable (InstallManifest) throws -> Void = { _ in }
     ) {
         self.init(
             lockConfiguration: InstallLockConfiguration(
@@ -24,7 +26,8 @@ public struct InstallCrashRecoveryExecutor: Sendable {
             generations: generations,
             publications: publications,
             journal: journal,
-            effects: effects
+            effects: effects,
+            validateManifest: validateManifest
         )
     }
 
@@ -33,15 +36,20 @@ public struct InstallCrashRecoveryExecutor: Sendable {
         generations: GenerationStore,
         publications: PublicationStore,
         journal: InstallJournalStore,
-        effects: any InstallSystemEffectAdapting
+        effects: any InstallSystemEffectAdapting,
+        validateManifest: @escaping @Sendable (InstallManifest) throws -> Void = { _ in }
     ) {
         let journalWriter = InstallJournalWriter(store: journal)
         self.lockConfiguration = lockConfiguration
         self.generations = generations
         journalStore = journal
+        self.validateManifest = validateManifest
         steps = InstallTransactionSteps(
             generations: generations,
-            publications: PublicationReconciler(store: publications),
+            publications: PublicationReconciler(
+                store: publications,
+                validateManifest: validateManifest
+            ),
             journal: journalWriter,
             effects: effects
         )
@@ -81,6 +89,11 @@ public struct InstallCrashRecoveryExecutor: Sendable {
             guard let generationID else {
                 throw InstallError.journal("generation purge has no target identity")
             }
+            try validatePurgeContext(
+                record: latest,
+                generationID: generationID,
+                completedPhase: completedPhase
+            )
             try steps.runCommittedPurge(
                 transactionID: transactionID,
                 generationID: generationID,
@@ -104,12 +117,14 @@ public struct InstallCrashRecoveryExecutor: Sendable {
             generationID: generationID,
             transactionID: record.transactionID
         )
+        try validateManifest(current)
         let previous: InstallManifest?
         if let previousGenerationID = record.previousGenerationID {
             previous = try generations.loadManifest(for: previousGenerationID)
             guard let previous, case .owned = try generations.classify(previous) else {
                 throw InstallError.collision("previous generation \(previousGenerationID)")
             }
+            try validateManifest(previous)
         } else {
             previous = nil
         }
@@ -118,5 +133,35 @@ public struct InstallCrashRecoveryExecutor: Sendable {
             current: current,
             previous: previous
         )
+    }
+
+    private func validatePurgeContext(
+        record: InstallJournalRecord,
+        generationID: String,
+        completedPhase: InstallPhase
+    ) throws {
+        let identities = [record.generationID, record.previousGenerationID].compactMap(\.self)
+        var validated: Set<String> = []
+        for identity in identities where validated.insert(identity).inserted {
+            if identity == generationID {
+                let manifest = try generations.loadManifestForPurgeRecovery(
+                    generationID: identity,
+                    transactionID: record.transactionID
+                )
+                if let manifest {
+                    try validateManifest(manifest)
+                } else if completedPhase != .generationContentsPurged {
+                    throw InstallError.integrity(
+                        "the journal-bound purge generation is missing"
+                    )
+                }
+            } else {
+                let manifest = try generations.loadManifest(for: identity)
+                guard case .owned = try generations.classify(manifest) else {
+                    throw InstallError.collision("generation \(identity)")
+                }
+                try validateManifest(manifest)
+            }
+        }
     }
 }

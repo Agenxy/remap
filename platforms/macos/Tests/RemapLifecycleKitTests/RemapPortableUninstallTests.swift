@@ -11,10 +11,11 @@ func portableUninstallTokenBindsProductAndAuthorityState() throws {
 
     #expect(first == repeated)
     #expect(first.approvalToken != changed.approvalToken)
-    #expect(first.effects.suffix(4) == [
+    #expect(first.effects.suffix(5) == [
         "Remove Remap's locally signed installer source package.",
         "Remove Remap's privileged lifecycle service and launchd registration.",
         "Remove Remap's private installer storage; keep its empty transaction lock.",
+        "Remove Remap's local code-signing key and System-keychain trust.",
         "Remove Remap from macOS's installed-package records."
     ])
 }
@@ -45,6 +46,7 @@ private func portablePreview(sourceDigest: String) throws -> RemapLifecycleUnins
             "/" + MacOSPortableAuthorityCleanupState.sourcesPathString + "/\(digest)"
         ),
         sourceManifestDigest: digest,
+        signingCertificateSHA256: InstallDigest(String(repeating: "4", count: 64)),
         files: files
     )
     let product = try MacOSInstallerPreview(

@@ -38,6 +38,10 @@ from tools.remap_macos_install import (
 )
 from tools.remap_macos_install import uninstall as uninstall_macos
 from tools.remap_macos_portable_package import build as build_portable_macos_package
+from tools.remap_macos_release_installer_signing import (
+    ensure_release_installer_identity,
+)
+from tools.remap_macos_verified_package_install import install_verified_package
 from tools.remap_package import (
     cargo_target_directory,
     verify_policy_copies,
@@ -80,11 +84,14 @@ PYTHON_PATHS = (
     "tools/remap_macos_package_metadata.py",
     "tools/remap_macos_protocol.py",
     "tools/remap_macos_portable_package.py",
+    "tools/remap_macos_release_installer_signing.py",
+    "tools/remap_macos_verified_package_install.py",
     "tools/remap_native_package.py",
     "tools/remap_native_model.py",
     "tools/remap_app.py",
     "tools/remap_package.py",
     "tools/remap_release_evidence.py",
+    "tools/remap_release_artifacts.py",
     "tools/remap_release_inventory.py",
     "tools/remap_release_model.py",
     "tests/python/test_docs.py",
@@ -100,6 +107,8 @@ PYTHON_PATHS = (
     "tests/python/test_macos_signing.py",
     "tests/python/test_macos_native_setup.py",
     "tests/python/test_macos_portable_package.py",
+    "tests/python/test_macos_release_installer_signing.py",
+    "tests/python/test_macos_verified_package_install.py",
     "tests/python/test_native_package.py",
     "tests/python/test_package.py",
     "tests/python/test_release_evidence.py",
@@ -333,9 +342,26 @@ def task_package_macos() -> None:
         product_version=PRODUCT_VERSION,
         output=output,
         signing_key=key,
+        installer_identity=ensure_release_installer_identity(ROOT),
     )
     print(f"Built {package.path} (SHA-256 {package.sha256})")
     print(f"Signed {package.signature_path} " + f"(SHA-256 {package.signature_sha256})")
+
+
+def task_install_package_macos() -> None:
+    """Install a detached-signature-verified package from root-owned staging."""
+    require_macos()
+    configured_package = os.environ.get("REMAP_MACOS_PACKAGE")
+    if not configured_package:
+        raise RuntimeError("REMAP_MACOS_PACKAGE must name the package to install")
+    package = Path(configured_package).expanduser().resolve(strict=True)
+    configured_signature = os.environ.get("REMAP_MACOS_PACKAGE_SIGNATURE")
+    signature = (
+        Path(configured_signature).expanduser().resolve(strict=True)
+        if configured_signature
+        else package.with_suffix(package.suffix + ".sig").resolve(strict=True)
+    )
+    install_verified_package(ROOT, package, signature)
 
 
 def verify_packages() -> None:
@@ -615,6 +641,7 @@ TASKS: dict[str, Callable[[], None]] = {
     "install-cli": task_install_cli,
     "install-system": task_install_system,
     "install-check": task_install_check,
+    "install-package-macos": task_install_package_macos,
     "package-macos": task_package_macos,
     "run-macos": task_run_macos_app,
     "recover": task_recover,

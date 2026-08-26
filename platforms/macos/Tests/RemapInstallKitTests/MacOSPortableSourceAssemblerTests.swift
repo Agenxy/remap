@@ -24,15 +24,77 @@ struct MacOSPortableSourceAssemblerTests {
             let second = try assemble(descriptor, destination: sources.appendingPathComponent("second"))
             #expect(first.manifestDigest == second.manifestDigest)
             #expect(first.generationID == second.generationID)
-            let data = try Data(contentsOf: URL(fileURLWithPath: first.rootPath)
-                .appendingPathComponent("manifest.json"))
+            let data = try Data(
+                contentsOf: URL(fileURLWithPath: first.rootPath)
+                    .appendingPathComponent("manifest.json")
+            )
             let manifest = try InstallManifest.decodeCanonical(data, expectedDigest: first.manifestDigest)
             #expect(manifest.generationID == first.generationID)
-            #expect(manifest.entries.contains { $0.path.description == "bin/remap" && $0.role == .commandLineTool })
-            #expect(manifest.entries.contains { $0.path.description == "libexec/remapd" && $0.role == .daemon })
+            #expect(
+                manifest.entries.contains {
+                    $0.path.description == "bin/remap" && $0.role == .commandLineTool
+                }
+            )
+            #expect(
+                manifest.entries.contains { $0.path.description == "libexec/remapd" && $0.role == .daemon }
+            )
             #expect(manifest.publications.contains { $0.path.description == "usr/local/bin/remap" })
             #expect(manifest.publications.contains { $0.path.description == "Applications/Remap.app" })
             #expect(manifest.publications.count == 45)
+        }
+    }
+
+    @Test("native validation rejects every surplus system publication")
+    func rejectsSurplusPublication() throws {
+        try withTemporaryDirectory { root in
+            let product = root.appendingPathComponent("product", isDirectory: true)
+            try createProduct(at: product)
+            let sources = root.appendingPathComponent("sources", isDirectory: true)
+            try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: false)
+            try setMode(sources, 0o700)
+            let descriptor = try MacOSPortableProduct(
+                rootPath: product.path,
+                productVersion: "0.2.0",
+                ownerUID: geteuid(),
+                signingCertificateSHA256: InstallDigest(String(repeating: "a", count: 64)),
+                previousGenerationID: nil
+            )
+            let source = try assemble(descriptor, destination: sources.appendingPathComponent("source"))
+            let sourceRoot = URL(fileURLWithPath: source.rootPath)
+            let manifestData = try Data(contentsOf: sourceRoot.appendingPathComponent("manifest.json"))
+            let manifest = try InstallManifest.decodeCanonical(manifestData)
+            let extra = try InstallPublication(
+                path: InstallRelativePath("Library/LaunchDaemons/evil.example.plist"),
+                target: InstallSymlinkTarget(
+                    "/\(MacOSInstallLayout.installerBase)/current/bin/remap"
+                ),
+                generationID: manifest.generationID
+            )
+            let expanded = try InstallManifest(
+                productIdentifier: manifest.productIdentifier,
+                generationID: manifest.generationID,
+                productVersion: manifest.productVersion,
+                previousGenerationID: manifest.previousGenerationID,
+                entries: manifest.entries,
+                publications: manifest.publications + [extra]
+            )
+
+            #expect(
+                throws: InstallError.invalidManifest(
+                    "the native package publication contract is not exact"
+                )
+            ) {
+                try MacOSInstallConfiguration.validatePublicationContract(
+                    for: expanded,
+                    installOwnerUID: 0,
+                    installGroupGID: 0
+                )
+            }
+            try MacOSInstallConfiguration.validatePublicationContract(
+                for: manifest,
+                installOwnerUID: 0,
+                installGroupGID: 0
+            )
         }
     }
 
@@ -93,10 +155,12 @@ struct MacOSPortableSourceAssemblerTests {
 
 private extension URL {
     func descendantsIncludingSelf() throws -> [URL] {
-        guard let enumerator = FileManager.default.enumerator(
-            at: self,
-            includingPropertiesForKeys: [.isDirectoryKey]
-        ) else {
+        guard
+            let enumerator = FileManager.default.enumerator(
+                at: self,
+                includingPropertiesForKeys: [.isDirectoryKey]
+            )
+        else {
             throw CocoaError(.fileReadUnknown)
         }
         return [self] + enumerator.compactMap { $0 as? URL }

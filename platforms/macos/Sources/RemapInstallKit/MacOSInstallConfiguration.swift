@@ -31,10 +31,14 @@ public struct MacOSInstallConfiguration: Codable, Equatable, Sendable {
             throw InstallError.invalidManifest("native listener ports must be distinct and nonzero")
         }
         guard controlSocket.value == dataDirectory.value + "/control.sock" else {
-            throw InstallError.invalidManifest("the control socket must be inside the native data directory")
+            throw InstallError.invalidManifest(
+                "the control socket must be inside the native data directory"
+            )
         }
         guard controlSocket.value.utf8.count < 104 else {
-            throw InstallError.invalidManifest("the native control socket path exceeds the macOS Unix-socket limit")
+            throw InstallError.invalidManifest(
+                "the native control socket path exceeds the macOS Unix-socket limit"
+            )
         }
         schemaVersion = 2
         self.ownerUID = ownerUID
@@ -79,10 +83,13 @@ public struct MacOSInstallConfiguration: Codable, Equatable, Sendable {
             throw InstallError.invalidManifest("the native install configuration is not manifest-bound")
         }
         let account = try MacOSAccountLookup.account(for: ownerUID)
-        let expectedDirectory = account.homeDirectory.value
-            + "/Library/Application Support/org.Agenxy.Remap"
+        let expectedDirectory =
+            account.homeDirectory.value
+                + "/Library/Application Support/org.Agenxy.Remap"
         guard dataDirectory.value == expectedDirectory else {
-            throw InstallError.invalidManifest("the native data directory does not belong to the daemon account")
+            throw InstallError.invalidManifest(
+                "the native data directory does not belong to the daemon account"
+            )
         }
         try validateInstallerEntry(
             in: manifest,
@@ -95,6 +102,24 @@ public struct MacOSInstallConfiguration: Codable, Equatable, Sendable {
                 in: manifest,
                 installOwnerUID: installOwnerUID,
                 installGroupGID: installGroupGID
+            )
+        }
+    }
+
+    static func validatePublicationContract(
+        for manifest: InstallManifest,
+        installOwnerUID: UInt32,
+        installGroupGID: UInt32
+    ) throws {
+        let expectedPublications = try MacOSPortableManifestBuilder.publications(
+            generationID: manifest.generationID,
+            entries: manifest.entries,
+            ownerUID: installOwnerUID,
+            groupGID: installGroupGID
+        )
+        guard manifest.publications == expectedPublications else {
+            throw InstallError.invalidManifest(
+                "the native package publication contract is not exact"
             )
         }
     }
@@ -112,7 +137,9 @@ public struct MacOSInstallConfiguration: Codable, Equatable, Sendable {
               entry.groupGID == installGroupGID,
               entry.mode == 0o555
         else {
-            throw InstallError.invalidManifest("the immutable generation has no trusted recovery installer")
+            throw InstallError.invalidManifest(
+                "the immutable generation has no trusted recovery installer"
+            )
         }
     }
 
@@ -121,13 +148,17 @@ public struct MacOSInstallConfiguration: Codable, Equatable, Sendable {
         let target = try InstallSymlinkTarget(
             "/\(MacOSInstallLayout.installerBase)/Generations/\(manifest.generationID)"
         )
-        guard manifest.publications.contains(where: {
-            $0.path == path
-                && $0.kind == .symbolicLink
-                && $0.target == target
-                && $0.generationID == manifest.generationID
-        }) else {
-            throw InstallError.invalidManifest("the native package has no exact current-generation publication")
+        guard
+            manifest.publications.contains(where: {
+                $0.path == path
+                    && $0.kind == .symbolicLink
+                    && $0.target == target
+                    && $0.generationID == manifest.generationID
+            })
+        else {
+            throw InstallError.invalidManifest(
+                "the native package has no exact current-generation publication"
+            )
         }
     }
 }
@@ -173,7 +204,9 @@ enum MacOSLaunchdServiceKind: String, CaseIterable, Sendable {
               program?.mode == 0o555,
               serviceRoleIsValid(program?.role)
         else {
-            throw InstallError.invalidManifest("\(label) paths are not bound to immutable root-owned files")
+            throw InstallError.invalidManifest(
+                "\(label) paths are not bound to immutable root-owned files"
+            )
         }
         try validatePublication(
             manifest,
@@ -202,7 +235,9 @@ enum MacOSLaunchdServiceKind: String, CaseIterable, Sendable {
               publication?.groupGID == installGroupGID,
               publication?.mode == 0o444
         else {
-            throw InstallError.invalidManifest("\(label) has no exact persistent LaunchDaemon publication")
+            throw InstallError.invalidManifest(
+                "\(label) has no exact persistent LaunchDaemon publication"
+            )
         }
     }
 

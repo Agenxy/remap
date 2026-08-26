@@ -332,6 +332,15 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
         ):
             remap_macos_install.authorize_administrator(Path("."))
 
+    def test_administrator_authorization_uses_the_native_sudo_prompt(self) -> None:
+        with mock.patch("tools.remap_macos_install._run") as run:
+            remap_macos_install.authorize_administrator(Path("."))
+
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [("/usr/bin/sudo", "-v")],
+        )
+
     def test_exact_update_is_a_verified_no_op(self) -> None:
         package = NativePackage(
             root=Path("package"),
@@ -415,7 +424,9 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
             mock.patch(
                 "tools.remap_macos_install.build_native_products", return_value=build
             ),
-            mock.patch("tools.remap_macos_install.authorize_administrator"),
+            mock.patch(
+                "tools.remap_macos_install.authorize_administrator"
+            ) as administrator,
             mock.patch(
                 "tools.remap_macos_install.bootstrap_helper",
                 return_value=nullcontext(Path("bootstrap")),
@@ -438,9 +449,6 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
                 "tools.remap_macos_install._package_arguments",
                 return_value=("--package-root", "/reviewed"),
             ),
-            mock.patch(
-                "tools.remap_macos_install.confirm_approval", return_value=token
-            ),
             mock.patch("tools.remap_macos_install.verify_installed_product"),
             mock.patch("builtins.print"),
         ):
@@ -450,8 +458,9 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
         mutation = next(arguments for arguments in calls if arguments[0] == "install")
         token_index = mutation.index("--approval-token")
         self.assertEqual(mutation[token_index + 1], token)
+        administrator.assert_called_once_with(Path("."))
 
-    def test_rejected_preview_never_creates_the_product_data_directory(self) -> None:
+    def test_rejected_privileged_mutation_does_not_report_success(self) -> None:
         generation = "0.1.1-0123456789abcdef0123"
         package = NativePackage(
             root=Path("package"),
@@ -483,6 +492,8 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
                 return success("resolver-plan", {"upstreams": ["192.0.2.53:53"]})
             if arguments[0:2] == ("preview", "install"):
                 return preview
+            if arguments[0] == "install":
+                raise RuntimeError("approval rejected")
             raise AssertionError(f"unexpected helper arguments: {arguments}")
 
         files = mock.Mock(installer=Path("candidate"))
@@ -495,7 +506,9 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
             mock.patch(
                 "tools.remap_macos_install.build_native_products", return_value=build
             ),
-            mock.patch("tools.remap_macos_install.authorize_administrator"),
+            mock.patch(
+                "tools.remap_macos_install.authorize_administrator",
+            ),
             mock.patch(
                 "tools.remap_macos_install.bootstrap_helper",
                 return_value=nullcontext(Path("bootstrap")),
@@ -518,10 +531,6 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
                 return_value=("--package-root", "/reviewed"),
             ),
             mock.patch(
-                "tools.remap_macos_install.confirm_approval",
-                side_effect=RuntimeError("approval rejected"),
-            ),
-            mock.patch(
                 "tools.remap_macos_install._ensure_private_data_directory"
             ) as ensure,
             mock.patch("builtins.print"),
@@ -529,7 +538,7 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
         ):
             remap_macos_install.install_or_update(Path("."), "0.1.1", "install")
 
-        ensure.assert_not_called()
+        ensure.assert_called_once()
 
     def test_recovery_has_its_own_preview_token_and_verifies_convergence(self) -> None:
         token = "9" * 64
@@ -584,9 +593,6 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
             mock.patch(
                 "tools.remap_macos_install.helper_json", side_effect=helper_result
             ),
-            mock.patch(
-                "tools.remap_macos_install.confirm_approval", return_value=token
-            ),
             mock.patch("builtins.print"),
         ):
             remap_macos_install.recover(Path("."))
@@ -636,7 +642,9 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
                 "tools.remap_macos_install.build_installer",
                 return_value=(Path("candidate"), "1" * 40),
             ),
-            mock.patch("tools.remap_macos_install.authorize_administrator"),
+            mock.patch(
+                "tools.remap_macos_install.authorize_administrator"
+            ) as administrator,
             mock.patch(
                 "tools.remap_macos_install.bootstrap_helper",
                 return_value=nullcontext(Path("bootstrap")),
@@ -648,15 +656,12 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
             mock.patch(
                 "tools.remap_macos_install.helper_json", side_effect=helper_result
             ),
-            mock.patch(
-                "tools.remap_macos_install.confirm_approval", return_value=token
-            ) as approval,
             mock.patch("builtins.print"),
         ):
             remap_macos_install.recover(Path("."))
 
         self.assertNotIn(("recover", "--all"), calls)
-        approval.assert_called_once_with(token, "recover bootstrap helpers")
+        administrator.assert_called_once_with(Path("."))
         self.assertIn(("recover-bootstrap-helpers", "--approval-token", token), calls)
 
     def test_product_recovery_cannot_invalidate_bootstrap_residue_recovery(
@@ -714,9 +719,6 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
             mock.patch(
                 "tools.remap_macos_install.helper_json", side_effect=helper_result
             ),
-            mock.patch(
-                "tools.remap_macos_install.confirm_approval", return_value=token
-            ),
             mock.patch("builtins.print"),
         ):
             remap_macos_install.recover(Path("."))
@@ -771,9 +773,6 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
             ),
             mock.patch(
                 "tools.remap_macos_install.helper_json", side_effect=helper_result
-            ),
-            mock.patch(
-                "tools.remap_macos_install.confirm_approval", return_value=token
             ),
             mock.patch("tools.remap_macos_install.verify_uninstalled") as verified,
             mock.patch("socket.getaddrinfo") as public_dns,

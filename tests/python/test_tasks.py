@@ -11,6 +11,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.remap_macos_portable_package import PortablePackage
+from tools.remap_macos_release_installer_signing import (
+    ReleaseInstallerSigningIdentity,
+)
 from tools.remap_release_model import ArtifactSpec
 from tools.remap_tasks import (
     task_build_macos_app,
@@ -107,6 +110,12 @@ class NativeProductTaskTests(unittest.TestCase):
 
     def test_macos_package_uses_only_the_explicit_release_key(self) -> None:
         release_key = "/private/release/remap-release.pub"
+        expected_identity = ReleaseInstallerSigningIdentity(
+            name="Remap Release Installer",
+            sha1="b" * 40,
+            sha256="c" * 64,
+            keychain=Path("/private/release/login.keychain-db"),
+        )
         with (
             patch.dict(
                 "tools.remap_tasks.os.environ",
@@ -114,8 +123,12 @@ class NativeProductTaskTests(unittest.TestCase):
                 clear=True,
             ),
             patch("tools.remap_tasks.require_macos"),
+            patch(
+                "tools.remap_tasks.ensure_release_installer_identity"
+            ) as installer_identity,
             patch("tools.remap_tasks.build_portable_macos_package") as build,
         ):
+            installer_identity.return_value = expected_identity
             build.return_value = PortablePackage(
                 path=Path("/private/release/Remap.pkg"),
                 sha256="a" * 64,
@@ -128,6 +141,10 @@ class NativeProductTaskTests(unittest.TestCase):
             task_package_macos()
 
         self.assertEqual(build.call_args.kwargs["signing_key"], Path(release_key))
+        self.assertEqual(
+            build.call_args.kwargs["installer_identity"],
+            expected_identity,
+        )
 
     def test_release_evidence_uses_every_verified_workspace_crate(self) -> None:
         with tempfile.TemporaryDirectory(prefix="remap-release-task-") as directory:

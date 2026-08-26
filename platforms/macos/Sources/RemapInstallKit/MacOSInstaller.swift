@@ -42,13 +42,17 @@ public struct MacOSInstaller: Sendable {
         }
         try validateSource(manifest, authority: source)
         let previous = try loadPrevious(for: operation, manifest: manifest)
-        let context = try InstallTransitionContext(operation: operation, current: manifest, previous: previous)
+        let context = try InstallTransitionContext(
+            operation: operation, current: manifest, previous: previous
+        )
         return try approvalPreview(for: context, verifiedSourceEntries: manifest.entries.count)
     }
 
     public func previewUninstall(generationID: String) throws -> MacOSInstallerPreview {
         let manifest = try layout.generations.loadManifest(for: generationID)
-        let context = try InstallTransitionContext(operation: .uninstall, current: manifest, previous: nil)
+        let context = try InstallTransitionContext(
+            operation: .uninstall, current: manifest, previous: nil
+        )
         return try approvalPreview(for: context, verifiedSourceEntries: 0)
     }
 
@@ -65,7 +69,9 @@ public struct MacOSInstaller: Sendable {
         let approvedPreview = try preview(operation: operation, manifest: manifest, source: source)
         try requireApproval(approvalToken, matches: approvedPreview)
         let previous = try loadPrevious(for: operation, manifest: manifest)
-        let context = try InstallTransitionContext(operation: operation, current: manifest, previous: previous)
+        let context = try InstallTransitionContext(
+            operation: operation, current: manifest, previous: previous
+        )
         let request = try InstallTransactionRequest(
             transactionID: transactionID,
             context: context,
@@ -212,8 +218,9 @@ public struct MacOSInstaller: Sendable {
             knownTransactionIDs: known
         )
         let detached = try layout.generations.detachedGenerationNames()
-        let removesProductStorage = try layout.generations.ownedManifests().isEmpty
-            && layout.hasOwnedProductStorage()
+        let removesProductStorage =
+            try layout.generations.ownedManifests().isEmpty
+                && layout.hasOwnedProductStorage()
         let effects = recoveryEffects(
             requestedTransactionID: transactionID,
             selectedTransactionIDs: Set(selected),
@@ -392,12 +399,16 @@ public struct MacOSInstaller: Sendable {
     private func approvalPublications(
         for context: InstallTransitionContext
     ) -> [InstallPublication] {
-        let previous = Dictionary(uniqueKeysWithValues: (context.previous?.publications ?? []).map {
-            ($0.path, $0)
-        })
-        let current = Dictionary(uniqueKeysWithValues: context.current.publications.map {
-            ($0.path, $0)
-        })
+        let previous = Dictionary(
+            uniqueKeysWithValues: (context.previous?.publications ?? []).map {
+                ($0.path, $0)
+            }
+        )
+        let current = Dictionary(
+            uniqueKeysWithValues: context.current.publications.map {
+                ($0.path, $0)
+            }
+        )
         return Set(previous.keys).union(current.keys).sorted().compactMap { path in
             previous[path] ?? current[path]
         }
@@ -474,30 +485,6 @@ public struct MacOSInstaller: Sendable {
         }
     }
 
-    private func coordinator(
-        approvalVerifier: any InstallApprovalVerifying
-    ) -> InstallTransactionCoordinator {
-        InstallTransactionCoordinator(
-            lockConfiguration: layout.lockConfiguration,
-            generations: layout.generations,
-            publications: layout.publications,
-            journal: layout.journals,
-            effects: effects,
-            approvalVerifier: approvalVerifier,
-            prepareStorage: { try layout.prepareStorageTopology() }
-        )
-    }
-
-    private func recovery() -> InstallCrashRecoveryExecutor {
-        InstallCrashRecoveryExecutor(
-            lockConfiguration: layout.lockConfiguration,
-            generations: layout.generations,
-            publications: layout.publications,
-            journal: layout.journals,
-            effects: effects
-        )
-    }
-
     private func completeUninstallCleanup() throws {
         let lock = try layout.lockConfiguration.acquire()
         defer { _ = lock }
@@ -529,6 +516,43 @@ public struct MacOSInstaller: Sendable {
             effects.append("purge previous generation \(previousGenerationID)")
         }
         return effects
+    }
+}
+
+private extension MacOSInstaller {
+    func coordinator(
+        approvalVerifier: any InstallApprovalVerifying
+    ) -> InstallTransactionCoordinator {
+        InstallTransactionCoordinator(
+            lockConfiguration: layout.lockConfiguration,
+            generations: layout.generations,
+            publications: layout.publications,
+            journal: layout.journals,
+            effects: effects,
+            approvalVerifier: approvalVerifier,
+            prepareStorage: { try layout.prepareStorageTopology() },
+            validateManifest: validateNativePublicationContract
+        )
+    }
+
+    func recovery() -> InstallCrashRecoveryExecutor {
+        InstallCrashRecoveryExecutor(
+            lockConfiguration: layout.lockConfiguration,
+            generations: layout.generations,
+            publications: layout.publications,
+            journal: layout.journals,
+            effects: effects,
+            validateManifest: validateNativePublicationContract
+        )
+    }
+
+    func validateNativePublicationContract(_ manifest: InstallManifest) throws {
+        guard layout.systemRootPath == "/" else { return }
+        try MacOSInstallConfiguration.validatePublicationContract(
+            for: manifest,
+            installOwnerUID: layout.installOwnerUID,
+            installGroupGID: layout.installGroupGID
+        )
     }
 }
 

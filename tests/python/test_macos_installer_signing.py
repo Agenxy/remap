@@ -34,11 +34,11 @@ class MacOSInstallerSigningTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "tools.remap_macos_installer_signing._run_binary",
+                "tools.remap_macos_installer_signing.run_binary",
                 side_effect=run_binary,
             ),
             mock.patch(
-                "tools.remap_macos_installer_signing._make_archive",
+                "tools.remap_macos_installer_signing.make_archive",
                 return_value=b"archive",
             ) as make_archive,
         ):
@@ -73,7 +73,7 @@ class MacOSInstallerSigningTests(unittest.TestCase):
         ):
             make_archive = cast(
                 "Callable[[bytes, bytes], bytes]",
-                vars(remap_macos_installer_signing)["_make_archive"],
+                vars(remap_macos_installer_signing)["make_archive"],
             )
             archive = make_archive(b"certificate", b"key")
 
