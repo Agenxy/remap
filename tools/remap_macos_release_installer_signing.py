@@ -228,7 +228,14 @@ authorityKeyIdentifier = keyid:always
 
 def _resolve(keychain: Path) -> ReleaseInstallerSigningIdentity | None:
     identities = _capture(
-        ("/usr/bin/security", "find-identity", "-p", "basic", str(keychain))
+        (
+            "/usr/bin/security",
+            "find-identity",
+            "-v",
+            "-p",
+            "basic",
+            str(keychain),
+        )
     )
     matches = [
         match.groups()
