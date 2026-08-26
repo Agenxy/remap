@@ -116,7 +116,9 @@ class PortablePackageTests(unittest.TestCase):
             capture_output=True,
             timeout=120,
         )
-        writer.assert_called_once_with(payload.with_suffix(".json.sig"), signature_bytes)
+        writer.assert_called_once_with(
+            payload.with_suffix(".json.sig"), signature_bytes
+        )
 
     def test_generated_signature_copy_drops_source_attributes(self) -> None:
         signature = self.directory / "release-manifest.json.sig"
