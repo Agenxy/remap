@@ -53,6 +53,12 @@ ordinary resolver, so an update captures the live effective service instead.
 This permits recovery after macOS replaces a service identifier during a
 network transition without reviving DNS data bound to the departed service.
 
+An update may also need to inspect or restore an immutable generation produced
+before the launchd-owned system socket became mandatory. The loader accepts the
+complete earlier daemon-and-resolver socket contract only for an already
+installed, manifest-owned generation. Portable and source package inputs never
+receive that compatibility allowance and must use the hardened system socket.
+
 ### A state token is freshness evidence, not consent
 
 The signed lifecycle CLI still obtains and internally carries the exact
