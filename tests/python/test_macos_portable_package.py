@@ -271,12 +271,14 @@ class PortablePackageTests(unittest.TestCase):
             timestamp="2026-08-21T10:00:00",
             inode=41,
             signature=b"A" * 384,
+            extended_signature=b"C" * 24,
         )
         self._write_test_xar(
             second,
             timestamp="2026-08-21T11:00:00",
             inode=92,
             signature=b"B" * 384,
+            extended_signature=b"D" * 24,
         )
         completed = subprocess.CompletedProcess(
             args=(), returncode=0, stdout=b"S" * 384, stderr=b""
@@ -335,22 +337,61 @@ class PortablePackageTests(unittest.TestCase):
                 keychain=Path("/Users/example/Library/Keychains/login.keychain-db"),
             )
 
+    def test_signed_xar_rejects_payload_overlapping_extended_signature(self) -> None:
+        package = self.directory / "overlap.pkg"
+        self._write_test_xar(
+            package,
+            timestamp="2026-08-21T10:00:00",
+            inode=41,
+            signature=b"A" * 384,
+            extended_signature=b"C" * 24,
+            payload_offset=404,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "overlaps its signed metadata"):
+            canonicalize_xar_metadata(
+                package,
+                signature_signer=Path("/native/xar-signer"),
+                certificate_sha256="A" * 64,
+                keychain=Path("/Users/example/Library/Keychains/login.keychain-db"),
+            )
+
     @staticmethod
     def _write_test_xar(
-        path: Path, *, timestamp: str, inode: int, signature: bytes | None = None
+        path: Path,
+        *,
+        timestamp: str,
+        inode: int,
+        signature: bytes | None = None,
+        extended_signature: bytes | None = None,
+        payload_offset: int | None = None,
     ) -> None:
         signature_xml = (
             '<signature style="RSA"><offset>20</offset><size>384</size></signature>'
             if signature is not None
             else ""
         )
-        data_offset = 20 + (len(signature) if signature is not None else 0)
+        if extended_signature is not None and signature is None:
+            raise ValueError("an extended signature requires a primary signature")
+        extended_xml = (
+            '<x-signature style="CMS"><offset>404</offset><size>'
+            + f"{len(extended_signature)}</size></x-signature>"
+            if extended_signature is not None
+            else ""
+        )
+        computed_offset = (
+            20
+            + (len(signature) if signature is not None else 0)
+            + (len(extended_signature) if extended_signature is not None else 0)
+        )
+        data_offset = computed_offset if payload_offset is None else payload_offset
         document = (
             '<?xml version="1.0" encoding="UTF-8"?>\n'
             '<xar><toc><checksum style="sha1"><size>20</size>'
             "<offset>0</offset></checksum>"
             f"<creation-time>{timestamp}</creation-time>"
             f"{signature_xml}"
+            f"{extended_xml}"
             '<file id="1"><name>Payload</name><type>file</type>'
             f"<inode>{inode}</inode><deviceno>16777232</deviceno>"
             "<mode>0644</mode><uid>501</uid><user>builder</user>"
@@ -375,6 +416,7 @@ class PortablePackageTests(unittest.TestCase):
             + compressed
             + hashlib.sha1(compressed).digest()
             + (signature or b"")
+            + (extended_signature or b"")
             + b"payload"
         )
         os.chmod(path, 0o400)
