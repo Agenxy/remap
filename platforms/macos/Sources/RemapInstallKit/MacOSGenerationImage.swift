@@ -32,7 +32,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
             entryRoot: generation,
             imageRoot: layout.absoluteGenerationPath(manifest.generationID),
             installOwnerUID: layout.installOwnerUID,
-            installGroupGID: layout.installGroupGID
+            installGroupGID: layout.installGroupGID,
+            allowInstalledCompatibility: true
         )
     }
 
@@ -46,7 +47,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
             entryRoot: nil,
             imageRoot: layout.absoluteGenerationPath(manifest.generationID),
             installOwnerUID: layout.installOwnerUID,
-            installGroupGID: layout.installGroupGID
+            installGroupGID: layout.installGroupGID,
+            allowInstalledCompatibility: false
         )
     }
 
@@ -62,7 +64,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
                 "/\(MacOSInstallLayout.installerBase)/Generations/\(manifest.generationID)"
             ),
             installOwnerUID: 0,
-            installGroupGID: 0
+            installGroupGID: 0,
+            allowInstalledCompatibility: false
         )
     }
 
@@ -72,7 +75,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
         entryRoot: InstallRelativePath?,
         imageRoot: InstallAbsolutePath,
         installOwnerUID: UInt32,
-        installGroupGID: UInt32
+        installGroupGID: UInt32,
+        allowInstalledCompatibility: Bool
     ) throws -> MacOSGenerationImage {
         let configuration = try loadConfiguration(
             manifest: manifest,
@@ -90,17 +94,65 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
             )
         }
         let account = try MacOSAccountLookup.account(for: configuration.ownerUID)
-        let services = try MacOSLaunchdServiceKind.allCases.map { kind in
+        let services = try loadServices(
+            authority: authority,
+            entryRoot: entryRoot,
+            root: imageRoot,
+            configuration: configuration,
+            account: account,
+            allowInstalledCompatibility: allowInstalledCompatibility
+        )
+        return MacOSGenerationImage(configuration: configuration, services: services)
+    }
+
+    private func loadServices(
+        authority: FileSystemAuthority,
+        entryRoot: InstallRelativePath?,
+        root: InstallAbsolutePath,
+        configuration: MacOSInstallConfiguration,
+        account: MacOSAccount,
+        allowInstalledCompatibility: Bool
+    ) throws -> [MacOSLaunchdServiceImage] {
+        do {
+            return try loadServices(
+                authority: authority,
+                entryRoot: entryRoot,
+                root: root,
+                configuration: configuration,
+                account: account,
+                contract: .launchdOwnedSystemSocket
+            )
+        } catch where allowInstalledCompatibility {
+            return try loadServices(
+                authority: authority,
+                entryRoot: entryRoot,
+                root: root,
+                configuration: configuration,
+                account: account,
+                contract: .legacyDataDirectorySystemSocket
+            )
+        }
+    }
+
+    private func loadServices(
+        authority: FileSystemAuthority,
+        entryRoot: InstallRelativePath?,
+        root: InstallAbsolutePath,
+        configuration: MacOSInstallConfiguration,
+        account: MacOSAccount,
+        contract: MacOSLaunchdAuthorityContract
+    ) throws -> [MacOSLaunchdServiceImage] {
+        try MacOSLaunchdServiceKind.allCases.map { kind in
             try loadService(
                 kind,
                 authority: authority,
                 entryRoot: entryRoot,
-                root: imageRoot,
+                root: root,
                 configuration: configuration,
-                account: account
+                account: account,
+                contract: contract
             )
         }
-        return MacOSGenerationImage(configuration: configuration, services: services)
     }
 
     private func validateCodeIdentities(
@@ -220,7 +272,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
         entryRoot: InstallRelativePath?,
         root: InstallAbsolutePath,
         configuration: MacOSInstallConfiguration,
-        account: MacOSAccount
+        account: MacOSAccount,
+        contract: MacOSLaunchdAuthorityContract
     ) throws -> MacOSLaunchdServiceImage {
         let plistEntry = try InstallRelativePath(kind.plistEntry)
         let programEntry = try InstallRelativePath(kind.programEntry)
@@ -235,7 +288,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
             kind: kind,
             configuration: configuration,
             account: account,
-            programPath: programPath
+            programPath: programPath,
+            contract: contract
         )
         return MacOSLaunchdServiceImage(kind: kind, plistPath: plistPath, programPath: programPath)
     }

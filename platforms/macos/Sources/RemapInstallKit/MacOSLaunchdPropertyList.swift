@@ -1,13 +1,28 @@
 import Darwin
 import Foundation
 
+enum MacOSLaunchdAuthorityContract: Equatable {
+    case launchdOwnedSystemSocket
+    case legacyDataDirectorySystemSocket
+
+    func systemSocketPath(configuration: MacOSInstallConfiguration) -> String {
+        switch self {
+        case .launchdOwnedSystemSocket:
+            configuration.systemSocketPath
+        case .legacyDataDirectorySystemSocket:
+            configuration.dataDirectory.value + "/system.sock"
+        }
+    }
+}
+
 enum MacOSLaunchdPropertyList {
     static func validate(
         _ data: Data,
         kind: MacOSLaunchdServiceKind,
         configuration: MacOSInstallConfiguration,
         account: MacOSAccount,
-        programPath: InstallAbsolutePath
+        programPath: InstallAbsolutePath,
+        contract: MacOSLaunchdAuthorityContract = .launchdOwnedSystemSocket
     ) throws {
         let document: Any
         do {
@@ -23,9 +38,20 @@ enum MacOSLaunchdPropertyList {
         }
         switch kind {
         case .daemon:
-            try validateDaemon(values, configuration: configuration, account: account, programPath: programPath)
+            try validateDaemon(
+                values,
+                configuration: configuration,
+                account: account,
+                programPath: programPath,
+                contract: contract
+            )
         case .resolver:
-            try validateResolver(values, configuration: configuration, programPath: programPath)
+            try validateResolver(
+                values,
+                configuration: configuration,
+                programPath: programPath,
+                contract: contract
+            )
         }
     }
 
@@ -33,18 +59,25 @@ enum MacOSLaunchdPropertyList {
         _ values: [String: Any],
         configuration: MacOSInstallConfiguration,
         account: MacOSAccount,
-        programPath: InstallAbsolutePath
+        programPath: InstallAbsolutePath,
+        contract: MacOSLaunchdAuthorityContract
     ) throws {
         try validateIdentity(values, configuration: configuration, account: account)
-        try validateArguments(values, configuration: configuration, programPath: programPath)
+        try validateArguments(
+            values,
+            configuration: configuration,
+            programPath: programPath,
+            contract: contract
+        )
         try validateLifecycle(values, fileLimit: 4096)
-        try validateSockets(values, configuration: configuration)
+        try validateSockets(values, configuration: configuration, contract: contract)
     }
 
     private static func validateResolver(
         _ values: [String: Any],
         configuration: MacOSInstallConfiguration,
-        programPath: InstallAbsolutePath
+        programPath: InstallAbsolutePath,
+        contract: MacOSLaunchdAuthorityContract
     ) throws {
         guard values["UserName"] == nil,
               values["GroupName"] == nil,
@@ -56,7 +89,7 @@ enum MacOSLaunchdPropertyList {
                   "--owner-uid",
                   String(configuration.ownerUID),
                   "--system-socket",
-                  configuration.systemSocketPath
+                  contract.systemSocketPath(configuration: configuration)
               ]
         else {
             throw InstallError.invalidManifest("the root resolver service has an unexpected authority scope")
@@ -82,10 +115,12 @@ enum MacOSLaunchdPropertyList {
     private static func validateArguments(
         _ values: [String: Any],
         configuration: MacOSInstallConfiguration,
-        programPath: InstallAbsolutePath
+        programPath: InstallAbsolutePath,
+        contract: MacOSLaunchdAuthorityContract
     ) throws {
+        let suffix = daemonArgumentSuffix(configuration: configuration, contract: contract)
         guard let arguments = values["ProgramArguments"] as? [String],
-              arguments.count >= 10,
+              arguments.count >= 5 + suffix.count,
               arguments.count <= 20,
               arguments[0 ... 4] == [
                   programPath.value,
@@ -94,17 +129,11 @@ enum MacOSLaunchdPropertyList {
                   "--dns-listen",
                   "127.0.0.1:\(configuration.dnsPort)"
               ],
-              arguments.suffix(5) == [
-                  "--http-listen",
-                  "127.0.0.1:\(configuration.httpPort)",
-                  "--system-socket",
-                  configuration.systemSocketPath,
-                  "--launchd-sockets"
-              ]
+              arguments.suffix(suffix.count) == suffix[...]
         else {
             throw InstallError.invalidManifest("the launchd program arguments do not match the immutable image")
         }
-        let upstreamArguments = Array(arguments.dropFirst(5).dropLast(5))
+        let upstreamArguments = Array(arguments.dropFirst(5).dropLast(suffix.count))
         guard upstreamArguments.count.isMultiple(of: 2), upstreamArguments.count <= 8 else {
             throw InstallError.invalidManifest("the launchd upstream argument count is invalid")
         }
@@ -115,6 +144,18 @@ enum MacOSLaunchdPropertyList {
                 throw InstallError.invalidManifest("the launchd upstream arguments are invalid")
             }
         }
+    }
+
+    private static func daemonArgumentSuffix(
+        configuration: MacOSInstallConfiguration,
+        contract: MacOSLaunchdAuthorityContract
+    ) -> [String] {
+        var suffix = ["--http-listen", "127.0.0.1:\(configuration.httpPort)"]
+        if contract == .launchdOwnedSystemSocket {
+            suffix += ["--system-socket", configuration.systemSocketPath]
+        }
+        suffix.append("--launchd-sockets")
+        return suffix
     }
 
     private static func validateLifecycle(_ values: [String: Any], fileLimit: Int) throws {
@@ -139,21 +180,45 @@ enum MacOSLaunchdPropertyList {
 
     private static func validateSockets(
         _ values: [String: Any],
-        configuration: MacOSInstallConfiguration
+        configuration: MacOSInstallConfiguration,
+        contract: MacOSLaunchdAuthorityContract
     ) throws {
         guard let sockets = values["Sockets"] as? [String: Any],
-              Set(sockets.keys) == ["remap-dns-udp", "remap-dns-tcp", "remap-http", "remap-system"],
+              Set(sockets.keys) == expectedSocketKeys(contract),
               let udp = sockets["remap-dns-udp"] as? [String: Any],
               let tcp = sockets["remap-dns-tcp"] as? [String: Any],
               let http = sockets["remap-http"] as? [String: Any],
-              let system = sockets["remap-system"] as? [String: Any],
               validSocket(udp, port: configuration.dnsPort, protocolName: "UDP", type: "dgram"),
               validSocket(tcp, port: configuration.dnsPort, protocolName: "TCP", type: "stream"),
               validSocket(http, port: configuration.httpPort, protocolName: "TCP", type: "stream"),
-              validSystemSocket(system, path: configuration.systemSocketPath)
+              validSystemSocket(sockets, configuration: configuration, contract: contract)
         else {
             throw InstallError.invalidManifest("launchd sockets must bind only Remap loopback listeners")
         }
+    }
+
+    private static func expectedSocketKeys(
+        _ contract: MacOSLaunchdAuthorityContract
+    ) -> Set<String> {
+        var keys = Set(["remap-dns-udp", "remap-dns-tcp", "remap-http"])
+        if contract == .launchdOwnedSystemSocket {
+            keys.insert("remap-system")
+        }
+        return keys
+    }
+
+    private static func validSystemSocket(
+        _ sockets: [String: Any],
+        configuration: MacOSInstallConfiguration,
+        contract: MacOSLaunchdAuthorityContract
+    ) -> Bool {
+        if contract == .legacyDataDirectorySystemSocket {
+            return sockets["remap-system"] == nil
+        }
+        guard let system = sockets["remap-system"] as? [String: Any] else {
+            return false
+        }
+        return validSystemSocket(system, path: configuration.systemSocketPath)
     }
 
     private static func validSystemSocket(_ values: [String: Any], path: String) -> Bool {
