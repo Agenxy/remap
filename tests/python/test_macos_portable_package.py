@@ -25,16 +25,18 @@ from tools.remap_macos_package_metadata import (
 )
 from tools.remap_macos_portable_package import (
     PACKAGE_NAMESPACE,
-    XAR_HEADER,
-    XAR_MAGIC,
     canonical_release_json,
     canonical_release_public_key,
-    canonicalize_xar_metadata,
     release_entries,
     release_manifest,
     validate_version,
     verify_detached_package_signature,
     verify_no_local_build_paths,
+)
+from tools.remap_macos_xar import (
+    XAR_HEADER,
+    XAR_MAGIC,
+    canonicalize_xar_metadata,
 )
 from tools.remap_release_artifacts import publish_release_artifacts
 
@@ -261,13 +263,94 @@ class PortablePackageTests(unittest.TestCase):
 
         self.assertEqual(first.read_bytes(), second.read_bytes())
 
+    def test_signed_xar_is_canonical_across_signing_times(self) -> None:
+        first = self.directory / "first-signed.pkg"
+        second = self.directory / "second-signed.pkg"
+        self._write_test_xar(
+            first,
+            timestamp="2026-08-21T10:00:00",
+            inode=41,
+            signature=b"A" * 384,
+        )
+        self._write_test_xar(
+            second,
+            timestamp="2026-08-21T11:00:00",
+            inode=92,
+            signature=b"B" * 384,
+        )
+        completed = subprocess.CompletedProcess(
+            args=(), returncode=0, stdout=b"S" * 384, stderr=b""
+        )
+
+        with patch.object(subprocess, "run", return_value=completed) as runner:
+            for package in (first, second):
+                canonicalize_xar_metadata(
+                    package,
+                    signature_signer=Path("/native/xar-signer"),
+                    certificate_sha256="A" * 64,
+                    keychain=Path("/Users/example/Library/Keychains/login.keychain-db"),
+                )
+
+        self.assertEqual(first.read_bytes(), second.read_bytes())
+        self.assertEqual(runner.call_count, 2)
+        for invocation in runner.call_args_list:
+            self.assertEqual(
+                invocation.args[0],
+                (
+                    "/native/xar-signer",
+                    "A" * 64,
+                    "/Users/example/Library/Keychains/login.keychain-db",
+                ),
+            )
+            self.assertEqual(
+                invocation.kwargs["input"], runner.call_args_list[0].kwargs["input"]
+            )
+
+    def test_signed_xar_requires_its_exact_signature_authority(self) -> None:
+        package = self.directory / "signed.pkg"
+        self._write_test_xar(
+            package,
+            timestamp="2026-08-21T10:00:00",
+            inode=41,
+            signature=b"A" * 384,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "signature authority"):
+            canonicalize_xar_metadata(package)
+
+        with (
+            patch.object(
+                subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    args=(), returncode=0, stdout=b"short", stderr=b""
+                ),
+            ),
+            self.assertRaisesRegex(RuntimeError, "native XAR signer rejected"),
+        ):
+            canonicalize_xar_metadata(
+                package,
+                signature_signer=Path("/native/xar-signer"),
+                certificate_sha256="A" * 64,
+                keychain=Path("/Users/example/Library/Keychains/login.keychain-db"),
+            )
+
     @staticmethod
-    def _write_test_xar(path: Path, *, timestamp: str, inode: int) -> None:
+    def _write_test_xar(
+        path: Path, *, timestamp: str, inode: int, signature: bytes | None = None
+    ) -> None:
+        signature_xml = (
+            '<signature style="RSA"><offset>20</offset><size>384</size></signature>'
+            if signature is not None
+            else ""
+        )
+        data_offset = 20 + (len(signature) if signature is not None else 0)
         document = (
             '<?xml version="1.0" encoding="UTF-8"?>\n'
             '<xar><toc><checksum style="sha1"><size>20</size>'
             "<offset>0</offset></checksum>"
             f"<creation-time>{timestamp}</creation-time>"
+            f"{signature_xml}"
             '<file id="1"><name>Payload</name><type>file</type>'
             f"<inode>{inode}</inode><deviceno>16777232</deviceno>"
             "<mode>0644</mode><uid>501</uid><user>builder</user>"
@@ -275,7 +358,7 @@ class PortablePackageTests(unittest.TestCase):
             f"<atime>{timestamp}Z</atime><mtime>{timestamp}Z</mtime>"
             f"<ctime>{timestamp}Z</ctime><FinderCreateTime>"
             f"<time>{timestamp}</time><nanoseconds>0</nanoseconds>"
-            "</FinderCreateTime><data><size>7</size><offset>20</offset>"
+            f"</FinderCreateTime><data><size>7</size><offset>{data_offset}</offset>"
             "<length>7</length></data></file></toc></xar>"
         ).encode()
         compressed = zlib.compress(document)
@@ -288,7 +371,11 @@ class PortablePackageTests(unittest.TestCase):
             1,
         )
         _ = path.write_bytes(
-            header + compressed + hashlib.sha1(compressed).digest() + b"payload"
+            header
+            + compressed
+            + hashlib.sha1(compressed).digest()
+            + (signature or b"")
+            + b"payload"
         )
         os.chmod(path, 0o400)
 
