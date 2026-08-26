@@ -38,6 +38,7 @@ def canonicalize_xar_metadata(
         certificate_sha256=certificate_sha256,
         keychain=keychain,
     )
+    heap = _strip_extended_signature(table, heap, signature_size=signature_size)
     _normalize_table(table)
     canonical = cast(bytes, ET.tostring(root, encoding="utf-8", xml_declaration=True))
     canonical_compressed = zlib.compress(canonical, level=9)
@@ -136,6 +137,56 @@ def _normalize_table(table: ET.Element) -> None:
             raise RuntimeError("the portable package XAR entry has no creation time")
         _require_xar_text(finder_time, "time", NORMALIZED_PACKAGE_TIME)
         _require_xar_text(finder_time, "nanoseconds", "0")
+
+
+def _strip_extended_signature(
+    table: ET.Element, heap: bytes, *, signature_size: int
+) -> bytes:
+    extended = table.findall("x-signature")
+    if not extended:
+        _shift_payload_offsets(
+            table,
+            minimum=hashlib.sha1().digest_size + signature_size,
+            shift=0,
+        )
+        return heap
+    if len(extended) != 1 or signature_size == 0:
+        raise RuntimeError("the portable package has an unsafe extended signature")
+    record = extended[0]
+    offset_text = record.findtext("offset")
+    size_text = record.findtext("size")
+    if (
+        record.get("style") != "CMS"
+        or offset_text is None
+        or size_text is None
+        or not offset_text.isdigit()
+        or not size_text.isdigit()
+    ):
+        raise RuntimeError("the portable package has an unsafe extended signature")
+    offset = int(offset_text)
+    size = int(size_text)
+    if offset != hashlib.sha1().digest_size + signature_size or size <= 0:
+        raise RuntimeError(
+            "the portable package has an unsafe extended signature layout"
+        )
+    end = offset + size
+    if end > len(heap):
+        raise RuntimeError("the portable package has a truncated extended signature")
+    table.remove(record)
+    _shift_payload_offsets(table, minimum=end, shift=size)
+    return heap[:offset] + heap[end:]
+
+
+def _shift_payload_offsets(table: ET.Element, *, minimum: int, shift: int) -> None:
+    for element in table.findall(".//file//offset"):
+        if element.text is None or not element.text.isdigit():
+            raise RuntimeError("the portable package has an unsafe heap offset")
+        value = int(element.text)
+        if value < minimum:
+            raise RuntimeError(
+                "the portable package payload overlaps its signed metadata"
+            )
+        element.text = str(value - shift)
 
 
 def _xar_signature_size(
