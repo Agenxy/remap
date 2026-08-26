@@ -20,6 +20,7 @@ let package = Package(
         .executable(name: "remap-installer-service", targets: ["RemapInstallerService"]),
         .executable(name: "remap-lifecycle", targets: ["RemapLifecycleCLI"]),
         .executable(name: "remap-portable-installer", targets: ["RemapPortableInstaller"]),
+        .executable(name: "remap-release-xar-signer", targets: ["RemapReleaseXARSigner"]),
         .executable(name: "remap-resolver", targets: ["RemapResolver"]),
         .executable(name: "remap-system", targets: ["RemapSystem"]),
         .executable(name: "Remap", targets: ["RemapApp"])
@@ -94,6 +95,14 @@ let package = Package(
             linkerSettings: [.linkedFramework("OSLog")]
         ),
         .executableTarget(
+            name: "RemapReleaseXARSigner",
+            swiftSettings: strictSwift,
+            linkerSettings: [
+                .linkedFramework("CryptoKit"),
+                .linkedFramework("Security")
+            ]
+        ),
+        .executableTarget(
             name: "RemapSystem",
             dependencies: ["RemapSystemKit"],
             swiftSettings: strictSwift
@@ -141,6 +150,11 @@ let package = Package(
         .testTarget(
             name: "RemapPortableInstallerTests",
             dependencies: ["RemapPortableInstaller"],
+            swiftSettings: strictSwift
+        ),
+        .testTarget(
+            name: "RemapReleaseXARSignerTests",
+            dependencies: ["RemapReleaseXARSigner"],
             swiftSettings: strictSwift
         ),
         .testTarget(

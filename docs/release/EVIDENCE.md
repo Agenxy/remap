@@ -77,6 +77,18 @@ Developer ID signed or notarized. On the target Mac, a root native installer
 verifies the signed internal manifest and signs the verified executables with a
 durable local System-keychain identity before native publication.
 
+Apple's `productsign` accepts this self-signed Installer identity only while its
+pinned public certificate has explicit administrator-domain trust on the
+release-building Mac. That one-time builder decision is separate from target
+installation and is removed after the reproducibility runs. `productsign` also
+inserts its wall-clock signing second even when network timestamping is
+disabled. Remap therefore normalizes the completed XAR table and uses a narrow
+Swift helper to ask Keychain to re-sign those canonical bytes with the exact
+nonexportable identity. The helper is build-only, accepts a bounded table on
+standard input, selects by the pinned SHA-256 certificate fingerprint, and is
+not copied into the package. Final signed package bytes, not only the unsigned
+payload, must match across two clean builds.
+
 ## SBOM coverage and evidence classes
 
 [Syft 1.51.0](https://github.com/anchore/syft/releases/tag/v1.51.0) is the exact

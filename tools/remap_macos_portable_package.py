@@ -9,16 +9,12 @@ import platform
 import plistlib
 import shutil
 import stat
-import struct
 import subprocess
 import tempfile
 import time
 import uuid
-import xml.etree.ElementTree as ET
-import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 from tools.remap_app import build as build_app
 from tools.remap_app import verify_structure as verify_app_structure
@@ -35,22 +31,19 @@ from tools.remap_macos_release_installer_signing import (
 from tools.remap_macos_release_installer_signing import (
     sign_package as sign_release_installer_package,
 )
+from tools.remap_macos_xar import canonicalize_xar_metadata
 from tools.remap_native_package import MANPAGE_NAMES
 from tools.remap_release_artifacts import (
     MAXIMUM_FILE_BYTES,
     MAXIMUM_SIGNATURE_BYTES,
     open_release_artifact,
     publish_release_artifacts,
-    verify_release_artifact,
 )
 
 PACKAGE_IDENTIFIER = "org.agenxy.Remap.PortableInstaller"
 RELEASE_NAMESPACE = "remap-release"
 PACKAGE_NAMESPACE = "remap-package-v1"
 RELEASE_SIGNER_IDENTITY = "remap-release"
-NORMALIZED_PACKAGE_TIME = "2000-01-01T00:00:00"
-XAR_HEADER = struct.Struct(">IHHQQI")
-XAR_MAGIC = 0x78617221
 LOCAL_BUILD_PATH_MARKERS = (b"/Users/", b"/private/var/folders/")
 
 
@@ -152,6 +145,12 @@ def build(
         )
         signed = workspace / "Remap-signed.pkg"
         sign_release_installer_package(unsigned, signed, installer_identity)
+        canonicalize_xar_metadata(
+            signed,
+            signature_signer=products / "remap-release-xar-signer",
+            certificate_sha256=installer_identity.sha256,
+            keychain=installer_identity.keychain,
+        )
         _verify_package(
             signed,
             workspace / "signed-expanded",
@@ -266,6 +265,7 @@ def _build_products(root: Path, version: str, workspace: Path) -> Path:
     binaries = {
         "remap": root / "target/release/remap",
         "remapd": root / "target/release/remapd",
+        "remap-release-xar-signer": swift_bin / "remap-release-xar-signer",
         **{name: swift_bin / name for name in swift_names},
     }
     for name, source in binaries.items():
@@ -279,6 +279,7 @@ def _build_products(root: Path, version: str, workspace: Path) -> Path:
         "remap-installer-service": "org.agenxy.Remap.installer-service",
         "remap-lifecycle": "org.agenxy.Remap.lifecycle-cli",
         "remap-portable-installer": "org.agenxy.Remap.portable-installer",
+        "remap-release-xar-signer": "org.agenxy.Remap.release-xar-signer",
         "remap-resolver": "org.agenxy.Remap.resolver",
         "remap-system": "org.agenxy.Remap.system",
     }
@@ -746,105 +747,6 @@ def _verify_tree(root: Path, *, script_root: bool = False) -> None:
             raise RuntimeError(
                 f"portable package node has unsafe mode {mode:o}: {path}"
             )
-
-
-def canonicalize_xar_metadata(package: Path) -> None:
-    """Replace pkgbuild's volatile outer XAR metadata without changing its heap."""
-    verify_release_artifact(package, maximum_bytes=MAXIMUM_FILE_BYTES * 2)
-    with package.open("rb") as input_file:
-        header = input_file.read(XAR_HEADER.size)
-        if len(header) != XAR_HEADER.size:
-            raise RuntimeError("the portable package has a truncated XAR header")
-        magic, header_size, version, compressed_size, plain_size, checksum_kind = cast(
-            "tuple[int, int, int, int, int, int]", XAR_HEADER.unpack(header)
-        )
-        if (
-            magic != XAR_MAGIC
-            or header_size != XAR_HEADER.size
-            or version != 1
-            or checksum_kind != 1
-            or compressed_size <= 0
-            or plain_size <= 0
-            or compressed_size > MAXIMUM_FILE_BYTES
-            or plain_size > MAXIMUM_FILE_BYTES
-        ):
-            raise RuntimeError("the portable package has an unsupported XAR header")
-        compressed = input_file.read(compressed_size)
-        heap = input_file.read(MAXIMUM_FILE_BYTES * 2 + 1)
-        if len(compressed) != compressed_size or len(heap) < hashlib.sha1().digest_size:
-            raise RuntimeError("the portable package has a truncated XAR body")
-        if len(heap) > MAXIMUM_FILE_BYTES * 2:
-            raise RuntimeError("the portable package XAR heap exceeds its byte ceiling")
-    try:
-        document = zlib.decompress(compressed)
-    except zlib.error as error:
-        raise RuntimeError(
-            "the portable package XAR table is not valid zlib"
-        ) from error
-    if len(document) != plain_size or hashlib.sha1(compressed).digest() != heap[:20]:
-        raise RuntimeError("the portable package XAR table checksum is invalid")
-    try:
-        root = ET.fromstring(document)
-    except ET.ParseError as error:
-        raise RuntimeError("the portable package XAR table is not valid XML") from error
-    table = root.find("toc")
-    if root.tag != "xar" or table is None:
-        raise RuntimeError("the portable package XAR table has the wrong root")
-    _require_xar_text(table, "creation-time", NORMALIZED_PACKAGE_TIME)
-    for entry in table.findall("file"):
-        inode = entry.find("inode")
-        if inode is None:
-            continue
-        identifier = entry.get("id")
-        if identifier is None or not identifier.isdigit():
-            raise RuntimeError(
-                "the portable package XAR entry has no canonical identity"
-            )
-        _require_xar_text(entry, "inode", identifier)
-        _require_xar_text(entry, "deviceno", "0")
-        _require_xar_text(entry, "uid", "0")
-        _require_xar_text(entry, "user", "root")
-        _require_xar_text(entry, "gid", "0")
-        _require_xar_text(entry, "group", "wheel")
-        for name in ("atime", "mtime", "ctime"):
-            _require_xar_text(entry, name, f"{NORMALIZED_PACKAGE_TIME}Z")
-        finder_time = entry.find("FinderCreateTime")
-        if finder_time is None:
-            raise RuntimeError("the portable package XAR entry has no creation time")
-        _require_xar_text(finder_time, "time", NORMALIZED_PACKAGE_TIME)
-        _require_xar_text(finder_time, "nanoseconds", "0")
-    canonical = cast(bytes, ET.tostring(root, encoding="utf-8", xml_declaration=True))
-    canonical_compressed = zlib.compress(canonical, level=9)
-    canonical_header = XAR_HEADER.pack(
-        XAR_MAGIC,
-        XAR_HEADER.size,
-        1,
-        len(canonical_compressed),
-        len(canonical),
-        1,
-    )
-    destination = package.with_name(f"{package.name}.canonical")
-    try:
-        with destination.open("xb") as output_file:
-            _ = output_file.write(canonical_header)
-            _ = output_file.write(canonical_compressed)
-            _ = output_file.write(hashlib.sha1(canonical_compressed).digest())
-            _ = output_file.write(heap[20:])
-            output_file.flush()
-            os.fsync(output_file.fileno())
-        os.chmod(destination, 0o400)
-        os.replace(destination, package)
-    except BaseException:
-        if destination.exists() and not destination.is_symlink():
-            destination.unlink()
-        raise
-
-
-def _require_xar_text(parent: ET.Element, name: str, value: str) -> None:
-    matches = parent.findall(name)
-    if len(matches) != 1:
-        raise RuntimeError(f"the portable package XAR metadata is missing {name}")
-    matches[0].text = value
 
 
 def _copy_file(source: Path, destination: Path, *, mode: int) -> None:
