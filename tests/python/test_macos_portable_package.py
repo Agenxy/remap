@@ -94,7 +94,10 @@ class PortablePackageTests(unittest.TestCase):
             stderr=b"Signing data on standard input\n",
         )
 
-        with patch.object(subprocess, "run", return_value=completed) as runner:
+        with (
+            patch.object(subprocess, "run", return_value=completed) as runner,
+            patch.object(portable_package, "_write_generated_signature") as writer,
+        ):
             sign_file(payload, Path("/private/release.pub"), namespace="release")
 
         runner.assert_called_once_with(
@@ -113,9 +116,28 @@ class PortablePackageTests(unittest.TestCase):
             capture_output=True,
             timeout=120,
         )
-        self.assertEqual(payload.with_suffix(".json.sig").read_bytes(), signature_bytes)
+        writer.assert_called_once_with(payload.with_suffix(".json.sig"), signature_bytes)
+
+    def test_generated_signature_copy_drops_source_attributes(self) -> None:
+        signature = self.directory / "release-manifest.json.sig"
+        writer = cast(
+            "Callable[[Path, bytes], None]",
+            vars(portable_package)["_write_generated_signature"],
+        )
+
+        writer(signature, b"signature bytes")
+
+        self.assertEqual(signature.read_bytes(), b"signature bytes")
+        attributes = subprocess.run(
+            ("/usr/bin/xattr", str(signature)),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(attributes.stdout, "")
         self.assertEqual(
-            stat.S_IMODE(payload.with_suffix(".json.sig").stat().st_mode),
+            stat.S_IMODE(signature.stat().st_mode),
             0o400,
         )
 
