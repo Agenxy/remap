@@ -166,26 +166,38 @@ enum RemapPortableInstallerMain {
     }
 }
 
-private enum PortableInstallerInvocation: Equatable {
+enum PortableInstallerInvocation: Equatable {
     static let packageIdentifier = "org.agenxy.Remap.PortableInstaller"
 
     case postinstall
     case preinstall
 
     init(arguments: [String], environment: [String: String]) throws {
-        guard let executable = arguments.first,
-              arguments.count <= 8,
-              arguments.allSatisfy({ !$0.contains("\0") && $0.utf8.count <= 4096 }),
-              let value = Self(rawValue: URL(fileURLWithPath: executable).lastPathComponent),
-              environment["SCRIPT_NAME"] == value.rawValue,
-              environment["INSTALL_PKG_SESSION_ID"] == Self.packageIdentifier,
-              environment["DSTROOT"] == "/",
-              environment["DSTVOLUME"] == "/",
-              let packagePath = environment["PACKAGE_PATH"],
-              packagePath.hasPrefix("/"),
-              URL(fileURLWithPath: packagePath).standardizedFileURL.path == packagePath
+        guard let executable = arguments.first else {
+            throw InstallError.integrity("the Apple Installer script path is missing")
+        }
+        guard arguments.count <= 8,
+              arguments.allSatisfy({ !$0.contains("\0") && $0.utf8.count <= 4096 })
         else {
-            throw InstallError.integrity("the Apple Installer invocation is not exact")
+            throw InstallError.integrity("the Apple Installer arguments are not bounded")
+        }
+        guard let value = Self(rawValue: URL(fileURLWithPath: executable).lastPathComponent) else {
+            throw InstallError.integrity("the Apple Installer script identity is not exact")
+        }
+        guard environment["SCRIPT_NAME"] == value.rawValue else {
+            throw InstallError.integrity("the Apple Installer script name is not exact")
+        }
+        guard environment["INSTALL_PKG_SESSION_ID"] == Self.packageIdentifier else {
+            throw InstallError.integrity("the Apple Installer package identity is not exact")
+        }
+        guard environment["DSTROOT"] == "/", environment["DSTVOLUME"] == "/" else {
+            throw InstallError.integrity("the Apple Installer destination is not the system root")
+        }
+        guard let packagePath = environment["PACKAGE_PATH"], packagePath.hasPrefix("/") else {
+            throw InstallError.integrity("the Apple Installer package path is not absolute")
+        }
+        guard Self.isCanonicalAbsolutePath(packagePath) else {
+            throw InstallError.integrity("the Apple Installer package path is not canonical")
         }
         self = value
     }
@@ -203,5 +215,14 @@ private enum PortableInstallerInvocation: Equatable {
         case .postinstall: "postinstall"
         case .preinstall: "preinstall"
         }
+    }
+
+    private static func isCanonicalAbsolutePath(_ value: String) -> Bool {
+        guard !value.contains("\0"), value.utf8.count <= 4096 else {
+            return false
+        }
+        let components = value.split(separator: "/", omittingEmptySubsequences: false)
+        return components.first == ""
+            && components.dropFirst().allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }
 }

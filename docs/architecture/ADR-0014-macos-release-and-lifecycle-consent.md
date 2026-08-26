@@ -37,6 +37,15 @@ The supported install workflow copies the verified download into a new
 root-owned directory, re-verifies the detached signature against that exact
 copy, and invokes Apple Installer only on that immutable pathname.
 
+Each native package script also requires its exact script name, package
+identifier, system-root destination, bounded arguments, and a lexically
+canonical absolute package path. Lexical normalization is intentional:
+Foundation's `standardizedFileURL` rewrites an existing `/private/var/tmp` or
+`/private/tmp` path through macOS's `/var` or `/tmp` aliases. Treating that
+filesystem alias as lexical traversal rejects Apple's own root-owned staging
+path. Dot components, duplicate separators, relative paths, and embedded nulls
+remain invalid.
+
 ### A state token is freshness evidence, not consent
 
 The signed lifecycle CLI still obtains and internally carries the exact

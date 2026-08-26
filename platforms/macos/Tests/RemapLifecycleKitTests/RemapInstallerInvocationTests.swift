@@ -1,3 +1,4 @@
+import Foundation
 import RemapInstallKit
 @testable import RemapLifecycleKit
 import Testing
@@ -33,6 +34,20 @@ func installerInvocationAcceptsBoundedOperatingSystemExtensions() throws {
 
     #expect(invocation.script == .postinstall)
     #expect(invocation.argumentCount == 5)
+}
+
+@Test
+func installerInvocationAcceptsAnExistingPrivateTemporaryPackage() throws {
+    let path = "/private/tmp/remap-bootstrap-\(UUID().uuidString.lowercased()).pkg"
+    #expect(FileManager.default.createFile(atPath: path, contents: Data()))
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    var environment = packageEnvironment(script: "preinstall")
+    environment["PACKAGE_PATH"] = path
+
+    _ = try RemapInstallerInvocation(
+        arguments: ["/private/tmp/package/Scripts/preinstall"],
+        environment: environment
+    )
 }
 
 @Test(arguments: [

@@ -40,9 +40,11 @@ public struct RemapInstallerInvocation: Equatable, Sendable {
     }
 
     private static func isCanonicalAbsolutePath(_ value: String) -> Bool {
-        guard isBounded(value), value.hasPrefix("/") else {
+        guard isBounded(value) else {
             return false
         }
-        return URL(fileURLWithPath: value).standardizedFileURL.path == value
+        let components = value.split(separator: "/", omittingEmptySubsequences: false)
+        return components.first == ""
+            && components.dropFirst().allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }
 }
