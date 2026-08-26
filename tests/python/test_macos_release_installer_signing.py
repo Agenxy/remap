@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import ssl
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +13,57 @@ from tools import remap_macos_release_installer_signing as release_signing
 
 
 class MacOSReleaseInstallerSigningTests(unittest.TestCase):
+    def test_identity_resolution_requests_only_valid_identities(self) -> None:
+        keychain = Path("/Users/example/Library/Keychains/login.keychain-db")
+        root = Path(__file__).resolve().parents[2]
+        certificate = root / release_signing.PINNED_CERTIFICATE
+        certificate_der = bytes(
+            ssl.PEM_cert_to_DER_cert(certificate.read_text(encoding="ascii"))
+        )
+        sha1 = hashlib.sha1(certificate_der).hexdigest().upper()
+        sha256 = hashlib.sha256(certificate_der).hexdigest().upper()
+        output = f'  1) {sha1} "Remap Release Installer"\n'
+        with (
+            mock.patch.object(
+                release_signing,
+                "_capture",
+                return_value=output,
+            ) as capture,
+            mock.patch.object(
+                release_signing,
+                "_certificate_hashes",
+                return_value=[(sha1, sha256)],
+            ),
+            mock.patch.object(release_signing, "_ensure_builder_trust"),
+            mock.patch.object(
+                release_signing,
+                "login_keychain",
+                return_value=keychain,
+            ),
+        ):
+            identity = release_signing.ensure_release_installer_identity(root)
+
+        self.assertEqual(
+            capture.call_args.args[0],
+            (
+                "/usr/bin/security",
+                "find-identity",
+                "-v",
+                "-p",
+                "basic",
+                str(keychain),
+            ),
+        )
+        self.assertEqual(
+            identity,
+            release_signing.ReleaseInstallerSigningIdentity(
+                name=release_signing.IDENTITY_NAME,
+                sha1=sha1,
+                sha256=sha256,
+                keychain=keychain,
+            ),
+        )
+
     def test_release_identity_is_distinct_and_installer_only(self) -> None:
         configuration = release_signing.openssl_configuration()
         self.assertIn("CN = Remap Release Installer", configuration)
