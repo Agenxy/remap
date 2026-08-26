@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -13,7 +14,7 @@ import zlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast, final, override
-from unittest.mock import call, patch
+from unittest.mock import ANY, call, patch
 
 import tools.remap_macos_portable_package as portable_package
 from tools.remap_macos_package_metadata import (
@@ -79,6 +80,43 @@ class PortablePackageTests(unittest.TestCase):
         self.assertEqual(
             [entry["path"] for entry in entries],
             ["product", "product/bin", "product/bin/remap"],
+        )
+
+    def test_signing_streams_bytes_without_external_signature_creation(self) -> None:
+        payload = self.directory / "release-manifest.json"
+        _ = payload.write_bytes(b'{"schemaVersion":1}')
+        signature_bytes = b"-----BEGIN SSH SIGNATURE-----\nfixture\n"
+        sign_file = cast("Callable[..., None]", vars(portable_package)["_sign_file"])
+        completed = subprocess.CompletedProcess(
+            args=(),
+            returncode=0,
+            stdout=signature_bytes,
+            stderr=b"Signing data on standard input\n",
+        )
+
+        with patch.object(subprocess, "run", return_value=completed) as runner:
+            sign_file(payload, Path("/private/release.pub"), namespace="release")
+
+        runner.assert_called_once_with(
+            (
+                "/usr/bin/ssh-keygen",
+                "-Y",
+                "sign",
+                "-f",
+                "/private/release.pub",
+                "-n",
+                "release",
+            ),
+            cwd=self.directory,
+            check=True,
+            stdin=ANY,
+            capture_output=True,
+            timeout=120,
+        )
+        self.assertEqual(payload.with_suffix(".json.sig").read_bytes(), signature_bytes)
+        self.assertEqual(
+            stat.S_IMODE(payload.with_suffix(".json.sig").stat().st_mode),
+            0o400,
         )
 
     def test_release_entries_reject_links_and_noncanonical_modes(self) -> None:

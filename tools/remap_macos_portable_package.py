@@ -471,21 +471,30 @@ def release_manifest(
 
 def _sign_file(path: Path, private_key: Path, *, namespace: str) -> None:
     signature = path.with_suffix(path.suffix + ".sig")
-    _run(
-        (
-            "/usr/bin/ssh-keygen",
-            "-Y",
-            "sign",
-            "-f",
-            str(private_key),
-            "-n",
-            namespace,
-            str(path),
-        ),
-        root=path.parent,
-    )
-    if not signature.is_file() or signature.is_symlink():
-        raise RuntimeError("ssh-keygen did not create the requested release signature")
+    with path.open("rb") as input_file:
+        result = subprocess.run(
+            (
+                "/usr/bin/ssh-keygen",
+                "-Y",
+                "sign",
+                "-f",
+                str(private_key),
+                "-n",
+                namespace,
+            ),
+            cwd=path.parent,
+            check=True,
+            stdin=input_file,
+            capture_output=True,
+            timeout=120,
+        )
+    if not result.stdout or len(result.stdout) > MAXIMUM_SIGNATURE_BYTES:
+        raise RuntimeError("ssh-keygen returned an unsafe release signature")
+    with signature.open("xb") as output_file:
+        _ = output_file.write(result.stdout)
+        output_file.flush()
+        os.fsync(output_file.fileno())
+    os.chmod(signature, 0o400)
 
 
 def verify_detached_package_signature(
