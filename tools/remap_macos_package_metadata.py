@@ -66,9 +66,11 @@ def _clear_extended_attributes(root: Path, paths: tuple[Path, ...]) -> None:
     if result.returncode != 0 or result.stdout or result.stderr:
         raise RuntimeError("launchd could not normalize package metadata")
     deadline = time.monotonic() + 30
+    retained: tuple[tuple[Path, str], ...] = ()
     try:
         while time.monotonic() < deadline:
-            if all(not _extended_attributes(path, root=root.parent) for path in paths):
+            retained = _retained_extended_attributes(paths, root=root.parent)
+            if not retained:
                 return
             time.sleep(0.05)
     finally:
@@ -79,7 +81,26 @@ def _clear_extended_attributes(root: Path, paths: tuple[Path, ...]) -> None:
             capture_output=True,
             timeout=30,
         )
-    raise RuntimeError("portable package input retains extended attributes")
+    retained = _retained_extended_attributes(paths, root=root.parent)
+    if not retained:
+        return
+    path, attributes = retained[0]
+    relative = path.relative_to(root)
+    raise RuntimeError(
+        "portable package input retains extended attributes at "
+        + f"{relative}: {attributes}"
+    )
+
+
+def _retained_extended_attributes(
+    paths: tuple[Path, ...], *, root: Path
+) -> tuple[tuple[Path, str], ...]:
+    retained: list[tuple[Path, str]] = []
+    for path in paths:
+        attributes = _extended_attributes(path, root=root)
+        if attributes:
+            retained.append((path, attributes))
+    return tuple(retained)
 
 
 def _extended_attributes(path: Path, *, root: Path) -> str:
