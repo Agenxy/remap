@@ -29,13 +29,13 @@ from tools.remap_macos_portable_package import (
     canonical_release_json,
     canonical_release_public_key,
     canonicalize_xar_metadata,
-    publish_release_artifacts,
     release_entries,
     release_manifest,
     validate_version,
     verify_detached_package_signature,
     verify_no_local_build_paths,
 )
+from tools.remap_release_artifacts import publish_release_artifacts
 
 
 @final

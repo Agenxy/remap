@@ -1,4 +1,3 @@
-import RemapInstallKit
 @testable import RemapLifecycleCLI
 import Testing
 
@@ -27,35 +26,36 @@ func lifecycleCommandParserRejectsAmbiguousOrUnknownInput() {
 }
 
 @Test
-func lifecycleApprovalIsExactAndDefaultDeny() throws {
-    let token = try InstallApprovalToken(String(repeating: "a", count: 64))
-
-    try RemapLifecycleCLIApproval.validate(
-        "approve aaaaaaaaaaaa",
-        token: token,
-        interactive: true
-    )
-    try RemapLifecycleCLIApproval.validate(
-        token.description,
-        token: token,
-        interactive: false
-    )
-    for rejected in [nil, "", "yes", "approve", "approve aaaaaaaaaaa", token.description + " "] {
-        #expect(throws: RemapLifecycleCLIError.self) {
-            try RemapLifecycleCLIApproval.validate(
-                rejected,
-                token: token,
-                interactive: false
-            )
-        }
+func lifecycleApprovalRequiresAnInteractiveTerminal() throws {
+    try RemapLifecycleCLIApproval.requireInteractive(true)
+    #expect(throws: RemapLifecycleCLIError.approval(
+        "mutating lifecycle commands require an interactive terminal"
+    )) {
+        try RemapLifecycleCLIApproval.requireInteractive(false)
     }
 }
+
+@Test
+func lifecycleUserPresenceFailsClosed() async throws {
+    try await RemapLifecycleUserPresence.authorize(evaluate: { true })
+    await #expect(throws: RemapLifecycleCLIError.self) {
+        try await RemapLifecycleUserPresence.authorize(evaluate: { false })
+    }
+    await #expect(throws: RemapLifecycleCLIError.self) {
+        try await RemapLifecycleUserPresence.authorize(evaluate: {
+            throw TestPresenceError()
+        })
+    }
+}
+
+private struct TestPresenceError: Error {}
 
 @Test
 func lifecycleOutputRemovesTerminalControls() {
     #expect(plain("safe\u{1B}[31m\ntext") == "safe?[31m?text")
     #expect(RemapLifecycleCLIOutput.help.contains("remap system status"))
     #expect(!RemapLifecycleCLIOutput.help.contains("--yes"))
+    #expect(RemapLifecycleCLIOutput.help.contains("piped use cannot authorize"))
 }
 
 @Test
@@ -65,7 +65,8 @@ func lifecycleJSONErrorIsCanonicalAndBounded() throws {
     )
     let text = try #require(String(data: data, encoding: .utf8))
 
-    let expected = #"{"error":{"category":"approval","hint":"Request a fresh preview and approve the exact token.","#
+    let expected = #"{"error":{"category":"approval","hint":"Request a fresh preview and approve through "#
+        + #"macOS authentication.","#
         + #""message":"approval did not match","retryable":false},"ok":false,"schemaVersion":1}"#
         + "\n"
     #expect(text == expected)

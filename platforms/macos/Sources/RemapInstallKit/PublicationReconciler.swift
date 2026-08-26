@@ -2,8 +2,18 @@ import Foundation
 
 struct PublicationReconciler: Sendable {
     let store: PublicationStore
+    let validateManifest: @Sendable (InstallManifest) throws -> Void
+
+    init(
+        store: PublicationStore,
+        validateManifest: @escaping @Sendable (InstallManifest) throws -> Void = { _ in }
+    ) {
+        self.store = store
+        self.validateManifest = validateManifest
+    }
 
     func install(_ context: InstallTransitionContext, transactionID: String) throws {
+        try validate(context)
         let previous = publicationsByPath(context.previous?.publications ?? [])
         let current = publicationsByPath(context.current.publications)
         for publication in installOrder(context.current.publications) {
@@ -20,6 +30,7 @@ struct PublicationReconciler: Sendable {
     }
 
     func restorePrevious(_ context: InstallTransitionContext, transactionID: String) throws {
+        try validate(context)
         let previous = publicationsByPath(context.previous?.publications ?? [])
         let current = publicationsByPath(context.current.publications)
         for publication in installOrder(Array(previous.values)) {
@@ -36,6 +47,7 @@ struct PublicationReconciler: Sendable {
     }
 
     func removeCurrent(_ context: InstallTransitionContext) throws {
+        try validate(context)
         for publication in removalOrder(context.current.publications) {
             try store.unpublish(publication)
         }
@@ -43,6 +55,7 @@ struct PublicationReconciler: Sendable {
     }
 
     func requireCurrentOwned(_ context: InstallTransitionContext) throws {
+        try validate(context)
         for publication in context.current.publications {
             guard try acceptableInstalledClassification(store.classify(publication), for: publication) else {
                 throw InstallError.collision(publication.path.description)
@@ -51,6 +64,7 @@ struct PublicationReconciler: Sendable {
     }
 
     func requireInstallable(_ context: InstallTransitionContext) throws {
+        try validate(context)
         let previous = publicationsByPath(context.previous?.publications ?? [])
         for publication in previous.values {
             guard try acceptableInstalledClassification(store.classify(publication), for: publication) else {
@@ -76,6 +90,13 @@ struct PublicationReconciler: Sendable {
         }
         let previous = publicationsByPath(context.previous?.publications ?? [])
         try verifyMissing(previous.values.filter { current[$0.path] == nil })
+    }
+
+    private func validate(_ context: InstallTransitionContext) throws {
+        try validateManifest(context.current)
+        if let previous = context.previous {
+            try validateManifest(previous)
+        }
     }
 
     private func verifyRestored(_ context: InstallTransitionContext) throws {

@@ -70,7 +70,9 @@ detached signature after publication, rejects noncanonical and AppleDouble
 members from the unexpanded payload listing, expands the package, checks the
 exact identifier and version, requires native Mach-O installer actions,
 compares the canonical internal release manifest byte for byte, and revalidates
-every expanded payload node. The outer Apple package is intentionally not
+every expanded payload node. It then signs the complete XAR with the pinned
+self-signed `Remap Release Installer` identity before applying the detached
+Ed25519 signature to those final bytes. The package is intentionally not
 Developer ID signed or notarized. On the target Mac, a root native installer
 verifies the signed internal manifest and signs the verified executables with a
 durable local System-keychain identity before native publication.

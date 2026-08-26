@@ -34,12 +34,16 @@ enum MacOSPortableManifestBuilder {
 
     static func publications(
         generationID: String,
-        entries: [InstallEntry]
+        entries: [InstallEntry],
+        ownerUID: UInt32 = 0,
+        groupGID: UInt32 = 0
     ) throws -> [InstallPublication] {
         var publications = try directoryPaths.map {
             try InstallPublication(
                 path: InstallRelativePath($0),
-                generationID: generationID
+                generationID: generationID,
+                ownerUID: ownerUID,
+                groupGID: groupGID
             )
         }
         try publications.append(contentsOf: symlinkTargets(generationID: generationID).map { path, target in
@@ -69,7 +73,9 @@ enum MacOSPortableManifestBuilder {
                     ),
                     sha256: digest,
                     byteCount: byteCount,
-                    generationID: generationID
+                    generationID: generationID,
+                    ownerUID: ownerUID,
+                    groupGID: groupGID
                 )
             )
         }

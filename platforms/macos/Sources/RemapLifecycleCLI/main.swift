@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import LocalAuthentication
 import RemapInstallKit
 import RemapLifecycleKit
 
@@ -45,10 +46,9 @@ enum RemapLifecycleCLIMain {
             throw RemapLifecycleCLIError.integrity("the lifecycle service returned no recovery preview")
         }
         if !lifecyclePreview.effects.isEmpty {
-            try renderAndApprove(
+            try await renderAndApprove(
                 lifecycle,
                 effects: lifecyclePreview.effects,
-                token: lifecyclePreview.approvalToken,
                 json: json
             )
             let result = try await client.execute(RemapLifecycleRequest(
@@ -67,10 +67,9 @@ enum RemapLifecycleCLIMain {
             throw RemapLifecycleCLIError.integrity("the lifecycle service returned no bootstrap recovery preview")
         }
         if !bootstrapPreview.effects.isEmpty {
-            try renderAndApprove(
+            try await renderAndApprove(
                 bootstrap,
                 effects: bootstrapPreview.effects,
-                token: bootstrapPreview.approvalToken,
                 json: json
             )
             let result = try await client.execute(RemapLifecycleRequest(
@@ -125,7 +124,7 @@ enum RemapLifecycleCLIMain {
         } else {
             throw RemapLifecycleCLIError.integrity("the lifecycle service returned no uninstall preview")
         }
-        try renderAndApprove(response, effects: effects, token: approvalToken, json: json)
+        try await renderAndApprove(response, effects: effects, json: json)
         let mutation = try await client.execute(RemapLifecycleRequest(
             action: .uninstall,
             generationID: generationID,
@@ -168,9 +167,8 @@ enum RemapLifecycleCLIMain {
     private static func renderAndApprove(
         _ response: RemapLifecycleResponse,
         effects: [String],
-        token: InstallApprovalToken,
         json: Bool
-    ) throws {
+    ) async throws {
         if json {
             try writeJSON(response)
         } else {
@@ -180,8 +178,8 @@ enum RemapLifecycleCLIMain {
             )
         }
         let interactive = isatty(STDIN_FILENO) == 1
-        write(RemapLifecycleCLIApproval.prompt(for: token, interactive: interactive), to: .standardError)
-        try RemapLifecycleCLIApproval.validate(readLine(), token: token, interactive: interactive)
+        try RemapLifecycleCLIApproval.requireInteractive(interactive)
+        try await RemapLifecycleUserPresence.authorize()
     }
 
     private static func render(
@@ -251,6 +249,41 @@ enum RemapLifecycleCLIMain {
             }
         }
         return 65
+    }
+}
+
+enum RemapLifecycleUserPresence {
+    static func authorize(
+        evaluate: @Sendable () async throws -> Bool = systemEvaluation
+    ) async throws {
+        do {
+            guard try await evaluate() else {
+                throw RemapLifecycleCLIError.approval(
+                    "macOS user authentication did not approve this lifecycle change"
+                )
+            }
+        } catch let error as RemapLifecycleCLIError {
+            throw error
+        } catch {
+            throw RemapLifecycleCLIError.approval(
+                "macOS user authentication did not approve this lifecycle change"
+            )
+        }
+    }
+
+    private static func systemEvaluation() async throws -> Bool {
+        let context = LAContext()
+        context.localizedCancelTitle = "Cancel"
+        var evaluationError: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &evaluationError) else {
+            throw RemapLifecycleCLIError.approval(
+                "macOS user authentication is unavailable for this lifecycle change"
+            )
+        }
+        return try await context.evaluatePolicy(
+            .deviceOwnerAuthentication,
+            localizedReason: "Approve the reviewed Remap system changes"
+        )
     }
 }
 

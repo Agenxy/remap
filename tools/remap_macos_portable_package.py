@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, cast
+from typing import cast
 
 from tools.remap_app import build as build_app
 from tools.remap_app import verify_structure as verify_app_structure
@@ -27,14 +27,25 @@ from tools.remap_macos_package_metadata import (
     normalize_package_timestamps,
     verify_payload_member_names,
 )
+from tools.remap_macos_release_installer_signing import (
+    ReleaseInstallerSigningIdentity,
+)
+from tools.remap_macos_release_installer_signing import (
+    sign_package as sign_release_installer_package,
+)
 from tools.remap_native_package import MANPAGE_NAMES
+from tools.remap_release_artifacts import (
+    MAXIMUM_FILE_BYTES,
+    MAXIMUM_SIGNATURE_BYTES,
+    open_release_artifact,
+    publish_release_artifacts,
+    verify_release_artifact,
+)
 
 PACKAGE_IDENTIFIER = "org.agenxy.Remap.PortableInstaller"
 RELEASE_NAMESPACE = "remap-release"
 PACKAGE_NAMESPACE = "remap-package-v1"
 RELEASE_SIGNER_IDENTITY = "remap-release"
-MAXIMUM_FILE_BYTES = 134_217_728
-MAXIMUM_SIGNATURE_BYTES = 16_384
 NORMALIZED_PACKAGE_TIME = "2000-01-01T00:00:00"
 XAR_HEADER = struct.Struct(">IHHQQI")
 XAR_MAGIC = 0x78617221
@@ -60,6 +71,7 @@ def build(
     product_version: str,
     output: Path,
     signing_key: Path,
+    installer_identity: ReleaseInstallerSigningIdentity,
 ) -> PortablePackage:
     """Build and verify one no-shell portable package without a paid identity."""
     verify_selected_xcode()
@@ -138,20 +150,29 @@ def build(
             product_version=product_version,
             expected_manifest=manifest_bytes,
         )
-        _sign_file(unsigned, signing_key, namespace=PACKAGE_NAMESPACE)
-        unsigned_signature = unsigned.with_suffix(unsigned.suffix + ".sig")
-        os.chmod(unsigned_signature, 0o400)
+        signed = workspace / "Remap-signed.pkg"
+        sign_release_installer_package(unsigned, signed, installer_identity)
+        _verify_package(
+            signed,
+            workspace / "signed-expanded",
+            product_version=product_version,
+            expected_manifest=manifest_bytes,
+            require_unsigned=False,
+        )
+        _sign_file(signed, signing_key, namespace=PACKAGE_NAMESPACE)
+        signed_signature = signed.with_suffix(signed.suffix + ".sig")
+        os.chmod(signed_signature, 0o400)
         pinned_public_key = (
             root / "docs/release/remap-release-signing-key.pub"
         ).read_text(encoding="utf-8")
         verify_detached_package_signature(
-            unsigned,
-            unsigned_signature,
+            signed,
+            signed_signature,
             public_key=pinned_public_key,
         )
         publish_release_artifacts(
-            package=unsigned,
-            signature=unsigned_signature,
+            package=signed,
+            signature=signed_signature,
             output=output,
             output_signature=output_signature,
         )
@@ -472,14 +493,17 @@ def verify_detached_package_signature(
     signature: Path,
     *,
     public_key: str,
+    expected_package_owner_uid: int | None = None,
 ) -> None:
     """Verify the complete package bytes under Remap's package namespace."""
     canonical_key = canonical_release_public_key(public_key)
     with (
-        _open_release_artifact(
-            package, maximum_bytes=MAXIMUM_FILE_BYTES * 2
+        open_release_artifact(
+            package,
+            maximum_bytes=MAXIMUM_FILE_BYTES * 2,
+            expected_owner_uid=expected_package_owner_uid,
         ) as input_file,
-        _open_release_artifact(
+        open_release_artifact(
             signature, maximum_bytes=MAXIMUM_SIGNATURE_BYTES
         ) as signature_file,
         tempfile.TemporaryDirectory(prefix="remap-package-verification-") as directory,
@@ -523,130 +547,13 @@ def verify_detached_package_signature(
         raise RuntimeError(f"the detached package signature is invalid: {detail}")
 
 
-def publish_release_artifacts(
-    *,
-    package: Path,
-    signature: Path,
-    output: Path,
-    output_signature: Path,
-) -> None:
-    """Publish the package/signature pair without overwriting another artifact."""
-    published: list[tuple[Path, tuple[int, int]]] = []
-    try:
-        published.append(
-            (
-                output,
-                _copy_release_artifact(
-                    package, output, maximum_bytes=MAXIMUM_FILE_BYTES * 2
-                ),
-            )
-        )
-        published.append(
-            (
-                output_signature,
-                _copy_release_artifact(
-                    signature,
-                    output_signature,
-                    maximum_bytes=MAXIMUM_SIGNATURE_BYTES,
-                ),
-            )
-        )
-    except BaseException:
-        cleanup_errors: list[str] = []
-        for path, identity in reversed(published):
-            try:
-                _unlink_same_inode(path, identity)
-            except OSError as error:
-                cleanup_errors.append(f"{path}: {error}")
-        if cleanup_errors:
-            raise RuntimeError(
-                "release publication failed and exact cleanup also failed: "
-                + "; ".join(cleanup_errors)
-            )
-        raise
-
-
-def _copy_release_artifact(
-    source: Path,
-    destination: Path,
-    *,
-    maximum_bytes: int,
-) -> tuple[int, int]:
-    _verify_release_artifact(source, maximum_bytes=maximum_bytes)
-    identity: tuple[int, int] | None = None
-    try:
-        with source.open("rb") as input_file, destination.open("xb") as output_file:
-            information = os.fstat(output_file.fileno())
-            identity = information.st_dev, information.st_ino
-            shutil.copyfileobj(input_file, output_file, length=1_048_576)
-            output_file.flush()
-            os.fsync(output_file.fileno())
-        os.chmod(destination, 0o444)
-        _verify_release_artifact(destination, maximum_bytes=maximum_bytes)
-        if _sha256(source) != _sha256(destination):
-            raise RuntimeError(
-                f"release artifact changed while publishing {destination}"
-            )
-        return identity
-    except BaseException:
-        if identity is not None:
-            try:
-                _unlink_same_inode(destination, identity)
-            except FileNotFoundError:
-                pass
-            except OSError as error:
-                raise RuntimeError(
-                    f"release publication failed and exact cleanup failed: {error}"
-                ) from error
-        raise
-
-
-def _verify_release_artifact(path: Path, *, maximum_bytes: int) -> None:
-    information = path.lstat()
-    if (
-        path.is_symlink()
-        or not path.is_file()
-        or information.st_nlink != 1
-        or information.st_uid != os.getuid()
-        or stat.S_IMODE(information.st_mode) & 0o022
-        or information.st_size <= 0
-        or information.st_size > maximum_bytes
-    ):
-        raise RuntimeError(f"release artifact has unsafe metadata: {path}")
-
-
-def _open_release_artifact(path: Path, *, maximum_bytes: int) -> BinaryIO:
-    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-    try:
-        information = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(information.st_mode)
-            or information.st_nlink != 1
-            or information.st_uid != os.getuid()
-            or stat.S_IMODE(information.st_mode) & 0o022
-            or information.st_size <= 0
-            or information.st_size > maximum_bytes
-        ):
-            raise RuntimeError(f"release artifact has unsafe metadata: {path}")
-        return os.fdopen(descriptor, "rb", closefd=True)
-    except BaseException:
-        os.close(descriptor)
-        raise
-
-
-def _unlink_same_inode(path: Path, identity: tuple[int, int]) -> None:
-    information = path.lstat()
-    if (information.st_dev, information.st_ino) != identity:
-        raise OSError(f"release artifact identity changed before cleanup: {path}")
-    path.unlink()
-
-
 def _verify_package(
     package: Path,
     expanded: Path,
     *,
     product_version: str,
     expected_manifest: bytes,
+    require_unsigned: bool = True,
 ) -> None:
     signature = subprocess.run(
         ("/usr/sbin/pkgutil", "--check-signature", str(package)),
@@ -656,10 +563,14 @@ def _verify_package(
         text=True,
         timeout=30,
     )
-    if signature.returncode != 1 or "Status: no signature" not in signature.stdout:
+    if require_unsigned and (
+        signature.returncode != 1 or "Status: no signature" not in signature.stdout
+    ):
         raise RuntimeError(
             "the portable package does not have the expected unsigned identity"
         )
+    if not require_unsigned and signature.returncode != 0:
+        raise RuntimeError("the portable package lost its complete XAR signature")
     payload_listing = subprocess.run(
         ("/usr/sbin/pkgutil", "--payload-files", str(package)),
         cwd=package.parent,
@@ -751,7 +662,7 @@ def _verify_tree(root: Path, *, script_root: bool = False) -> None:
 
 def canonicalize_xar_metadata(package: Path) -> None:
     """Replace pkgbuild's volatile outer XAR metadata without changing its heap."""
-    _verify_release_artifact(package, maximum_bytes=MAXIMUM_FILE_BYTES * 2)
+    verify_release_artifact(package, maximum_bytes=MAXIMUM_FILE_BYTES * 2)
     with package.open("rb") as input_file:
         header = input_file.read(XAR_HEADER.size)
         if len(header) != XAR_HEADER.size:

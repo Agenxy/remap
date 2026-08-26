@@ -23,6 +23,7 @@ Download these files from the same Remap release into one directory:
 - `Remap-0.2.0-arm64.pkg`
 - `Remap-0.2.0-arm64.pkg.sig`
 - `remap-release-signing-key.pub`
+- `remap-release-installer.pem`
 
 The public-key fingerprint must be exactly:
 
@@ -53,22 +54,44 @@ Continue only if the final command says the signature is good for
 The allow-list file is only verification input; it does not install anything or
 change system trust.
 
+Also inspect the complete Apple Installer signature:
+
+```sh
+pkgutil --check-signature Remap-0.2.0-arm64.pkg
+```
+
+The signer must be `Remap Release Installer` with SHA-256 fingerprint
+`44C5C1BFEE4479F03AFF134F1A8E7971EA55C981698CFC6E0E7A100CE4239618`.
+The certificate is self-signed and is therefore not publicly Apple-trusted;
+the exact fingerprint and detached Ed25519 signature provide the release
+identity without a paid Apple account.
+
 ## Install
 
-Open `Remap-0.2.0-arm64.pkg` in Finder. The package is signed by Remap but is not
-signed or notarized through Apple's paid Developer Program. macOS may therefore
-block the first attempt.
+Do not open the mutable download directly in Finder. Copy it to a new
+root-owned directory, re-verify the exact copy, and invoke Apple Installer on
+that copy:
 
-If it does:
+```sh
+install_dir="$(sudo mktemp -d /private/var/tmp/org.agenxy.Remap.install.XXXXXX)"
+sudo chmod 0755 "$install_dir"
+sudo install -o root -g wheel -m 0444 \
+  Remap-0.2.0-arm64.pkg "$install_dir/Remap.pkg"
+ssh-keygen -Y verify \
+  -f remap-allowed-signers \
+  -I remap-release \
+  -n remap-package-v1 \
+  -s Remap-0.2.0-arm64.pkg.sig \
+  < "$install_dir/Remap.pkg" && \
+sudo installer -pkg "$install_dir/Remap.pkg" -target /
+sudo /bin/unlink "$install_dir/Remap.pkg"
+sudo rmdir "$install_dir"
+```
 
-1. Open **System Settings**.
-2. Choose **Privacy & Security**.
-3. Scroll to **Security**.
-4. Confirm that the blocked item is the Remap package you just verified.
-5. Choose **Open Anyway**, then open the package again.
-
-Do not disable Gatekeeper globally. Apple documents this per-item exception in
-[Open an app by overriding security settings](https://support.apple.com/guide/mac-help/open-an-app-by-overriding-security-settings-mh40617/mac).
+Stop if the second signature check fails. The root-owned copy cannot be
+replaced by another process running as your account between that check and
+Installer. Remap is not signed or notarized through Apple's paid Developer
+Program, and this workflow does not claim Apple review or public Apple trust.
 
 Apple Installer asks for administrator approval. Remap then verifies its signed
 release manifest and every payload entry. It creates or reuses a durable local
@@ -77,10 +100,10 @@ executables on this Mac, installs the product transactionally, and proves the
 running authority, DNS listeners, and HTTP gateway belong to the same Remap
 instance.
 
-The local identity stays in the System keychain across updates and uninstall.
-It is not an Agenxy private key and cannot authenticate a release. Its only job
-is to give successive verified Remap builds the same local macOS code identity
-without repeated Touch ID prompts.
+The local identity stays in the System keychain across updates, then uninstall
+removes its exact private key, certificate, and trust setting. It is not an
+Agenxy release key and cannot authenticate a release. User mappings are
+preserved separately.
 
 ## Verify the installed system
 
@@ -160,11 +183,9 @@ remap system uninstall
 ```
 
 Uninstall restores the reviewed resolver state before removing services and
-public files. It removes Remap's package receipt and portable source material,
-but preserves the private mapping database and the durable local signing
-identity. The signing identity contains no mapping data or Agenxy release
-secret; retaining it prevents another key-access prompt if Remap is installed
-again.
+public files. It removes Remap's package receipt, portable source material,
+local signing identity, and matching System-keychain trust, while preserving
+the private mapping database.
 
 ## Build from source instead
 

@@ -121,39 +121,17 @@ private final class RemapInstallerServiceSession: NSObject, RemapLifecycleXPCSer
             reply(authorityFailure())
             return
         }
-        let connectionBox = RemapInstallerConnection(connection)
-        let effectiveUID = UInt32(connectionBox.value.effectiveUserIdentifier)
-        let processID = connectionBox.value.processIdentifier
-        let authenticator = authenticator
-        let executor = executor
-        let sourceUID = sourceUID
-        let cleanupScheduler = cleanupScheduler
-        let reply = RemapInstallerReply(reply)
+        let operation = RemapInstallerRequestOperation(
+            requestData: requestData,
+            connection: RemapInstallerConnection(connection),
+            authenticator: authenticator,
+            executor: executor,
+            sourceUID: sourceUID,
+            cleanupScheduler: cleanupScheduler,
+            reply: RemapInstallerReply(reply)
+        )
         Task {
-            let response: RemapLifecycleResponse
-            do {
-                try authenticator.authorizeCaller(
-                    effectiveUID: effectiveUID,
-                    processID: processID
-                )
-                let request = try RemapLifecycleCoding.decodeRequest(requestData)
-                response = await executor.execute(request, sourceUID: sourceUID)
-                let cleanupPending = response.mutation?.authorityCleanupPending == true
-                if cleanupPending, let approvalToken = request.approvalToken {
-                    connectionBox.value.invalidationHandler = {
-                        cleanupScheduler.schedule(approvalToken: approvalToken)
-                    }
-                }
-            } catch {
-                let diagnostic = RemapLifecycleDiagnostic(
-                    category: .integrity,
-                    message: "The lifecycle request is malformed.",
-                    hint: "Update or repair the Remap application before retrying.",
-                    retryable: false
-                )
-                response = .failure(action: .status, diagnostic: diagnostic)
-            }
-            reply.send(Self.encoded(response))
+            await operation.run()
         }
     }
 
@@ -171,7 +149,7 @@ private final class RemapInstallerServiceSession: NSObject, RemapLifecycleXPCSer
         return Self.encoded(response)
     }
 
-    private static func encoded(_ response: RemapLifecycleResponse) -> Data {
+    fileprivate static func encoded(_ response: RemapLifecycleResponse) -> Data {
         do {
             return try RemapLifecycleCoding.encodeResponse(response)
         } catch {
@@ -194,6 +172,61 @@ private final class RemapInstallerServiceSession: NSObject, RemapLifecycleXPCSer
         }
         """#.utf8
     )
+}
+
+private final class RemapInstallerRequestOperation: @unchecked Sendable {
+    private let requestData: Data
+    private let connection: RemapInstallerConnection
+    private let authenticator: RemapLifecycleCallerAuthenticator
+    private let executor: RemapLifecycleExecutor
+    private let sourceUID: UInt32
+    private let cleanupScheduler: RemapPortableAuthorityCleanupScheduler
+    private let reply: RemapInstallerReply
+
+    init(
+        requestData: Data,
+        connection: RemapInstallerConnection,
+        authenticator: RemapLifecycleCallerAuthenticator,
+        executor: RemapLifecycleExecutor,
+        sourceUID: UInt32,
+        cleanupScheduler: RemapPortableAuthorityCleanupScheduler,
+        reply: RemapInstallerReply
+    ) {
+        self.requestData = requestData
+        self.connection = connection
+        self.authenticator = authenticator
+        self.executor = executor
+        self.sourceUID = sourceUID
+        self.cleanupScheduler = cleanupScheduler
+        self.reply = reply
+    }
+
+    func run() async {
+        let response: RemapLifecycleResponse
+        do {
+            try authenticator.authorizeCaller(
+                effectiveUID: UInt32(connection.value.effectiveUserIdentifier),
+                processID: connection.value.processIdentifier
+            )
+            let request = try RemapLifecycleCoding.decodeRequest(requestData)
+            response = await executor.execute(request, sourceUID: sourceUID)
+            let cleanupPending = response.mutation?.authorityCleanupPending == true
+            if cleanupPending, let approvalToken = request.approvalToken {
+                connection.value.invalidationHandler = { [cleanupScheduler] in
+                    cleanupScheduler.schedule(approvalToken: approvalToken)
+                }
+            }
+        } catch {
+            let diagnostic = RemapLifecycleDiagnostic(
+                category: .integrity,
+                message: "The lifecycle request is malformed.",
+                hint: "Update or repair the Remap application before retrying.",
+                retryable: false
+            )
+            response = .failure(action: .status, diagnostic: diagnostic)
+        }
+        reply.send(RemapInstallerServiceSession.encoded(response))
+    }
 }
 
 private final class RemapInstallerConnection: @unchecked Sendable {

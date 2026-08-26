@@ -41,9 +41,7 @@ enum RemapInstallCLI {
                     + "\(value.upstreams.count) \(upstreamLabel)."
             )
         case let .recoverAll(approvalToken):
-            let result = try await MacOSInstaller.production().recoverAll(
-                approvalToken: approvalToken
-            )
+            let result = try await executeRecoverAll(approvalToken)
             let summary = "Recovery complete. Transactions: \(result.recoveredTransactions.count); "
                 + "orphans: \(result.quarantinedOrphans.count)."
             try RemapInstallOutput.success(
@@ -53,9 +51,7 @@ enum RemapInstallCLI {
                 human: summary
             )
         case let .recoverBootstrapHelpers(approvalToken):
-            let result = try MacOSBootstrapHelperRecovery.production().recover(
-                approvalToken: approvalToken
-            )
+            let result = try await executeBootstrapRecovery(approvalToken)
             try RemapInstallOutput.success(
                 command: "recover-bootstrap-helpers",
                 value: result,
@@ -63,10 +59,7 @@ enum RemapInstallCLI {
                 human: "Removed \(result.removedPaths.count) verified orphan bootstrap helper(s)."
             )
         case let .recover(transactionID, approvalToken):
-            try await MacOSInstaller.production().recover(
-                transactionID: transactionID,
-                approvalToken: approvalToken
-            )
+            try await executeRecovery(transactionID: transactionID, approvalToken: approvalToken)
             try RemapInstallOutput.success(
                 command: "recover",
                 value: ["transactionID": transactionID],
@@ -123,7 +116,7 @@ enum RemapInstallCLI {
             )
         case let .uninstall(generationID, approvalToken, transactionID):
             let identity = transactionID ?? generatedTransactionID(prefix: "uninstall")
-            try await MacOSInstaller.production().uninstall(
+            try await executeUninstall(
                 transactionID: identity,
                 generationID: generationID,
                 approvalToken: approvalToken
@@ -171,8 +164,18 @@ enum RemapInstallCLI {
             expectedDigest: digest,
             sourceUID: sourceUID
         )
+        let installer = try MacOSInstaller.production()
+        let preview = try installer.preview(
+            operation: operation,
+            manifest: package.manifest,
+            source: package.source
+        )
+        try await RemapInstallUserPresence.authorize(
+            reviewedToken: approvalToken,
+            expectedToken: preview.approvalToken
+        )
         let identity = transactionID ?? generatedTransactionID(prefix: operation.rawValue)
-        try await MacOSInstaller.production().installOrUpdate(
+        try await installer.installOrUpdate(
             operation: operation,
             transactionID: identity,
             manifest: package.manifest,
@@ -312,15 +315,17 @@ enum RemapInstallCLI {
     SAFETY
       Preview is read-only and returns an approval token bound to its package,
       classified path effects, active generation, services, DNS, and recovery state.
-      Every mutation requires that exact token and rejects drift before staging,
-      journaling, or system effects. Recover unfinished work, then preview again.
+      Every mutation requires that exact token, recomputes its preview, and requires
+      macOS device-owner authentication before staging, journaling, or system effects.
+      Recover unfinished work, then preview again.
       Bootstrap-helper recovery is separately previewed and approved. Active and
       currently executing helpers are disclosed but never selected for removal.
 
     AUTOMATION
       Agents and noninteractive tools must request preview --json, independently
-      approve and retain its exact approvalToken, then pass it with --approval-token.
-      There is no implicit, environment-based, or unattended approval bypass.
+      retain its exact approvalToken, then pass it with --approval-token while a local
+      user approves the macOS authentication prompt. There is no implicit,
+      environment-based, cached-sudo, or unattended approval bypass.
 
     PRIVACY
       resolver-plan is root-only and read-only. Human output reports counts only.

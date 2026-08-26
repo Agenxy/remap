@@ -106,15 +106,15 @@ client only when its user, code identifier, certificate, and exact code hash
 match the root-owned lifecycle configuration.
 
 `status` is read-only. `recover` and `uninstall` first print the exact native
-effects. At a terminal, type the displayed `approve <token-prefix>` phrase.
-Piped use must return the complete 64-character token on standard input. Empty
-input, `yes`, stale state, and token mismatches make no change. There is no
-`--yes` flag or environment-variable bypass.
+effects, then require macOS device-owner authentication in an interactive
+terminal. Text input, a pseudo-terminal, and a disclosed state token cannot
+substitute for Touch ID or the account-password fallback. There is no `--yes`
+flag or environment-variable bypass.
 
 With `--json`, a mutation writes one canonical response per line: the preview
-before approval, followed by the mutation result. This lets a controller read
-the state-bound token before it writes the complete token to standard input.
-Errors are one bounded JSON object on standard output.
+before macOS authentication, followed by the mutation result. JSON does not
+make lifecycle mutation noninteractive. Errors are one bounded JSON object on
+standard output.
 
 ## JSON contract
 

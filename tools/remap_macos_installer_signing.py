@@ -216,7 +216,7 @@ def resolve_identity(keychain: Path) -> LocalInstallerSigningIdentity | None:
 
 def create_identity(keychain: Path) -> None:
     """Create a nonextractable installer-only private key and trusted root."""
-    material = _run_binary(
+    material = run_binary(
         (
             "/usr/bin/openssl",
             "req",
@@ -235,10 +235,10 @@ def create_identity(keychain: Path) -> None:
         ),
         openssl_configuration().encode("utf-8"),
     )
-    certificate = _one_pem_block(material, b"CERTIFICATE")
-    private_key = _one_private_key(material)
-    archive = _make_archive(certificate, private_key)
-    _ = _run_binary(
+    certificate = one_pem_block(material, b"CERTIFICATE")
+    private_key = one_private_key(material)
+    archive = make_archive(certificate, private_key)
+    _ = run_binary(
         (
             "/usr/bin/security",
             "import",
@@ -255,7 +255,7 @@ def create_identity(keychain: Path) -> None:
         ),
         archive,
     )
-    _ = _run_binary(
+    _ = run_binary(
         (
             "/usr/bin/security",
             "add-trusted-cert",
@@ -356,7 +356,7 @@ def _administrator_trust_is_exact(
     return entry_document.get("trustSettings") == [ADMIN_BASIC_POLICY]
 
 
-def _one_pem_block(material: bytes, label: bytes) -> bytes:
+def one_pem_block(material: bytes, label: bytes) -> bytes:
     begin = b"-----BEGIN " + label + b"-----"
     end = b"-----END " + label + b"-----"
     start = material.find(begin)
@@ -366,10 +366,10 @@ def _one_pem_block(material: bytes, label: bytes) -> bytes:
     return material[start : finish + len(end)] + b"\n"
 
 
-def _one_private_key(material: bytes) -> bytes:
+def one_private_key(material: bytes) -> bytes:
     for label in (b"PRIVATE KEY", b"RSA PRIVATE KEY"):
         if b"-----BEGIN " + label + b"-----" in material:
-            return _one_pem_block(material, label)
+            return one_pem_block(material, label)
     raise RuntimeError("OpenSSL did not return one installer private key")
 
 
@@ -417,7 +417,7 @@ def _run_authorized(arguments: tuple[str, ...], input_bytes: bytes) -> None:
         ) from error
 
 
-def _run_binary(arguments: tuple[str, ...], input_bytes: bytes) -> bytes:
+def run_binary(arguments: tuple[str, ...], input_bytes: bytes) -> bytes:
     try:
         result: subprocess.CompletedProcess[bytes] = subprocess.run(
             arguments,
@@ -440,7 +440,11 @@ def _run_binary(arguments: tuple[str, ...], input_bytes: bytes) -> bytes:
     return result.stdout
 
 
-def _make_archive(certificate: bytes, private_key: bytes) -> bytes:
+def make_archive(
+    certificate: bytes,
+    private_key: bytes,
+    identity_name: str = IDENTITY_NAME,
+) -> bytes:
     certificate_reader, certificate_writer = os.pipe()
     key_reader, key_writer = os.pipe()
     try:
@@ -457,7 +461,7 @@ def _make_archive(certificate: bytes, private_key: bytes) -> bytes:
                 "-export",
                 "-descert",
                 "-name",
-                IDENTITY_NAME,
+                identity_name,
                 "-in",
                 f"/dev/fd/{certificate_reader}",
                 "-inkey",

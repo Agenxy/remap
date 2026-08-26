@@ -203,11 +203,14 @@ repairable, accurately reported state.
 The source installer does not treat printing a preview as consent. It hashes
 the complete observed lifecycle state and exact classified effects into an
 approval token, then revalidates the token while holding the native transaction
-lock before any mutation. Interactive users confirm a short displayed prefix;
-automation returns the complete token through standard input after receiving
-the preview. EOF, malformed input, state drift, and stale tokens fail closed.
-Crash recovery has a distinct preview and token, and is never folded silently
-into install, update, or uninstall.
+lock before any mutation. macOS additionally requires device-owner presence in
+the exact signed lifecycle client and privileged source-install helper; text
+input, direct root invocation, and cached sudo cannot substitute for it. Linux
+uses the displayed phrase for an interactive operator and accepts the complete
+token only through its explicit automation boundary. Authentication failure,
+state drift, and stale tokens fail closed. Crash recovery has a distinct
+preview and token, and is never folded silently into install, update, or
+uninstall.
 
 ### Privacy assumptions
 

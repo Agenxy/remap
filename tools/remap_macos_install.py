@@ -19,7 +19,6 @@ from typing import BinaryIO, cast
 from tools.remap_app import build as build_native_app
 from tools.remap_app import verify as verify_native_app
 from tools.remap_freshness import verify_selected_xcode
-from tools.remap_lifecycle_approval import confirm_approval
 from tools.remap_macos_artifact import (
     expected_macos_sdk,
     normalize_macos_sdk_metadata,
@@ -397,7 +396,7 @@ def install_or_update(root: Path, version: str, operation: str) -> None:
             arguments = _package_arguments(package, account.pw_uid)
             preview = helper_json(root, helper, ("preview", operation, *arguments))
             print(render_preview(preview))
-            approved = confirm_approval(approval_token(preview, "preview"), operation)
+            approved = approval_token(preview, "preview")
             _ensure_private_data_directory(account, data_directory)
             transaction_id = f"{operation}-{uuid.uuid4()}"
             try:
@@ -452,7 +451,7 @@ def uninstall(root: Path) -> None:
                 ("preview", "uninstall", "--generation", generation),
             )
             print(render_preview(preview))
-            approved = confirm_approval(approval_token(preview, "preview"), "uninstall")
+            approved = approval_token(preview, "preview")
             transaction_id = f"uninstall-{uuid.uuid4()}"
             try:
                 _ = helper_json(
@@ -490,9 +489,7 @@ def recover(root: Path) -> None:
             preview = helper_json(root, helper, ("preview", "recover", "--all"))
             print(render_recovery_preview(preview))
             if recovery_has_effects(preview):
-                approved = confirm_approval(
-                    approval_token(preview, "preview-recovery"), "recover"
-                )
+                approved = approval_token(preview, "preview-recovery")
                 _ = helper_json(
                     root,
                     helper,
@@ -519,12 +516,9 @@ def recover(root: Path) -> None:
             )
             print(render_bootstrap_recovery_preview(bootstrap_preview))
             if bootstrap_recovery_has_effects(bootstrap_preview):
-                bootstrap_approval = confirm_approval(
-                    approval_token(
-                        bootstrap_preview,
-                        "preview-bootstrap-recovery",
-                    ),
-                    "recover bootstrap helpers",
+                bootstrap_approval = approval_token(
+                    bootstrap_preview,
+                    "preview-bootstrap-recovery",
                 )
                 _ = helper_json(
                     root,
@@ -592,7 +586,7 @@ def verify_generated_package_contract(root: Path, version: str) -> None:
 
 
 def authorize_administrator(root: Path) -> None:
-    """Acquire one visible, time-limited administrator authorization."""
+    """Acquire visible administrator authority for read-only root inspection."""
     try:
         _run(("/usr/bin/sudo", "-v"), root=root)
     except subprocess.TimeoutExpired as error:

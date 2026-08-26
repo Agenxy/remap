@@ -154,6 +154,32 @@ struct MacOSPortableAuthorityCleanupTests {
         }
     }
 
+    @Test("signing identity removal is digest-bound and remains recoverable on failure")
+    func signingIdentityRemovalIsBoundAndRecoverable() throws {
+        try withFixture { fixture in
+            let plan = try fixture.plan()
+            let observed = Mutex<InstallDigest?>(nil)
+            let cleanup = fixture.cleanup(
+                productIsAbsent: true,
+                productMatchesApproval: true,
+                removeSigningIdentity: { digest in
+                    observed.withLock { $0 = digest }
+                    throw CleanupBoundaryFailure()
+                }
+            )
+            try cleanup.prepare(plan)
+
+            #expect(throws: CleanupBoundaryFailure.self) {
+                try cleanup.perform(expectedApprovalToken: plan.approvalToken)
+            }
+            #expect(observed.withLock { $0 } == plan.state.signingCertificateSHA256)
+            #expect(try cleanup.pendingPlan() == plan)
+            let helper = fixture.root.path
+                + "/Library/PrivilegedHelperTools/org.agenxy.Remap.installer-service"
+            #expect(access(helper, F_OK) == 0)
+        }
+    }
+
     @Test("cleanup forgets only the package receipt bound into the approval")
     func cleanupForgetsTheApprovedPackageReceipt() throws {
         try withFixture { fixture in
@@ -287,6 +313,7 @@ private struct CleanupFixture {
             authority: authority,
             sourcePackageRoot: sourceRoot,
             sourceManifestDigest: sourceDigest,
+            signingCertificateSHA256: InstallDigest(String(repeating: "a", count: 64)),
             packageReceiptVersion: packageReceiptVersion,
             expectedUID: UInt32(geteuid()),
             expectedGID: UInt32(getegid())
@@ -298,7 +325,8 @@ private struct CleanupFixture {
         productMatchesApproval: Bool,
         packageReceipt: any MacOSPackageReceiptControlling = MacOSPackageReceiptStore(
             runner: MissingMacOSPackageReceiptRunner()
-        )
+        ),
+        removeSigningIdentity: @escaping @Sendable (InstallDigest) throws -> Void = { _ in }
     ) -> MacOSPortableAuthorityCleanup {
         MacOSPortableAuthorityCleanup(
             authority: authority,
@@ -306,7 +334,8 @@ private struct CleanupFixture {
             expectedGID: UInt32(getegid()),
             productIsAbsent: { productIsAbsent },
             productMatchesApproval: { _, _ in productMatchesApproval },
-            packageReceipt: packageReceipt
+            packageReceipt: packageReceipt,
+            removeSigningIdentity: removeSigningIdentity
         )
     }
 

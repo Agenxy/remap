@@ -154,6 +154,33 @@ public struct GenerationStore: Sendable {
         return try validatedRecoveryManifest(at: abandoned, generationID: generationID)
     }
 
+    func loadManifestForPurgeRecovery(
+        generationID: String,
+        transactionID: String
+    ) throws -> InstallManifest? {
+        try InstallManifest.validateIdentifier(generationID, field: "generation ID")
+        let live = try generationsPath.appending(component: generationID)
+        let identity = try recoveryIdentity(
+            generationID: generationID,
+            transactionID: transactionID
+        )
+        let retired = try generationsPath.appending(component: ".retired-\(identity)")
+        let liveExists = try authority.metadata(at: live) != nil
+        let retiredExists = try authority.metadata(at: retired) != nil
+        guard liveExists == false || retiredExists == false else {
+            throw InstallError.collision(live.description)
+        }
+        guard liveExists || retiredExists else {
+            return nil
+        }
+        let manifest = try loadManifest(at: liveExists ? live : retired)
+        try manifest.validate()
+        guard manifest.generationID == generationID else {
+            throw InstallError.integrity("purge generation and manifest identity differ")
+        }
+        return manifest
+    }
+
     private func validatedRecoveryManifest(
         at path: InstallRelativePath,
         generationID: String

@@ -7,7 +7,7 @@ NATIVE_TASK = MISE_AUTO_INSTALL=0 \
 MISE_VERSION := 2026.8.13
 export PREFIX REMAP_INSTALL_ROOT REMAP_LINUX_LINK
 
-.PHONY: help setup setup-install _require-mise format check test quality dependencies docs package-macos release-evidence release-evidence-verify install install-cli install-system install-check recover run-macos verify-macos update uninstall uninstall-cli uninstall-system
+.PHONY: help setup setup-install _require-mise format check test quality dependencies docs package-macos release-evidence release-evidence-verify install install-cli install-system install-check install-package-macos recover run-macos verify-macos update uninstall uninstall-cli uninstall-system
 
 help:
 	@printf '%s\n' \
@@ -22,6 +22,7 @@ help:
 		'  make dependencies  Audit advisories, licenses, sources, and versions' \
 		'  make docs          Build warning-free API documentation' \
 		'  make package-macos Build the target-Mac-self-signed installer (release key required)' \
+		'  make install-package-macos Verify, root-pin, and install REMAP_MACOS_PACKAGE' \
 		'  make release-evidence        Build crates and create unsigned local evidence' \
 		'  make release-evidence-verify Verify existing crate bytes and evidence' \
 		'  make install       Preview, install, activate, and verify native Remap' \
@@ -90,6 +91,9 @@ docs:
 
 package-macos: _require-mise
 	@$(TASK) package-macos
+
+install-package-macos: _require-mise
+	@$(NATIVE_TASK) install-package-macos
 
 release-evidence: _require-mise
 	@$(TASK) release-evidence

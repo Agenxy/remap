@@ -46,23 +46,26 @@ The prebuilt installer is the normal macOS path. It requires macOS 15 or later
 and an administrator account. It does not require Xcode, Homebrew, `mise`, Rust,
 Python, an Apple Developer account, or a paid Apple service.
 
-Download these three files from the same Remap release:
+Download these four files from the same Remap release:
 
 - `Remap-0.2.0-arm64.pkg`
 - `Remap-0.2.0-arm64.pkg.sig`
 - `remap-release-signing-key.pub`
+- `remap-release-installer.pem`
 
 Verify the public-key fingerprint is
 `SHA256:bG9pik9VV1jT2rZrsC7sYJCZOfc0tiuSrL05/v6FmtI`, then verify the detached
 package signature under the `remap-package-v1` namespace. The complete commands
 are in [the macOS tutorial](docs/tutorials/first-map-macos.md). This signature
 authenticates the downloaded package without relying on Apple or another paid
-certificate authority.
+certificate authority. The complete XAR also carries the pinned self-signed
+`Remap Release Installer` certificate so Apple Installer validates every
+package action before root execution.
 
-Open the package in Finder. Because Remap is deliberately not notarized through
-Apple's paid program, macOS may first block it. After the initial attempt, open
-System Settings > Privacy & Security and choose **Open Anyway** for the exact
-downloaded package. Do not disable Gatekeeper globally.
+Do not open the mutable download directly in Finder. The tutorial copies it to
+a root-owned staging directory, re-verifies those exact bytes, and invokes
+Apple Installer on that immutable path. This closes the gap between signature
+verification and root execution without a paid Apple identity or notarization.
 
 The Apple Installer asks for administrator approval once. It then:
 
@@ -73,10 +76,10 @@ The Apple Installer asks for administrator approval once. It then:
 5. proves the authority, UDP DNS, TCP DNS, and HTTP gateway belong to the same
    running Remap instance.
 
-The local signing identity is intentionally kept across updates and uninstall.
-It contains no Agenxy secret and is allowed to sign only through macOS's
-`codesign` tool. Reusing it avoids repeated Touch ID or keychain prompts on
-future Remap updates.
+The local signing identity is intentionally kept across updates and removed by
+uninstall together with its System-keychain trust setting. It contains no
+Agenxy release secret and is allowed to sign only through macOS's `codesign`
+tool. User mappings remain preserved.
 
 After installation, use the CLI:
 
@@ -104,11 +107,11 @@ make uninstall
 ```
 
 Every lifecycle mutation is preceded by an exact preview from the privileged
-native authority. At an interactive terminal, type the displayed short
-approval phrase. An automation controller must read the preview and return its
-complete 64-character approval token on standard input. EOF, stale state, or a
-mismatch leaves system state unchanged. There is no environment or `--yes`
-bypass.
+native authority. macOS requires device-owner authentication inside the signed
+privileged boundary after that preview; text input, a copied token, and cached
+administrator authority cannot authorize the lifecycle client or source helper.
+Linux uses the displayed state-bound approval phrase, with the full token for
+explicit automation. There is no environment or `--yes` bypass.
 
 An interrupted operation never recovers as a side effect of another request.
 Run `make recover`, review and approve its separate recovery preview, then
@@ -163,8 +166,8 @@ product. Crash residue may be either a published helper or a root-private,
 possibly partial stage; both are disclosed and retained for a separate explicit
 recovery preview. Recovery binds exact metadata and SHA-256, never executes
 invalid or partial residue, and a later lifecycle request never deletes it
-implicitly. On EOF, a stale approval token, or a mismatch, the workflow stops
-with: `No Remap product state changed.`
+implicitly. If macOS authentication is unavailable, cancelled, or denied, the
+workflow stops before sending the mutation.
 
 The preview identifies every public path, service, resolver change, and
 immutable generation covered by the approval token.
@@ -233,6 +236,8 @@ Install and update also keep every binary, manual, completion, and license
 input descriptor-pinned through preview and commit. Their complete
 canonical SHA-256 manifest is printed in full and independently bound by the
 approval token before the native helper rereads it under the transaction lock.
+The helper recomputes the preview and requires macOS device-owner presence
+before any privileged source-install effect.
 
 The data plane runs as the selected non-root account. The narrow root helper is
 the only installation and resolver-lifecycle authority; the Python task runner
