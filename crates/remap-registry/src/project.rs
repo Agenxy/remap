@@ -60,7 +60,10 @@ impl StoredMapping {
                 Diagnostic::new(
                     "E_INVALID_TARGET",
                     error.to_string(),
-                    Some("use an IP address, DNS alias, or http(s) upstream URL".to_owned()),
+                    Some(
+                    "use an IP address, DNS alias, http(s) upstream URL, or supgang://<peer>/<service>"
+                        .to_owned(),
+                ),
                     false,
                 )
             })?;

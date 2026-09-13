@@ -191,6 +191,7 @@ fn validate(
         .map_err(|error| Diagnostic::invalid_target(error.to_string()))?;
     let policy = match &target {
         MappingTarget::Http(upstream) => Some(upstream.host_header_policy().as_str()),
+        MappingTarget::Peer(service) => Some(service.host_header_policy().as_str()),
         MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => None,
     };
     Ok(ValidationReport {

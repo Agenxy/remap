@@ -69,3 +69,47 @@ fn rejects_credentials_queries_fragments_and_zero_ports() {
     assert!(HttpUpstream::parse("https://example.com/a\r\nHost: evil").is_err());
     assert!(HttpUpstream::parse("https://example.com/a b").is_err());
 }
+
+#[test]
+fn parses_supgang_peer_services_as_text() -> Result<(), Box<dyn Error>> {
+    let target = MappingTarget::parse_with_http_policy(
+        "supgang://MacSolis/dibs",
+        HostHeaderPolicy::PreserveClient,
+    )?;
+    let MappingTarget::Peer(service) = &target else {
+        return Err("a supgang:// target is a peer service".into());
+    };
+    assert_eq!(service.peer(), "MacSolis");
+    assert_eq!(service.service(), "dibs");
+    assert_eq!(
+        service.host_header_policy(),
+        HostHeaderPolicy::PreserveClient
+    );
+    assert_eq!(target.kind().as_str(), "peer");
+    assert_eq!(target.to_string(), "supgang://MacSolis/dibs");
+    // A fingerprint or a node id is a peer as much as a name is.
+    assert!(MappingTarget::from_str("supgang://a8a37e32/remap").is_ok());
+    assert!(MappingTarget::from_str(&format!("supgang://{}/dibs", "a".repeat(64))).is_ok());
+    Ok(())
+}
+
+#[test]
+fn rejects_supgang_targets_that_name_nothing_resolvable() {
+    for invalid in [
+        "supgang://",
+        "supgang://MacSolis",
+        "supgang:///dibs",
+        "supgang://MacSolis/Dibs",
+        "supgang://MacSolis/-dibs",
+        "supgang://MacSolis/dibs/extra",
+        "supgang://MacSolis/dibs?x",
+        "supgang://--state-dir/dibs",
+        "supgang://Mac Solis/dibs",
+        "supgang://MacSolis/a-service-name-too-long",
+    ] {
+        assert!(
+            MappingTarget::from_str(invalid).is_err(),
+            "{invalid} was accepted"
+        );
+    }
+}

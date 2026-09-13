@@ -11,10 +11,13 @@ use hyper::http::uri::{Authority, PathAndQuery};
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
-use remap_core::{HostHeaderPolicy, HttpScheme, HttpUpstream, MappingTarget, RemapName};
+use remap_core::{
+    HostHeaderPolicy, HttpScheme, HttpUpstream, MappingTarget, PeerService, RemapName,
+};
 use tokio::time::timeout;
 
-use crate::gateway::SelfRejectingConnector;
+use crate::gateway::{PeerRouting, SelfRejectingConnector};
+use crate::peer::PeerResolveError;
 use crate::{RuntimeIdentity, SnapshotStore};
 
 const HEALTH_HOST: &[u8] = b"_health.remap.invalid";
@@ -50,12 +53,13 @@ pub(crate) async fn route(
     snapshots: SnapshotStore,
     upstream_timeout: Duration,
     identity: Option<RuntimeIdentity>,
+    routing: PeerRouting,
 ) -> Result<Response<ProxyBody>, Infallible> {
     if let Some(response) = health_response(&request, identity.as_ref()) {
         return Ok(response);
     }
-    let upstream = match select_upstream(&request, &snapshots) {
-        Ok(upstream) => upstream,
+    let (upstream, client) = match select_upstream(&request, &snapshots, &routing, client).await {
+        Ok(selected) => selected,
         Err(error) => return Ok(error.response()),
     };
     let request = match upstream_request(request, &upstream) {
@@ -103,10 +107,14 @@ fn health_response(
         .ok()
 }
 
-fn select_upstream(
+/// The upstream for this request and the client to dial it with: the shared
+/// client for an HTTP mapping, the client for the advertised key for a peer.
+async fn select_upstream(
     request: &Request<Incoming>,
     snapshots: &SnapshotStore,
-) -> Result<HttpUpstream, RouteError> {
+    routing: &PeerRouting,
+    client: ProxyClient,
+) -> Result<(HttpUpstream, ProxyClient), RouteError> {
     let name = client_name(request.headers())?;
     let snapshot = snapshots.load();
     let mapping = snapshot.resolve(&name).ok_or_else(|| {
@@ -117,13 +125,74 @@ fn select_upstream(
         )
     })?;
     match mapping.target() {
-        MappingTarget::Http(upstream) => Ok(upstream.clone()),
+        MappingTarget::Http(upstream) => Ok((upstream.clone(), client)),
+        MappingTarget::Peer(service) => peer_upstream(service, routing).await,
         MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => Err(RouteError::new(
             StatusCode::MISDIRECTED_REQUEST,
             "E_GATEWAY_DIRECT_TARGET",
             "This name is a direct DNS mapping, not a routed HTTP service.",
         )),
     }
+}
+
+/// Turns a peer mapping into the upstream to dial now and the client that
+/// accepts exactly the key the peer advertised (ADR-0016). The answer's
+/// addresses never reach a client; the error names the step.
+async fn peer_upstream(
+    service: &PeerService,
+    routing: &PeerRouting,
+) -> Result<(HttpUpstream, ProxyClient), RouteError> {
+    let Some(resolver) = routing.resolver.as_ref() else {
+        return Err(RouteError::new(
+            StatusCode::BAD_GATEWAY,
+            "E_GATEWAY_PEER_NO_SUPGANG",
+            "This name routes to a Supgang peer, and Supgang is not installed on this machine.",
+        ));
+    };
+    let destination = resolver
+        .resolve(service.peer(), service.service())
+        .await
+        .map_err(|error| {
+            let (code, message) = match error {
+                PeerResolveError::NotInstalled => ("E_GATEWAY_PEER_NO_SUPGANG", "Supgang is not installed on this machine."),
+                PeerResolveError::NoAddress => ("E_GATEWAY_PEER_UNREACHABLE", "The peer has no address this machine can reach right now."),
+                PeerResolveError::NoService => ("E_GATEWAY_PEER_NO_SERVICE", "The peer does not advertise the service this name routes to."),
+                PeerResolveError::Refused(_) => ("E_GATEWAY_PEER_UNKNOWN", "Supgang does not know the peer this name routes to."),
+                PeerResolveError::Schema(_) | PeerResolveError::Malformed(_) => ("E_GATEWAY_PEER_ANSWER", "Supgang's answer for the peer could not be read; update whichever of Remap or Supgang is older."),
+                PeerResolveError::Unavailable(_) => ("E_GATEWAY_PEER_UNAVAILABLE", "Supgang did not answer for the peer in time."),
+                PeerResolveError::Expired => (
+                    "E_GATEWAY_PEER_EXPIRED",
+                    "The peer's signed record has expired; nothing current says where it is.",
+                ),
+            };
+            RouteError::new(StatusCode::BAD_GATEWAY, code, message)
+        })?;
+    let host = match destination.host {
+        std::net::IpAddr::V4(address) => address.to_string(),
+        std::net::IpAddr::V6(address) => format!("[{address}]"),
+    };
+    let upstream = HttpUpstream::parse_with_policy(
+        &format!("https://{host}:{}/", destination.port),
+        service.host_header_policy(),
+    )
+    .map_err(|_| {
+        RouteError::new(
+            StatusCode::BAD_GATEWAY,
+            "E_GATEWAY_PEER_ANSWER",
+            "The peer's advertised address could not be routed.",
+        )
+    })?;
+    let client = routing
+        .clients
+        .client_for(destination.key_pin)
+        .map_err(|_| {
+            RouteError::new(
+                StatusCode::BAD_GATEWAY,
+                "E_GATEWAY_PEER_TLS",
+                "A TLS client for the peer's advertised key could not be prepared.",
+            )
+        })?;
+    Ok((upstream, client))
 }
 
 fn client_name(headers: &HeaderMap) -> Result<RemapName, RouteError> {
