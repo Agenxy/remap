@@ -4,6 +4,18 @@ Remap follows semantic versioning while the public interfaces are still young.
 Every release keeps source installation, signed distribution, and supported
 platform claims separate.
 
+## Unreleased
+
+- Added the `peer` mapping target, `supgang://<peer>/<service>` (ADR-0016). The
+  gateway resolves the peer through Supgang when a request is routed, dials the
+  address Supgang prefers on the port the peer's signed record advertises, and
+  verifies the upstream TLS key against the advertised pin rather than the
+  system roots; a chain that merely appends the peer's public CA is refused.
+  DNS answers a peer mapping as it answers an HTTP one. A machine without
+  Supgang, a peer with no route, or a service the peer does not advertise is a
+  gateway error that says which. M7 is redefined on Supgang's identity: Remap
+  builds no enrollment, discovery, or revocation of its own.
+
 ## 0.2.0 - 2026-08-19
 
 - Added the authoritative daemon, private registry, revision-safe preview and

@@ -98,7 +98,7 @@ fn invoke(arguments: &[&str]) -> Result<HelperResponse, Diagnostic> {
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|error| lifecycle_error("start the installed Linux helper", error))?;
+        .map_err(|error| lifecycle_error("start the installed Linux helper", &error))?;
     let mut stdout = child.stdout.take().ok_or_else(|| {
         Diagnostic::native_lifecycle("the installed Linux helper has no response channel")
     })?;
@@ -107,7 +107,7 @@ fn invoke(arguments: &[&str]) -> Result<HelperResponse, Diagnostic> {
         .by_ref()
         .take((MAXIMUM_RESPONSE_BYTES + 1) as u64)
         .read_to_end(&mut response)
-        .map_err(|error| lifecycle_error("read the installed Linux helper", error))?;
+        .map_err(|error| lifecycle_error("read the installed Linux helper", &error))?;
     if response.len() > MAXIMUM_RESPONSE_BYTES {
         let _killed = child.kill();
         let _status = child.wait();
@@ -117,7 +117,7 @@ fn invoke(arguments: &[&str]) -> Result<HelperResponse, Diagnostic> {
     }
     let status = child
         .wait()
-        .map_err(|error| lifecycle_error("wait for the installed Linux helper", error))?;
+        .map_err(|error| lifecycle_error("wait for the installed Linux helper", &error))?;
     let code = status
         .code()
         .and_then(|value| u8::try_from(value).ok())
@@ -192,7 +192,7 @@ fn validated_preview(document: &Value, command: &str) -> Result<Approval, Diagno
         || effects
             .iter()
             .any(|effect| effect.as_str().is_none_or(|value| !safe_text(value, 512)))
-        || command == "preview-recovery" && has_effects != !effects.is_empty()
+        || command == "preview-recovery" && has_effects == effects.is_empty()
     {
         return Err(invalid_response());
     }
@@ -219,13 +219,13 @@ fn confirm_approval(token: &str, operation: &str) -> Result<(), Diagnostic> {
     stderr
         .write_all(prompt.as_bytes())
         .and_then(|()| stderr.flush())
-        .map_err(|error| lifecycle_error("write the lifecycle approval prompt", error))?;
+        .map_err(|error| lifecycle_error("write the lifecycle approval prompt", &error))?;
     let mut response = String::new();
     io::stdin()
         .lock()
         .take(MAXIMUM_APPROVAL_BYTES)
         .read_to_string(&mut response)
-        .map_err(|error| lifecycle_error("read lifecycle approval", error))?;
+        .map_err(|error| lifecycle_error("read lifecycle approval", &error))?;
     if response.trim_end_matches(['\r', '\n']) != expected {
         return Err(Diagnostic::native_lifecycle(format!(
             "approval was not confirmed; rerun 'remap system {operation}' for a fresh preview"
@@ -235,7 +235,7 @@ fn confirm_approval(token: &str, operation: &str) -> Result<(), Diagnostic> {
         stderr,
         "Approval confirmed. Applying only the reviewed state."
     )
-    .map_err(|error| lifecycle_error("write the lifecycle approval result", error))?;
+    .map_err(|error| lifecycle_error("write the lifecycle approval result", &error))?;
     Ok(())
 }
 
@@ -247,7 +247,7 @@ fn emit_success(document: &Value, heading: &str, json: bool) -> Result<(), Diagn
     let rendered = serde_json::to_string_pretty(data).map_err(|_error| invalid_response())?;
     let mut stdout = io::stdout().lock();
     writeln!(stdout, "{heading}\n{rendered}")
-        .map_err(|error| lifecycle_error("write the Linux lifecycle response", error))
+        .map_err(|error| lifecycle_error("write the Linux lifecycle response", &error))
 }
 
 fn emit_failure(document: &Value, json: bool, code: u8) -> Result<u8, Diagnostic> {
@@ -257,7 +257,7 @@ fn emit_failure(document: &Value, json: bool, code: u8) -> Result<u8, Diagnostic
         let error = document.get("error").ok_or_else(invalid_response)?;
         let rendered = serde_json::to_string_pretty(error).map_err(|_error| invalid_response())?;
         writeln!(io::stderr().lock(), "Linux lifecycle failed\n{rendered}").map_err(
-            |write_error| lifecycle_error("write the Linux lifecycle failure", write_error),
+            |write_error| lifecycle_error("write the Linux lifecycle failure", &write_error),
         )?;
     }
     Ok(code)
@@ -265,14 +265,14 @@ fn emit_failure(document: &Value, json: bool, code: u8) -> Result<u8, Diagnostic
 
 fn write_json(mut output: impl Write, document: &Value) -> Result<(), Diagnostic> {
     serde_json::to_writer(&mut output, document).map_err(|_error| invalid_response())?;
-    writeln!(output).map_err(|error| lifecycle_error("write the Linux lifecycle JSON", error))
+    writeln!(output).map_err(|error| lifecycle_error("write the Linux lifecycle JSON", &error))
 }
 
 fn valid_token(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
-            .all(|byte| byte.is_ascii_digit() || b'a' <= byte && byte <= b'f')
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn safe_text(value: &str, maximum: usize) -> bool {
@@ -287,7 +287,7 @@ fn invalid_response() -> Diagnostic {
     )
 }
 
-fn lifecycle_error(operation: &str, error: io::Error) -> Diagnostic {
+fn lifecycle_error(operation: &str, error: &io::Error) -> Diagnostic {
     Diagnostic::native_lifecycle(format!("could not {operation}: {error}"))
 }
 

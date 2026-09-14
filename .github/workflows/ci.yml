@@ -24,13 +24,19 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: "1"
+      # The freshness gate asks api.github.com for the latest mise release;
+      # anonymous requests share a per-address quota across hosted runners.
+      GITHUB_TOKEN: ${{ github.token }}
+      # Nobody can answer a macOS keychain authorization dialog on a hosted
+      # runner; the signing tools record trust through passwordless sudo.
+      REMAP_HEADLESS_TRUST: "1"
     steps:
       # Third-party actions are pinned to immutable commits. The comments are
       # human-readable versions; the SHA is the authority.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
         with:
-          version: 2026.8.10
+          version: 2026.9.8
           experimental: true
       - name: Install pinned development and browser dependencies
         run: |

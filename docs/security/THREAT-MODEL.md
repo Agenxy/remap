@@ -147,6 +147,16 @@ provide explicit mutation guards. The connector still rejects the gateway's
 exact active listener after resolution so a valid private target cannot recurse
 through Remap itself.
 
+A peer target (`supgang://<peer>/<service>`, ADR-0016) is resolved at route
+time from the peer's device-signed Supgang record, and the upstream TLS session
+is verified against the key that record advertises rather than the system
+roots: the top of the presented chain must carry the pinned key and the leaf
+must be issued under it for the host dialled. The gateway keeps one TLS client
+per advertised key, so a pooled connection can never serve a peer with another
+key; an expired or unbounded record names nothing. No peer mapping is ever
+dialled unverified or in plaintext, and a peer that cannot be resolved is a
+gateway error that names the step, not a fallback.
+
 ### Certificate and key boundary
 
 Creating, trusting, untrusting, rotating, exporting, or destroying a local CA is
@@ -172,8 +182,8 @@ preserving unrelated user state.
 
 ### Peer and replication boundary
 
-Enrollment establishes a specific peer identity through an authenticated,
-human-visible ceremony. Discovery is not authentication. Replicated operations
+Peer identity, enrollment, discovery, and revocation are Supgang's (ADR-0016);
+Remap consumes them and builds none of its own. Replicated operations
 are signed, bounded, ordered, idempotent, revision-aware, and attributable to a
 peer without logging the user's mapped names or targets.
 

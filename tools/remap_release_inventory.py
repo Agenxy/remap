@@ -14,7 +14,7 @@ from typing import cast
 from tools.remap_freshness import verify_selected_xcode
 from tools.remap_release_model import canonical_bytes, sha256_file
 
-SYFT_VERSION = "1.51.0"
+SYFT_VERSION = "1.51.1"
 TOOL_TIMEOUT_SECONDS = 300
 
 

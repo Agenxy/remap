@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,14 @@ IDENTITY_NAME = "Remap Local Codesign"
 CERTIFICATE_LIFETIME_DAYS = 3_650
 ARCHIVE_TRANSPORT_PASSWORD = "remap-ephemeral-pipe"
 MAXIMUM_COMMAND_OUTPUT_BYTES = 1_048_576
+# Set to "1" where nobody can answer a macOS authorization dialog (a hosted CI
+# runner). `security add-trusted-cert` into the login keychain, and
+# `security execute-with-privileges`, both raise one, and the gate then waits
+# on it until its timeout. With the variable set, trust is recorded in the
+# System keychain through non-interactive sudo instead, which the hosted
+# runners grant without a password.
+HEADLESS_TRUST_VARIABLE = "REMAP_HEADLESS_TRUST"
+SYSTEM_KEYCHAIN = Path("/Library/Keychains/System.keychain")
 SHA1_PATTERN = re.compile(r"[0-9A-F]{40}\Z")
 SHA256_PATTERN = re.compile(r"[0-9A-F]{64}\Z")
 IDENTITY_PATTERN = re.compile(r'^\s*\d+\)\s+([0-9A-F]{40})\s+"([^"]+)"\s*$')
@@ -59,7 +68,15 @@ def ensure_local_codesigning_identity() -> LocalCodeSigningIdentity:
 
 
 def login_keychain() -> Path:
-    """Resolve the current user's login keychain without assuming its location."""
+    """Resolve the keychain the local identities live in.
+
+    On a machine with a user it is the login keychain. Headless, it is a
+    keychain of this tool's own with a password only this run knows, because
+    a key in the login keychain can only be used by codesign after the user
+    approves it in a dialog nobody is there to answer.
+    """
+    if headless_trust():
+        return headless_keychain()
     output = _capture(("/usr/bin/security", "login-keychain"))
     value = output.strip()
     if len(value) >= 2 and value[0] == value[-1] == '"':
@@ -277,19 +294,123 @@ def create_identity(keychain: Path) -> None:
         ),
         archive,
     )
-    _ = _run_binary(
+    allow_apple_tools(keychain, _run_binary)
+    _ = _run_binary(trust_arguments(keychain, "codeSign"), certificate)
+
+
+def headless_trust() -> bool:
+    """Whether trust changes must avoid macOS authorization dialogs."""
+    return os.environ.get(HEADLESS_TRUST_VARIABLE) == "1"
+
+
+def _headless_keychain_home() -> Path:
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    return Path(runner_temp) if runner_temp else Path.home() / "Library/Keychains"
+
+
+def headless_keychain() -> Path:
+    """Create once, then return, a keychain this tool owns and can unlock.
+
+    Its password is random, generated on creation, and kept beside it in a
+    file only this user can read, because every tool in one gate run is a
+    separate process and each must be able to unlock the keychain and record
+    key partition lists without anybody typing.
+    """
+    home = _headless_keychain_home()
+    keychain = home / "remap-headless.keychain-db"
+    secret = home / "remap-headless.keychain-password"
+    if keychain.is_file() and secret.is_file():
+        password = secret.read_text(encoding="utf-8").strip()
+        _run(("/usr/bin/security", "unlock-keychain", "-p", password, str(keychain)))
+        return keychain
+    password = os.urandom(24).hex()
+    secret.touch(mode=0o600, exist_ok=False)
+    _ = secret.write_text(password + "\n", encoding="utf-8")
+    _run(("/usr/bin/security", "create-keychain", "-p", password, str(keychain)))
+    # Never lock on a timer or on sleep: the gate is long, and a locked
+    # keychain turns into the very dialog this exists to avoid.
+    _run(("/usr/bin/security", "set-keychain-settings", str(keychain)))
+    _run(("/usr/bin/security", "unlock-keychain", "-p", password, str(keychain)))
+    existing = _capture(
+        ("/usr/bin/security", "list-keychains", "-d", "user")
+    ).splitlines()
+    others = [line.strip().strip('"') for line in existing if line.strip()]
+    _run(
         (
             "/usr/bin/security",
+            "list-keychains",
+            "-d",
+            "user",
+            "-s",
+            str(keychain),
+            *others,
+        )
+    )
+    return keychain
+
+
+def allow_apple_tools(
+    keychain: Path, run: Callable[[tuple[str, ...], bytes], bytes]
+) -> None:
+    """Let Apple's signing tools use every key in the headless keychain.
+
+    `security import -T` names the tool, and macOS still asks the user the
+    first time that tool reaches for the key unless the key's partition list
+    says Apple tools may. Interactive machines keep the question; headless
+    ones have this run's password and answer it here. `run` is the caller's
+    own binary runner, so its tests observe this call like the import.
+    """
+    if not headless_trust():
+        return
+    secret = _headless_keychain_home() / "remap-headless.keychain-password"
+    password = secret.read_text(encoding="utf-8").strip()
+    _ = run(
+        (
+            "/usr/bin/security",
+            "set-key-partition-list",
+            "-S",
+            "apple-tool:,apple:,codesign:",
+            "-s",
+            "-k",
+            password,
+            str(keychain),
+        ),
+        b"",
+    )
+
+
+def trust_arguments(keychain: Path, policy: str) -> tuple[str, ...]:
+    """The command that records root trust for a PEM certificate on stdin.
+
+    Interactive machines record it in the caller's keychain, which macOS
+    confirms with the user. Headless ones record it in the System keychain
+    through non-interactive sudo, because no dialog can be answered there.
+    """
+    if headless_trust():
+        return (
+            "/usr/bin/sudo",
+            "-n",
+            "/usr/bin/security",
             "add-trusted-cert",
+            "-d",
             "-r",
             "trustRoot",
             "-p",
-            "codeSign",
+            policy,
             "-k",
-            str(keychain),
+            str(SYSTEM_KEYCHAIN),
             "/dev/stdin",
-        ),
-        certificate,
+        )
+    return (
+        "/usr/bin/security",
+        "add-trusted-cert",
+        "-r",
+        "trustRoot",
+        "-p",
+        policy,
+        "-k",
+        str(keychain),
+        "/dev/stdin",
     )
 
 
