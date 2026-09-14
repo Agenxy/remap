@@ -182,9 +182,9 @@ DEVELOPER_DIR=/Applications/Xcode-27.0.0-Beta.5.app/Contents/Developer \
   --evidence dist/remap-0.2.0-evidence
 ```
 
-The exact selected Xcode build is checked before SwiftPM inventory. Supplying
-`DEVELOPER_DIR` does not weaken that check; the version and build must match
-`platforms/macos/XCODE_VERSION`.
+The selected Xcode build is checked before SwiftPM inventory. Supplying
+`DEVELOPER_DIR` does not weaken that check; the version must match
+`platforms/macos/XCODE_VERSION` and the build must be one it lists as reviewed.
 
 ## Rust-specific generator assessment
 

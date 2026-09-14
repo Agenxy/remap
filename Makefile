@@ -4,7 +4,7 @@ NATIVE_TASK = MISE_AUTO_INSTALL=0 \
 	"$$(MISE_AUTO_INSTALL=0 mise which uv)" run \
 	--python "$$(MISE_AUTO_INSTALL=0 mise which python)" \
 	python -m tools.remap_tasks
-MISE_VERSION := 2026.8.14
+MISE_VERSION := 2026.9.8
 export PREFIX REMAP_INSTALL_ROOT REMAP_LINUX_LINK
 
 .PHONY: help setup setup-install _require-mise format check test quality dependencies docs package-macos release-evidence release-evidence-verify install install-cli install-system install-check install-package-macos recover run-macos verify-macos update uninstall uninstall-cli uninstall-system

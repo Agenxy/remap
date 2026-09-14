@@ -64,15 +64,25 @@ def verify_javascript_dependencies() -> None:
         require_current(f"npm package {name}", specification, latest)
 
 
+def mise_tool_version(specification: object) -> str:
+    """Read a mise tool pin, which is a bare string or a table with options."""
+    if isinstance(specification, str):
+        return specification
+    if isinstance(specification, dict):
+        version = cast("dict[str, object]", specification).get("version")
+        if isinstance(version, str):
+            return version
+    raise TypeError("mise tool pins must be a version string or a table with one")
+
+
 def verify_mise_tools() -> None:
     """Compare exact mise pins with each plugin's current stable release."""
     document = tomllib.loads((ROOT / "mise.toml").read_text(encoding="utf-8"))
     tools = object_table(document, "tools")
     for name, specification in sorted(tools.items()):
-        if not isinstance(specification, str):
-            raise TypeError(f"mise tool {name} version must be a string")
+        pinned = mise_tool_version(specification)
         latest = capture(("mise", "latest", name))
-        require_current(f"mise tool {name}", specification, latest)
+        require_current(f"mise tool {name}", pinned, latest)
 
 
 def verify_mise_release() -> None:
@@ -84,7 +94,14 @@ def verify_mise_release() -> None:
 
 
 def verify_selected_xcode() -> None:
-    """Require macOS builds to use the repository's exact reviewed Xcode."""
+    """Require macOS builds to use one of the repository's reviewed Xcode builds.
+
+    The pin file names one Xcode version and then every reviewed build of it,
+    one per line. More than one build is allowed because Apple withdraws beta
+    builds as soon as the next one ships while the hosted CI image lags a
+    build behind, so an exact single-build pin could not be satisfied on a
+    developer machine and the runner at the same time.
+    """
     if sys.platform != "darwin":
         return
     expected = (
@@ -92,13 +109,17 @@ def verify_selected_xcode() -> None:
         .read_text(encoding="utf-8")
         .splitlines()
     )
-    if len(expected) != 2 or not all(expected):
-        raise ValueError("platforms/macos/XCODE_VERSION must contain version and build")
+    if len(expected) < 2 or not all(expected):
+        raise ValueError(
+            "platforms/macos/XCODE_VERSION must contain a version and at least one build"
+        )
     actual = capture(("/usr/bin/xcodebuild", "-version")).splitlines()
-    required = [f"Xcode {expected[0]}", f"Build version {expected[1]}"]
-    if actual != required:
+    accepted = [
+        [f"Xcode {expected[0]}", f"Build version {build}"] for build in expected[1:]
+    ]
+    if actual not in accepted:
         raise RuntimeError(
-            f"selected Xcode is {actual!r}; required exact build is {required!r}"
+            f"selected Xcode is {actual!r}; the reviewed builds are {accepted!r}"
         )
 
 
