@@ -27,6 +27,9 @@ jobs:
       # The freshness gate asks api.github.com for the latest mise release;
       # anonymous requests share a per-address quota across hosted runners.
       GITHUB_TOKEN: ${{ github.token }}
+      # Nobody can answer a macOS keychain authorization dialog on a hosted
+      # runner; the signing tools record trust through passwordless sudo.
+      REMAP_HEADLESS_TRUST: "1"
     steps:
       # Third-party actions are pinned to immutable commits. The comments are
       # human-readable versions; the SHA is the authority.

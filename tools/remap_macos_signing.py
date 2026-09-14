@@ -12,6 +12,14 @@ IDENTITY_NAME = "Remap Local Codesign"
 CERTIFICATE_LIFETIME_DAYS = 3_650
 ARCHIVE_TRANSPORT_PASSWORD = "remap-ephemeral-pipe"
 MAXIMUM_COMMAND_OUTPUT_BYTES = 1_048_576
+# Set to "1" where nobody can answer a macOS authorization dialog (a hosted CI
+# runner). `security add-trusted-cert` into the login keychain, and
+# `security execute-with-privileges`, both raise one, and the gate then waits
+# on it until its timeout. With the variable set, trust is recorded in the
+# System keychain through non-interactive sudo instead, which the hosted
+# runners grant without a password.
+HEADLESS_TRUST_VARIABLE = "REMAP_HEADLESS_TRUST"
+SYSTEM_KEYCHAIN = Path("/Library/Keychains/System.keychain")
 SHA1_PATTERN = re.compile(r"[0-9A-F]{40}\Z")
 SHA256_PATTERN = re.compile(r"[0-9A-F]{64}\Z")
 IDENTITY_PATTERN = re.compile(r'^\s*\d+\)\s+([0-9A-F]{40})\s+"([^"]+)"\s*$')
@@ -277,19 +285,46 @@ def create_identity(keychain: Path) -> None:
         ),
         archive,
     )
-    _ = _run_binary(
-        (
+    _ = _run_binary(trust_arguments(keychain, "codeSign"), certificate)
+
+
+def headless_trust() -> bool:
+    """Whether trust changes must avoid macOS authorization dialogs."""
+    return os.environ.get(HEADLESS_TRUST_VARIABLE) == "1"
+
+
+def trust_arguments(keychain: Path, policy: str) -> tuple[str, ...]:
+    """The command that records root trust for a PEM certificate on stdin.
+
+    Interactive machines record it in the caller's keychain, which macOS
+    confirms with the user. Headless ones record it in the System keychain
+    through non-interactive sudo, because no dialog can be answered there.
+    """
+    if headless_trust():
+        return (
+            "/usr/bin/sudo",
+            "-n",
             "/usr/bin/security",
             "add-trusted-cert",
+            "-d",
             "-r",
             "trustRoot",
             "-p",
-            "codeSign",
+            policy,
             "-k",
-            str(keychain),
+            str(SYSTEM_KEYCHAIN),
             "/dev/stdin",
-        ),
-        certificate,
+        )
+    return (
+        "/usr/bin/security",
+        "add-trusted-cert",
+        "-r",
+        "trustRoot",
+        "-p",
+        policy,
+        "-k",
+        str(keychain),
+        "/dev/stdin",
     )
 
 
