@@ -217,7 +217,10 @@ class NativeProductTaskTests(unittest.TestCase):
 
     def test_dependency_free_make_help_matches_the_typed_task_catalog(self) -> None:
         make_help = subprocess.run(
-            ("make", "help"),
+            # --no-print-directory: this test runs inside `make check`, and a
+            # nested GNU make announces the directory it enters unless told
+            # not to; that line is make's, not the help text's.
+            ("make", "--no-print-directory", "help"),
             cwd=Path(__file__).resolve().parents[2],
             check=True,
             capture_output=True,

@@ -30,7 +30,7 @@ def print_task_help() -> None:
   make verify-macos  Build, launch, and prove the native app remains running
 
 CLI-only installation defaults to PREFIX=~/.local. Native installation asks
-for administrator approval. macOS requires the exact full Xcode build in
+for administrator approval. macOS requires a reviewed Xcode build listed in
 platforms/macos/XCODE_VERSION. Linux selects exactly one supported primary DNS
 link; otherwise use REMAP_LINUX_LINK=<interface index> from its typed candidate
 list. The index identifies the host interface whose DNS scope Remap will own. See

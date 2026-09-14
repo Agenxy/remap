@@ -8,6 +8,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 import zlib
@@ -122,6 +123,9 @@ class PortablePackageTests(unittest.TestCase):
             payload.with_suffix(".json.sig"), signature_bytes
         )
 
+    @unittest.skipUnless(
+        sys.platform == "darwin", "macOS launchctl and xattr semantics"
+    )
     def test_generated_signature_copy_drops_source_attributes(self) -> None:
         signature = self.directory / "release-manifest.json.sig"
         writer = cast(
@@ -176,6 +180,9 @@ class PortablePackageTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "timestamp input is unsafe"):
             normalize_package_timestamps(payload)
 
+    @unittest.skipUnless(
+        sys.platform == "darwin", "macOS launchctl and xattr semantics"
+    )
     def test_package_extended_attributes_are_removed(self) -> None:
         payload = self.directory / "payload"
         child = payload / "child"

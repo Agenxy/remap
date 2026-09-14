@@ -35,7 +35,7 @@ help:
 		'  make verify-macos  Build, launch, and prove the native app remains running' \
 		'' \
 		'CLI-only installation defaults to PREFIX=~/.local. Native installation asks' \
-		'for administrator approval. macOS requires the exact full Xcode build in' \
+		'for administrator approval. macOS requires a reviewed Xcode build listed in' \
 		'platforms/macos/XCODE_VERSION. Linux selects exactly one supported primary DNS' \
 		'link; otherwise use REMAP_LINUX_LINK=<interface index> from its typed candidate' \
 		'list. The index identifies the host interface whose DNS scope Remap will own. See' \
@@ -47,8 +47,8 @@ _require-mise:
 			'mise $(MISE_VERSION) is required to install Remap development tools.' \
 			'Install that exact release from:' \
 			'https://github.com/jdx/mise/releases/tag/v$(MISE_VERSION)' \
-			'Native macOS installation also requires the exact full Xcode build' \
-			'pinned in platforms/macos/XCODE_VERSION; command-line tools alone are insufficient.' \
+			'Native macOS installation also requires a reviewed Xcode build' \
+			'listed in platforms/macos/XCODE_VERSION; command-line tools alone are insufficient.' \
 			'Then run make setup-install and retry your command.' >&2; \
 		exit 2; \
 	fi
