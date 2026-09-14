@@ -12,7 +12,7 @@ start with an ADR rather than an implementation surprise.
 
 Remap pins tools exactly with `mise`. Development requires GNU Make and the
 exact `mise` release named by `make setup`. Native macOS work also requires the
-full Xcode version and build in
+full Xcode version, at one of the reviewed builds listed in
 [`platforms/macos/XCODE_VERSION`](platforms/macos/XCODE_VERSION); Xcode's
 command-line-tools-only package is insufficient, although the IDE need not be
 opened. The supported entry point installs every other pinned development

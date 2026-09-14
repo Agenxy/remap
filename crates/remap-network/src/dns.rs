@@ -204,7 +204,7 @@ fn add_mapping_answers(
                 RData::CNAME(CNAME(target)),
             ));
         }
-        MappingTarget::Http(_) => {
+        MappingTarget::Http(_) | MappingTarget::Peer(_) => {
             if let Some(address) = policy.routed_ipv4 {
                 add_address(
                     response,
@@ -311,6 +311,27 @@ mod tests {
             };
             assert_eq!(Message::from_vec(&bytes)?.answers.len(), 1);
         }
+        Ok(())
+    }
+
+    // A peer mapping is routed by the gateway exactly as an HTTP one, so DNS
+    // sends the browser to the gateway: nothing about the peer's address
+    // reaches a DNS answer, then or ever.
+    #[test]
+    fn routed_peer_returns_the_gateway_like_http() -> Result<(), Box<dyn std::error::Error>> {
+        let engine = engine(
+            "hub",
+            MappingTarget::parse_with_http_policy(
+                "supgang://MacSolis/dibs",
+                remap_core::HostHeaderPolicy::PreserveClient,
+            )?,
+        )?;
+        let DnsDecision::Respond(bytes) = engine.decide(&query("hub.", RecordType::A)?)? else {
+            return Err("peer mapping was forwarded".into());
+        };
+        let answers = Message::from_vec(&bytes)?.answers;
+        assert_eq!(answers.len(), 1);
+        assert!(answers[0].to_string().contains("127.0.0.1"));
         Ok(())
     }
 

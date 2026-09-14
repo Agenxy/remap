@@ -420,31 +420,14 @@ async fn prepare_install_with(
         && record
             .as_ref()
             .is_some_and(|value| value.current == generation);
-    let mut publications = if no_op {
-        Vec::new()
-    } else {
-        publication_effects(operation, previous.as_deref(), Some(&next))
-    };
-    if operation == Operation::Update {
-        if let Some(installed) = record.as_ref() {
-            publications.extend(crate::lifecycle_effects::update_publications(
-                &installed.current,
-                &generation,
-                previous.as_deref(),
-                &next,
-            ));
-        }
-    }
-    let publication_link_count = publications.len();
-    if operation == Operation::Install {
-        publications.extend(directory_publication_effects(
-            &generation,
-            "create",
-            None,
-            Some(&next),
-        )?);
-        sort_publications(&mut publications);
-    }
+    let (publications, publication_link_count) = install_publications(
+        operation,
+        no_op,
+        record.as_ref(),
+        &generation,
+        previous.as_deref(),
+        &next,
+    )?;
     let effects = if no_op {
         Vec::new()
     } else {
@@ -494,6 +477,43 @@ async fn prepare_install_with(
         socket_reservation,
         state_digest,
     })
+}
+
+/// The publications an install or update announces, and how many of them
+/// are link publications (the directory publications an install appends are
+/// sorted in after that count is taken).
+fn install_publications(
+    operation: Operation,
+    no_op: bool,
+    record: Option<&InstallRecord>,
+    generation: &Generation,
+    previous: Option<&str>,
+    next: &str,
+) -> io::Result<(Vec<PublicationEffect>, usize)> {
+    let mut publications = if no_op {
+        Vec::new()
+    } else {
+        publication_effects(operation, previous, Some(next))
+    };
+    if let (Operation::Update, Some(installed)) = (operation, record) {
+        publications.extend(crate::lifecycle_effects::update_publications(
+            &installed.current,
+            generation,
+            previous,
+            next,
+        ));
+    }
+    let publication_link_count = publications.len();
+    if operation == Operation::Install {
+        publications.extend(directory_publication_effects(
+            generation,
+            "create",
+            None,
+            Some(next),
+        )?);
+        sort_publications(&mut publications);
+    }
+    Ok((publications, publication_link_count))
 }
 
 fn approved_link(

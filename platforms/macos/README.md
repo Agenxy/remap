@@ -52,8 +52,8 @@ supported installer workflow root-pins and re-verifies the package before
 invoking Apple Installer; it never asks the user to disable Gatekeeper globally.
 
 The package builds and tests with `xcrun swift`; the Xcode IDE is optional.
-The exact full Xcode version and build in [`XCODE_VERSION`](XCODE_VERSION) must
-be selected. Apple's command-line-tools-only package is not sufficient for the
+The full Xcode version in [`XCODE_VERSION`](XCODE_VERSION), at one of the
+reviewed builds that file lists, must be selected. Apple's command-line-tools-only package is not sufficient for the
 native source installation.
 The repository's `make install` task builds and locally signs the source product,
 installs, activates, probes, and can transactionally roll back this source path.

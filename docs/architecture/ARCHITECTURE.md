@@ -103,10 +103,12 @@ Resolution order is deterministic:
 2. Wildcard with the greatest number of suffix labels.
 3. Stable lexical order as a defensive tie-breaker.
 
-Destinations are direct IP addresses, DNS aliases, or HTTP upstreams. HTTP host
-behavior is explicit per mapping: preserve the client-facing host or use the
-upstream host. Remap never silently rewrites bodies, redirects, cookies, CSP,
-CORS, or absolute URLs.
+Destinations are direct IP addresses, DNS aliases, HTTP upstreams, or a
+service on a Supgang peer (`supgang://<peer>/<service>`, ADR-0016), which the
+gateway resolves through Supgang when a request is routed and verifies against
+the key the peer advertised. HTTP host behavior is explicit per mapping:
+preserve the client-facing host or use the upstream host. Remap never silently
+rewrites bodies, redirects, cookies, CSP, CORS, or absolute URLs.
 
 The initial name policy accepts ASCII hostname labels and removes one terminal
 DNS root dot. Unicode presentation names remain deferred until one IDNA policy

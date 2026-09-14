@@ -7,9 +7,9 @@
     "app:check": "biome check crates/remap-mcp/app tools tests/app playwright.config.ts && tsc --noEmit && bun tools/build-app.ts --check && env -u NO_COLOR playwright test && env -u NO_COLOR playwright test tests/app/dashboard.spec.ts -g 'applies host layout changes' --repeat-each=20"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.10",
-    "@playwright/test": "1.62.1",
-    "@types/node": "26.3.0",
+    "@biomejs/biome": "2.5.13",
+    "@playwright/test": "1.63.0",
+    "@types/node": "26.5.1",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   }

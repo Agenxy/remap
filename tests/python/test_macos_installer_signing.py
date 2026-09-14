@@ -2,19 +2,33 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import cast, override
 from unittest import mock
 
-from tools import remap_macos_installer_signing
+from tools import remap_macos_installer_signing, remap_macos_signing
 from tools.remap_macos_installer_signing import LocalInstallerSigningIdentity
 
 
 class MacOSInstallerSigningTests(unittest.TestCase):
+    @override
+    def setUp(self) -> None:
+        # Interactive-machine expectations; the gate's headless variable must
+        # not leak in from CI.
+        variable = remap_macos_signing.HEADLESS_TRUST_VARIABLE
+        saved = os.environ.pop(variable, None)
+
+        def restore() -> None:
+            if saved is not None:
+                os.environ[variable] = saved
+
+        self.addCleanup(restore)
+
     def test_policy_is_installer_only_and_durable(self) -> None:
         configuration = remap_macos_installer_signing.openssl_configuration()
 

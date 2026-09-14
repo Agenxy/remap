@@ -17,7 +17,7 @@ import tomllib
 
 from tools.remap_app import build as build_native_app
 from tools.remap_app import launch as launch_native_app
-from tools.remap_freshness import verify_selected_xcode
+from tools.remap_freshness import mise_tool_version, verify_selected_xcode
 from tools.remap_help import print_task_help
 from tools.remap_linux_install import (
     install_or_update as install_or_update_linux,
@@ -55,7 +55,8 @@ from tools.remap_release_model import ArtifactSpec
 ROOT = Path(__file__).resolve().parent.parent
 MISE_DOCUMENT = tomllib.loads((ROOT / "mise.toml").read_text(encoding="utf-8"))
 MISE_TOOLS = cast("dict[str, object]", MISE_DOCUMENT["tools"])
-RUST_TOOLCHAIN = cast("str", MISE_TOOLS["rust"])
+
+RUST_TOOLCHAIN = mise_tool_version(MISE_TOOLS["rust"])
 APP_PATHS = (
     "crates/remap-mcp/app",
     "tools",

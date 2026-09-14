@@ -1,12 +1,13 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hyper::Uri;
 use hyper::server::conn::http1;
@@ -21,6 +22,7 @@ use tokio::task::JoinSet;
 use tokio::time::{sleep, timeout, timeout_at};
 use tower_service::Service;
 
+use crate::peer::{PEER_CACHE_LIMIT, PeerResolver, PinnedVerifier, SupgangResolver};
 use crate::proxy::{ProxyClient, route};
 use crate::{NetworkError, RuntimeIdentity, SnapshotStore};
 
@@ -96,6 +98,8 @@ pub struct GatewayRuntime {
     config: GatewayRuntimeConfig,
     local_addr: SocketAddr,
     identity: Option<RuntimeIdentity>,
+    peers: Option<Arc<dyn PeerResolver>>,
+    pinned: PinnedClients,
 }
 
 /// Privileged cleartext HTTP socket before async-runtime attachment.
@@ -213,6 +217,11 @@ impl GatewayRuntime {
         let listener = TcpListener::from_std(bindings.listener)
             .map_err(|error| NetworkError::io("HTTP runtime attachment", error))?;
         let client = build_client(&config, bindings.local_addr)?;
+        let pinned = PinnedClients::new(&config, bindings.local_addr);
+        // Supgang is looked for once, here: a machine without it routes a
+        // peer mapping to an error that says so (ADR-0016).
+        let peers =
+            SupgangResolver::discover().map(|resolver| Arc::new(resolver) as Arc<dyn PeerResolver>);
         Ok(Self {
             listener,
             client,
@@ -221,7 +230,17 @@ impl GatewayRuntime {
             config,
             local_addr: bindings.local_addr,
             identity,
+            peers,
+            pinned,
         })
+    }
+
+    /// Replaces how Supgang peers are resolved, for a test or another
+    /// address plane.
+    #[must_use]
+    pub fn with_peer_resolver(mut self, resolver: Arc<dyn PeerResolver>) -> Self {
+        self.peers = Some(resolver);
+        self
     }
 
     /// Returns the bound cleartext HTTP address.
@@ -264,6 +283,10 @@ impl GatewayRuntime {
             let connection_shutdown = shutdown.clone();
             let config = self.config.clone();
             let identity = self.identity.clone();
+            let routing = PeerRouting {
+                resolver: self.peers.clone(),
+                clients: self.pinned.clone(),
+            };
             connections.spawn(async move {
                 let _permit = permit;
                 serve_connection(
@@ -272,6 +295,7 @@ impl GatewayRuntime {
                     snapshots,
                     config,
                     identity,
+                    routing,
                     connection_shutdown,
                 )
                 .await;
@@ -281,22 +305,126 @@ impl GatewayRuntime {
     }
 }
 
-fn build_client(
-    config: &GatewayRuntimeConfig,
+/// What a connection needs to route a peer mapping: how to ask where the
+/// peer is, and the TLS client that accepts exactly the key the answer
+/// advertised.
+#[derive(Clone)]
+pub(crate) struct PeerRouting {
+    pub(crate) resolver: Option<Arc<dyn PeerResolver>>,
+    pub(crate) clients: PinnedClients,
+}
+
+/// The most TLS clients kept for pinned peers at once; past it the least
+/// recently used is dropped with its pooled connections.
+const MAX_PINNED_CLIENTS: usize = 64;
+
+type PinnedClientTable = HashMap<[u8; 32], (ProxyClient, Instant)>;
+
+/// One TLS client per advertised key, built on first use and dropped when
+/// unused for [`PEER_CACHE_LIMIT`] or when the bound is reached (ADR-0016).
+/// Each client's connection pool therefore holds only connections verified
+/// against its key: a pooled connection can never serve a different peer.
+#[derive(Clone)]
+pub(crate) struct PinnedClients {
+    config: GatewayRuntimeConfig,
     local_addr: SocketAddr,
-) -> Result<ProxyClient, NetworkError> {
+    clients: Arc<Mutex<PinnedClientTable>>,
+}
+
+impl fmt::Debug for PinnedClients {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let held = self.clients.lock().map_or(0, |clients| clients.len());
+        formatter
+            .debug_struct("PinnedClients")
+            .field("held", &held)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PinnedClients {
+    fn new(config: &GatewayRuntimeConfig, local_addr: SocketAddr) -> Self {
+        Self {
+            config: config.clone(),
+            local_addr,
+            clients: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// The client for one key, built if this key has not been dialled lately.
+    pub(crate) fn client_for(&self, pin: [u8; 32]) -> Result<ProxyClient, NetworkError> {
+        let now = Instant::now();
+        let mut clients = self
+            .clients
+            .lock()
+            .map_err(|_| NetworkError::Configuration("the pinned client table is poisoned"))?;
+        clients.retain(|_, (_, used)| now.duration_since(*used) < PEER_CACHE_LIMIT);
+        if let Some((client, used)) = clients.get_mut(&pin) {
+            *used = now;
+            return Ok(client.clone());
+        }
+        if clients.len() >= MAX_PINNED_CLIENTS {
+            let oldest = clients
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(key, _)| *key);
+            if let Some(oldest) = oldest {
+                clients.remove(&oldest);
+            }
+        }
+        let client = build_pinned_client(&self.config, self.local_addr, pin)?;
+        clients.insert(pin, (client.clone(), now));
+        Ok(client)
+    }
+}
+
+fn connector(config: &GatewayRuntimeConfig, local_addr: SocketAddr) -> SelfRejectingConnector {
     let mut connector = HttpConnector::new();
     connector.enforce_http(false);
     connector.set_connect_timeout(Some(config.upstream_timeout));
     connector.set_nodelay(true);
-    let guarded = SelfRejectingConnector::new(connector, local_addr);
+    SelfRejectingConnector::new(connector, local_addr)
+}
+
+fn build_client(
+    config: &GatewayRuntimeConfig,
+    local_addr: SocketAddr,
+) -> Result<ProxyClient, NetworkError> {
     let https = HttpsConnectorBuilder::new()
         .with_native_roots()
         .map_err(|error| NetworkError::io("native TLS trust loading", error))?
         .https_or_http()
         .enable_http1()
         .enable_http2()
-        .wrap_connector(guarded);
+        .wrap_connector(connector(config, local_addr));
+    Ok(Client::builder(TokioExecutor::new())
+        .pool_idle_timeout(config.pool_idle_timeout)
+        .pool_max_idle_per_host(8)
+        .build(https))
+}
+
+/// A client whose every TLS session is verified against one advertised key
+/// and nothing else: no system root, no other pin.
+fn build_pinned_client(
+    config: &GatewayRuntimeConfig,
+    local_addr: SocketAddr,
+    pin: [u8; 32],
+) -> Result<ProxyClient, NetworkError> {
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let verifier = PinnedVerifier::for_pin(pin, Arc::clone(&provider));
+    let tls = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|error| {
+            NetworkError::io("TLS protocol versions", io::Error::other(error.to_string()))
+        })?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth();
+    let https = HttpsConnectorBuilder::new()
+        .with_tls_config(tls)
+        .https_only()
+        .enable_http1()
+        .enable_http2()
+        .wrap_connector(connector(config, local_addr));
     Ok(Client::builder(TokioExecutor::new())
         .pool_idle_timeout(config.pool_idle_timeout)
         .pool_max_idle_per_host(8)
@@ -309,6 +437,7 @@ async fn serve_connection(
     snapshots: SnapshotStore,
     config: GatewayRuntimeConfig,
     identity: Option<RuntimeIdentity>,
+    routing: PeerRouting,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let service = service_fn(move |request| {
@@ -318,6 +447,7 @@ async fn serve_connection(
             snapshots.clone(),
             config.upstream_timeout,
             identity.clone(),
+            routing.clone(),
         )
     });
     let mut builder = http1::Builder::new();

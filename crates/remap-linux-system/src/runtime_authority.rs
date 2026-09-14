@@ -205,7 +205,15 @@ mod tests {
         let identity = Uuid::new_v4();
         writeln!(file, "{identity}")?;
         file.sync_all()?;
-        validate(&file, false)?;
+        // A lease is root's file, and validate says so: run by anyone else,
+        // as on a hosted runner, the exact-metadata check is what is being
+        // tested, and it must refuse the file that everything else here
+        // accepts. Same shape as cleanup's ownership tests.
+        if nix::unistd::Uid::effective().is_root() {
+            validate(&file, false)?;
+        } else {
+            assert!(validate(&file, false).is_err());
+        }
         assert_eq!(read_identity(&mut file)?, identity);
         let held = Flock::lock(file, FlockArg::LockExclusiveNonblock)
             .map_err(|(_file, error)| std::io::Error::other(error))?;

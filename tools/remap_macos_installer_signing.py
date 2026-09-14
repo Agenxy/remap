@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from tools import remap_macos_signing as codesigning
 from tools.remap_macos_signing import login_keychain
 
 IDENTITY_NAME = "Remap Local Installer"
@@ -255,20 +256,8 @@ def create_identity(keychain: Path) -> None:
         ),
         archive,
     )
-    _ = run_binary(
-        (
-            "/usr/bin/security",
-            "add-trusted-cert",
-            "-r",
-            "trustRoot",
-            "-p",
-            "basic",
-            "-k",
-            str(keychain),
-            "/dev/stdin",
-        ),
-        certificate,
-    )
+    codesigning.allow_apple_tools(keychain, run_binary)
+    _ = run_binary(codesigning.trust_arguments(keychain, "basic"), certificate)
 
 
 def openssl_configuration() -> str:
@@ -395,9 +384,16 @@ def _run(arguments: tuple[str, ...]) -> None:
 
 
 def _run_authorized(arguments: tuple[str, ...], input_bytes: bytes) -> None:
+    # A hosted runner cannot answer the authorization dialog that
+    # execute-with-privileges raises; it grants passwordless sudo instead.
+    elevated = (
+        ("/usr/bin/sudo", "-n", *arguments)
+        if codesigning.headless_trust()
+        else ("/usr/bin/security", "execute-with-privileges", *arguments)
+    )
     try:
         _ = subprocess.run(
-            ("/usr/bin/security", "execute-with-privileges", *arguments),
+            elevated,
             check=True,
             input=input_bytes,
             capture_output=True,

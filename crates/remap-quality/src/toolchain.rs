@@ -38,7 +38,25 @@ fn toml_value<'source>(source: &'source str, key: &str) -> Option<&'source str> 
         if candidate.trim() != key {
             return None;
         }
-        value.trim().strip_prefix('"')?.strip_suffix('"')
+        quoted(value).or_else(|| inline_table_version(value))
+    })
+}
+
+/// A bare `"1.98.1"` assignment.
+fn quoted(value: &str) -> Option<&str> {
+    value.trim().strip_prefix('"')?.strip_suffix('"')
+}
+
+/// The `{ version = "1.98.1", components = [...] }` form mise uses when a
+/// tool carries options, such as the rustfmt and clippy components a fresh
+/// CI runner's minimal rustup profile does not include.
+fn inline_table_version(value: &str) -> Option<&str> {
+    let body = value.trim().strip_prefix('{')?.strip_suffix('}')?;
+    body.split(',').find_map(|field| {
+        let (name, assigned) = field.split_once('=')?;
+        (name.trim() == "version")
+            .then(|| quoted(assigned))
+            .flatten()
     })
 }
 
@@ -49,5 +67,16 @@ mod tests {
     #[test]
     fn reads_exact_version_assignments() {
         assert_eq!(toml_value("rust = \"1.97.1\"", "rust"), Some("1.97.1"));
+    }
+
+    #[test]
+    fn reads_the_version_of_a_tool_with_options() {
+        assert_eq!(
+            toml_value(
+                "rust = { version = \"1.98.1\", components = [\"rustfmt\", \"clippy\"] }",
+                "rust"
+            ),
+            Some("1.98.1")
+        );
     }
 }

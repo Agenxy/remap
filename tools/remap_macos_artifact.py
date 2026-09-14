@@ -19,7 +19,7 @@ def expected_macos_sdk(root: Path) -> str:
         .read_text(encoding="utf-8")
         .splitlines()
     )
-    if len(lines) != 2 or _VERSION.fullmatch(lines[0]) is None:
+    if len(lines) < 2 or _VERSION.fullmatch(lines[0]) is None:
         raise RuntimeError("the repository macOS SDK pin is malformed")
     return lines[0]
 

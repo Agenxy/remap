@@ -117,8 +117,7 @@ fn classify_resolv_conf(system_bus_available: bool) -> ResolverEnvironment {
         .is_ok_and(|metadata| metadata.file_type().is_symlink())
     {
         let resolved_target = std::fs::read_link(path)
-            .ok()
-            .is_some_and(|target| target.to_string_lossy().contains("systemd/resolve"));
+            .is_ok_and(|target| target.to_string_lossy().contains("systemd/resolve"));
         if resolved_target {
             return environment(
                 ResolverBackendKind::SystemdResolved,

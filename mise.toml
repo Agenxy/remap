@@ -1,11 +1,11 @@
 [tools]
-rust = "1.98.0"
+rust = { version = "1.98.1", components = ["rustfmt", "clippy"] }
 python = "3.14.7"
-bun = "1.4.0"
-uv = "0.12.5"
-ruff = "0.16.4"
-swiftformat = "0.62.1"
+bun = "1.4.2"
+uv = "0.12.13"
+ruff = "0.16.7"
+swiftformat = "0.63.0"
 swiftlint = "0.65.1"
-syft = "1.51.0"
-"pipx:basedpyright" = "1.39.10"
+syft = "1.51.1"
+"pipx:basedpyright" = "1.40.1"
 "cargo:cargo-deny" = "0.20.2"

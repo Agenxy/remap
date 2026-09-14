@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import cast
 
 from tools import remap_macos_installer_signing as local_signing
+from tools import remap_macos_signing as codesigning
 from tools.remap_macos_signing import login_keychain
 
 IDENTITY_NAME = "Remap Release Installer"
@@ -105,18 +106,7 @@ def _ensure_builder_trust(identity: ReleaseInstallerSigningIdentity) -> None:
         )
     ).encode("ascii")
     _ = local_signing.run_binary(
-        (
-            "/usr/bin/security",
-            "add-trusted-cert",
-            "-r",
-            "trustRoot",
-            "-p",
-            "basic",
-            "-k",
-            str(identity.keychain),
-            "/dev/stdin",
-        ),
-        certificate,
+        codesigning.trust_arguments(identity.keychain, "basic"), certificate
     )
     if not _builder_trust_is_exact(identity):
         raise RuntimeError("macOS did not retain exact release Installer builder trust")

@@ -120,8 +120,8 @@ request a fresh install, update, or uninstall preview.
 ### macOS source build
 
 The native macOS source installation requires macOS 15 or later, GNU Make,
-`mise` 2026.8.14, and the exact full Xcode build recorded in
-[`platforms/macos/XCODE_VERSION`](platforms/macos/XCODE_VERSION). Xcode's
+`mise` 2026.9.8, and the full Xcode version at one of the reviewed builds
+recorded in [`platforms/macos/XCODE_VERSION`](platforms/macos/XCODE_VERSION). Xcode's
 command-line-tools-only package is insufficient because Remap builds and signs
 native Swift products. The Xcode IDE does not need to be opened.
 
@@ -261,7 +261,7 @@ host clears `/run`. `make uninstall-cli` removes only a CLI-only installation.
 
 ## Architecture
 
-Rust 1.98.0 and edition 2024 own the portable engine, daemon, CLI, DNS protocol,
+Rust 1.98.1 and edition 2024 own the portable engine, daemon, CLI, DNS protocol,
 gateway, persistence, and synchronization. Swift remains deliberately present
 for the macOS app, Network Extension entry point, Service Management, XPC,
 Keychain, Secure Enclave, signing, and packaging.

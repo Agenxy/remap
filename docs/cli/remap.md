@@ -21,6 +21,7 @@ database, and Unix control socket are user-owned and permission restricted. Use
 remap set atlas http://127.0.0.1:5173
 remap set database 192.168.1.40
 remap set '*.lab' https://example.com:9443 --host-header use-upstream
+remap set hub supgang://MacSolis/dibs --host-header preserve-client
 remap list --all
 remap get atlas
 remap resolve service.lab

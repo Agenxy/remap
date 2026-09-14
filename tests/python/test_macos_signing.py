@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import cast, override
 from unittest import mock
 
 from tools import remap_macos_signing
@@ -15,6 +17,64 @@ from tools.remap_macos_signing import LocalCodeSigningIdentity
 
 class MacOSSigningTests(unittest.TestCase):
     """Keep local identity selection exact and fail closed on ambiguity."""
+
+    @override
+    def setUp(self) -> None:
+        # These tests describe the interactive machine. CI sets the headless
+        # variable for the gate as a whole, and it must not leak in here.
+        variable = remap_macos_signing.HEADLESS_TRUST_VARIABLE
+        saved = os.environ.pop(variable, None)
+
+        def restore() -> None:
+            if saved is not None:
+                os.environ[variable] = saved
+
+        self.addCleanup(restore)
+
+    def test_headless_trust_uses_the_system_keychain_and_admits_apple_tools(
+        self,
+    ) -> None:
+        calls: list[tuple[tuple[str, ...], bytes]] = []
+        certificate = _pem("CERTIFICATE", b"certificate")
+        private_key = _pem("PRIVATE KEY", b"private")
+
+        def run_binary(arguments: tuple[str, ...], input_bytes: bytes) -> bytes:
+            calls.append((arguments, input_bytes))
+            return certificate + private_key if "req" in arguments else b""
+
+        with tempfile.TemporaryDirectory() as home:
+            _ = (Path(home) / "remap-headless.keychain-password").write_text(
+                "secret-for-this-run\n", encoding="utf-8"
+            )
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        remap_macos_signing.HEADLESS_TRUST_VARIABLE: "1",
+                        "RUNNER_TEMP": home,
+                    },
+                ),
+                mock.patch(
+                    "tools.remap_macos_signing._run_binary", side_effect=run_binary
+                ),
+                mock.patch(
+                    "tools.remap_macos_signing._make_archive", return_value=b"archive"
+                ),
+            ):
+                remap_macos_signing.create_identity(
+                    Path(home) / "remap-headless.keychain-db"
+                )
+
+        trusted = next(call for call in calls if "add-trusted-cert" in call[0])
+        partition = next(call for call in calls if "set-key-partition-list" in call[0])
+        self.assertEqual(trusted[0][:2], ("/usr/bin/sudo", "-n"))
+        self.assertIn("-d", trusted[0])
+        self.assertIn(str(remap_macos_signing.SYSTEM_KEYCHAIN), trusted[0])
+        self.assertEqual(trusted[1], certificate)
+        self.assertEqual(
+            partition[0][partition[0].index("-k") + 1], "secret-for-this-run"
+        )
+        self.assertIn("apple-tool:,apple:,codesign:", partition[0])
 
     def test_openssl_policy_is_a_durable_codesigning_root(self) -> None:
         configuration = remap_macos_signing.openssl_configuration()
