@@ -91,12 +91,12 @@ payload, must match across two clean builds.
 
 ## SBOM coverage and evidence classes
 
-[Syft 1.51.0](https://github.com/anchore/syft/releases/tag/v1.51.0) is the exact
+[Syft 1.51.1](https://github.com/anchore/syft/releases/tag/v1.51.1) is the exact
 current stable release and is pinned in `mise.toml`. Syft scans the final
 artifact set and the copied dependency authorities. Remap removes Syft's random
 serial number and timestamp, assigns the stable product identity, canonicalizes
 unordered content, then applies Remap's strict structural and cross-reference
-validator. Syft's `convert` command is not used because version 1.51.0 labels it
+validator. Syft's `convert` command is not used because version 1.51.1 labels it
 experimental with a warning, and release warnings are fatal.
 
 Every component has exactly one `org.agenxy.remap:evidence-class` property:
@@ -113,7 +113,7 @@ Every component has exactly one `org.agenxy.remap:evidence-class` property:
 - `manually-declared-esbuild` identifies the embedded MCP App and the exact
   first-party inputs reported by esbuild.
 
-Syft 1.51.0 catalogs the locked Cargo graph, but it does not catalog Bun's
+Syft 1.51.1 catalogs the locked Cargo graph, but it does not catalog Bun's
 lockfile or a Swift package with no external resolution file. Remap does not
 hide those gaps. SwiftPM must report zero external packages until an approved
 Swift advisory scanner is integrated. The esbuild input graph must remain

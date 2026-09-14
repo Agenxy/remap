@@ -261,7 +261,7 @@ host clears `/run`. `make uninstall-cli` removes only a CLI-only installation.
 
 ## Architecture
 
-Rust 1.98.0 and edition 2024 own the portable engine, daemon, CLI, DNS protocol,
+Rust 1.98.1 and edition 2024 own the portable engine, daemon, CLI, DNS protocol,
 gateway, persistence, and synchronization. Swift remains deliberately present
 for the macOS app, Network Extension entry point, Service Management, XPC,
 Keychain, Secure Enclave, signing, and packaging.
