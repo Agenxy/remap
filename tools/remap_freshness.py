@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from http.client import HTTPResponse
@@ -150,13 +151,19 @@ def exact_semver(value: str) -> bool:
 
 def fetch_json(url: str) -> dict[str, object]:
     """Read one bounded JSON registry response with an explicit identity."""
-    request = Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "Agenxy-Remap-dependency-audit",
-        },
-    )
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Agenxy-Remap-dependency-audit",
+    }
+    # api.github.com allows sixty anonymous requests an hour per address, and
+    # the hosted runners share addresses, so the mise release lookup was
+    # refused with 403 on CI. The workflow's token lifts that to the
+    # authenticated limit; a developer machine without one keeps the anonymous
+    # path.
+    token = os.environ.get("GITHUB_TOKEN")
+    if token and url.startswith("https://api.github.com/"):
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(url, headers=headers)
     response = cast("HTTPResponse", urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS))
     try:
         data = response.read(MAXIMUM_RESPONSE_BYTES + 1)

@@ -24,6 +24,9 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: "1"
+      # The freshness gate asks api.github.com for the latest mise release;
+      # anonymous requests share a per-address quota across hosted runners.
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       # Third-party actions are pinned to immutable commits. The comments are
       # human-readable versions; the SHA is the authority.
