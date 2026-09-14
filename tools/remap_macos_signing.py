@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -293,7 +294,7 @@ def create_identity(keychain: Path) -> None:
         ),
         archive,
     )
-    allow_apple_tools(keychain)
+    allow_apple_tools(keychain, _run_binary)
     _ = _run_binary(trust_arguments(keychain, "codeSign"), certificate)
 
 
@@ -348,19 +349,22 @@ def headless_keychain() -> Path:
     return keychain
 
 
-def allow_apple_tools(keychain: Path) -> None:
+def allow_apple_tools(
+    keychain: Path, run: Callable[[tuple[str, ...], bytes], bytes]
+) -> None:
     """Let Apple's signing tools use every key in the headless keychain.
 
     `security import -T` names the tool, and macOS still asks the user the
     first time that tool reaches for the key unless the key's partition list
     says Apple tools may. Interactive machines keep the question; headless
-    ones have this run's password and answer it here.
+    ones have this run's password and answer it here. `run` is the caller's
+    own binary runner, so its tests observe this call like the import.
     """
     if not headless_trust():
         return
     secret = _headless_keychain_home() / "remap-headless.keychain-password"
     password = secret.read_text(encoding="utf-8").strip()
-    _run(
+    _ = run(
         (
             "/usr/bin/security",
             "set-key-partition-list",
@@ -370,7 +374,8 @@ def allow_apple_tools(keychain: Path) -> None:
             "-k",
             password,
             str(keychain),
-        )
+        ),
+        b"",
     )
 
 
