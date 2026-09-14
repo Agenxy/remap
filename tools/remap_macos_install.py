@@ -85,6 +85,10 @@ SYSTEM_PUBLIC_DIRECTORIES = (
 )
 MAX_HELPER_OUTPUT_BYTES = 1_048_576
 HELPER_TIMEOUT_SECONDS = 120
+# A cold release build of remap and remapd on a hosted runner takes longer than
+# the helper timeout above, which is sized for a native helper answering, not
+# for cargo; the portable-package tool already allows twenty minutes.
+BUILD_TIMEOUT_SECONDS = 1_200
 CDHASH_PATTERN = re.compile(r"[0-9a-f]{40,64}\Z")
 
 
@@ -977,5 +981,5 @@ def _run(
         cwd=root,
         env=environment,
         check=True,
-        timeout=HELPER_TIMEOUT_SECONDS,
+        timeout=BUILD_TIMEOUT_SECONDS,
     )
