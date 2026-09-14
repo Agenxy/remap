@@ -256,6 +256,7 @@ def create_identity(keychain: Path) -> None:
         ),
         archive,
     )
+    codesigning.allow_apple_tools(keychain)
     _ = run_binary(codesigning.trust_arguments(keychain, "basic"), certificate)
 
 

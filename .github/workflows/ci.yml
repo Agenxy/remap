@@ -45,6 +45,11 @@ jobs:
       - name: Install Linux documentation renderer
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes mandoc
+      # The Linux helper refuses state whose ancestors other users can write,
+      # and /tmp is exactly that; the runner's own temp directory is not.
+      - name: Give the Linux tests an owner-only temporary directory
+        if: runner.os == 'Linux'
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Complete release gate
         run: make check
       - name: Prove the release gate did not rewrite tracked inputs

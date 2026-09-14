@@ -67,7 +67,15 @@ def ensure_local_codesigning_identity() -> LocalCodeSigningIdentity:
 
 
 def login_keychain() -> Path:
-    """Resolve the current user's login keychain without assuming its location."""
+    """Resolve the keychain the local identities live in.
+
+    On a machine with a user it is the login keychain. Headless, it is a
+    keychain of this tool's own with a password only this run knows, because
+    a key in the login keychain can only be used by codesign after the user
+    approves it in a dialog nobody is there to answer.
+    """
+    if headless_trust():
+        return headless_keychain()
     output = _capture(("/usr/bin/security", "login-keychain"))
     value = output.strip()
     if len(value) >= 2 and value[0] == value[-1] == '"':
@@ -285,12 +293,85 @@ def create_identity(keychain: Path) -> None:
         ),
         archive,
     )
+    allow_apple_tools(keychain)
     _ = _run_binary(trust_arguments(keychain, "codeSign"), certificate)
 
 
 def headless_trust() -> bool:
     """Whether trust changes must avoid macOS authorization dialogs."""
     return os.environ.get(HEADLESS_TRUST_VARIABLE) == "1"
+
+
+def _headless_keychain_home() -> Path:
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    return Path(runner_temp) if runner_temp else Path.home() / "Library/Keychains"
+
+
+def headless_keychain() -> Path:
+    """Create once, then return, a keychain this tool owns and can unlock.
+
+    Its password is random, generated on creation, and kept beside it in a
+    file only this user can read, because every tool in one gate run is a
+    separate process and each must be able to unlock the keychain and record
+    key partition lists without anybody typing.
+    """
+    home = _headless_keychain_home()
+    keychain = home / "remap-headless.keychain-db"
+    secret = home / "remap-headless.keychain-password"
+    if keychain.is_file() and secret.is_file():
+        password = secret.read_text(encoding="utf-8").strip()
+        _run(("/usr/bin/security", "unlock-keychain", "-p", password, str(keychain)))
+        return keychain
+    password = os.urandom(24).hex()
+    secret.touch(mode=0o600, exist_ok=False)
+    _ = secret.write_text(password + "\n", encoding="utf-8")
+    _run(("/usr/bin/security", "create-keychain", "-p", password, str(keychain)))
+    # Never lock on a timer or on sleep: the gate is long, and a locked
+    # keychain turns into the very dialog this exists to avoid.
+    _run(("/usr/bin/security", "set-keychain-settings", str(keychain)))
+    _run(("/usr/bin/security", "unlock-keychain", "-p", password, str(keychain)))
+    existing = _capture(
+        ("/usr/bin/security", "list-keychains", "-d", "user")
+    ).splitlines()
+    others = [line.strip().strip('"') for line in existing if line.strip()]
+    _run(
+        (
+            "/usr/bin/security",
+            "list-keychains",
+            "-d",
+            "user",
+            "-s",
+            str(keychain),
+            *others,
+        )
+    )
+    return keychain
+
+
+def allow_apple_tools(keychain: Path) -> None:
+    """Let Apple's signing tools use every key in the headless keychain.
+
+    `security import -T` names the tool, and macOS still asks the user the
+    first time that tool reaches for the key unless the key's partition list
+    says Apple tools may. Interactive machines keep the question; headless
+    ones have this run's password and answer it here.
+    """
+    if not headless_trust():
+        return
+    secret = _headless_keychain_home() / "remap-headless.keychain-password"
+    password = secret.read_text(encoding="utf-8").strip()
+    _run(
+        (
+            "/usr/bin/security",
+            "set-key-partition-list",
+            "-S",
+            "apple-tool:,apple:,codesign:",
+            "-s",
+            "-k",
+            password,
+            str(keychain),
+        )
+    )
 
 
 def trust_arguments(keychain: Path, policy: str) -> tuple[str, ...]:
