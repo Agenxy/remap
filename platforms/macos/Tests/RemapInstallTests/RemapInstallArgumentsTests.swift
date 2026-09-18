@@ -84,3 +84,11 @@ func bootstrapRecoveryHasASeparateTypedApprovalHandshake() throws {
         try RemapInstallArguments.parse(["recover-bootstrap-helpers"])
     }
 }
+
+@Test
+func presenceTakesNoArgumentsButJSON() throws {
+    #expect(try RemapInstallArguments.parse(["presence", "--json"]).command == .presence)
+    #expect(throws: InstallError.self) {
+        try RemapInstallArguments.parse(["presence", "--approval-token", String(repeating: "a", count: 64)])
+    }
+}

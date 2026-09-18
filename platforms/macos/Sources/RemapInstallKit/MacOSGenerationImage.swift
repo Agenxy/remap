@@ -9,6 +9,13 @@ struct MacOSLaunchdServiceImage: Equatable, Sendable {
 struct MacOSGenerationImage: Equatable, Sendable {
     let configuration: MacOSInstallConfiguration
     let services: [MacOSLaunchdServiceImage]
+    /// Which system-socket contract the generation's launchd definitions
+    /// follow: where its resolver actually listens.
+    let contract: MacOSLaunchdAuthorityContract
+
+    var systemSocketPath: String {
+        contract.systemSocketPath(configuration: configuration)
+    }
 }
 
 protocol MacOSGenerationImageLoading: Sendable {
@@ -94,7 +101,7 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
             )
         }
         let account = try MacOSAccountLookup.account(for: configuration.ownerUID)
-        let services = try loadServices(
+        let (services, contract) = try loadServices(
             authority: authority,
             entryRoot: entryRoot,
             root: imageRoot,
@@ -102,7 +109,7 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
             account: account,
             allowInstalledCompatibility: allowInstalledCompatibility
         )
-        return MacOSGenerationImage(configuration: configuration, services: services)
+        return MacOSGenerationImage(configuration: configuration, services: services, contract: contract)
     }
 
     private func loadServices(
@@ -112,25 +119,25 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
         configuration: MacOSInstallConfiguration,
         account: MacOSAccount,
         allowInstalledCompatibility: Bool
-    ) throws -> [MacOSLaunchdServiceImage] {
+    ) throws -> ([MacOSLaunchdServiceImage], MacOSLaunchdAuthorityContract) {
         do {
-            return try loadServices(
+            return try (loadServices(
                 authority: authority,
                 entryRoot: entryRoot,
                 root: root,
                 configuration: configuration,
                 account: account,
                 contract: .launchdOwnedSystemSocket
-            )
+            ), .launchdOwnedSystemSocket)
         } catch where allowInstalledCompatibility {
-            return try loadServices(
+            return try (loadServices(
                 authority: authority,
                 entryRoot: entryRoot,
                 root: root,
                 configuration: configuration,
                 account: account,
                 contract: .legacyDataDirectorySystemSocket
-            )
+            ), .legacyDataDirectorySystemSocket)
         }
     }
 

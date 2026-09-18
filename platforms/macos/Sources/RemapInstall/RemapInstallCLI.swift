@@ -16,30 +16,10 @@ enum RemapInstallCLI {
     }
 
     private static func execute(_ invocation: RemapInstallInvocation) async throws {
+        if try await answer(invocation) {
+            return
+        }
         switch invocation.command {
-        case .help:
-            print(help)
-        case .version:
-            print("remap-install \(RemapProduct.version)")
-        case .status:
-            let value = try MacOSInstaller.production().status()
-            try RemapInstallOutput.success(
-                command: "status",
-                value: value,
-                json: invocation.json,
-                human: statusSummary(value)
-            )
-        case .resolverPlan:
-            let value = try resolverPlan()
-            let serviceLabel = value.serviceCount == 1 ? "service" : "services"
-            let upstreamLabel = value.upstreams.count == 1 ? "upstream" : "upstreams"
-            try RemapInstallOutput.success(
-                command: "resolver-plan",
-                value: value,
-                json: invocation.json,
-                human: "Resolver plan: \(value.serviceCount) \(serviceLabel), "
-                    + "\(value.upstreams.count) \(upstreamLabel)."
-            )
         case let .recoverAll(approvalToken):
             let result = try await executeRecoverAll(approvalToken)
             let summary = "Recovery complete. Transactions: \(result.recoveredTransactions.count); "
@@ -127,7 +107,58 @@ enum RemapInstallCLI {
                 json: invocation.json,
                 human: "Uninstalled generation \(generationID)."
             )
+        case .help, .version, .status, .presence, .resolverPlan:
+            // Answered above.
+            break
         }
+    }
+
+    /// The commands that change nothing: answered here, or false for a command
+    /// that does.
+    private static func answer(_ invocation: RemapInstallInvocation) async throws -> Bool {
+        switch invocation.command {
+        case .help:
+            print(help)
+        case .version:
+            print("remap-install \(RemapProduct.version)")
+        case .status:
+            let value = try MacOSInstaller.production().status()
+            try RemapInstallOutput.success(
+                command: "status",
+                value: value,
+                json: invocation.json,
+                human: statusSummary(value)
+            )
+        case .presence:
+            // The user-side half of a root helper's presence check: ask macOS
+            // as this process's own account, and answer only yes or why not.
+            let approved = try await RemapInstallUserPresence.evaluateHere()
+            guard approved else {
+                throw InstallError.approval(
+                    "macOS user authentication did not approve this installer change"
+                )
+            }
+            try RemapInstallOutput.success(
+                command: "presence",
+                value: ["approved": true],
+                json: invocation.json,
+                human: "Approved."
+            )
+        case .resolverPlan:
+            let value = try resolverPlan()
+            let serviceLabel = value.serviceCount == 1 ? "service" : "services"
+            let upstreamLabel = value.upstreams.count == 1 ? "upstream" : "upstreams"
+            try RemapInstallOutput.success(
+                command: "resolver-plan",
+                value: value,
+                json: invocation.json,
+                human: "Resolver plan: \(value.serviceCount) \(serviceLabel), "
+                    + "\(value.upstreams.count) \(upstreamLabel)."
+            )
+        default:
+            return false
+        }
+        return true
     }
 
     private static func preview(
@@ -301,6 +332,7 @@ enum RemapInstallCLI {
       remap-install preview recover --all [--json]
       remap-install status [--json]
       remap-install resolver-plan [--json]
+      remap-install presence [--json]
       remap-install recover --transaction ID --approval-token SHA256 [--json]
       remap-install recover --all --approval-token SHA256 [--json]
       remap-install preview recover-bootstrap-helpers [--json]
@@ -326,6 +358,9 @@ enum RemapInstallCLI {
       retain its exact approvalToken, then pass it with --approval-token while a local
       user approves the macOS authentication prompt. There is no implicit,
       environment-based, cached-sudo, or unattended approval bypass.
+      Under sudo, the prompt is put to the invoking user (SUDO_UID), by running
+      this executable as that user for the presence command alone; presence by
+      itself changes nothing.
 
     PRIVACY
       resolver-plan is root-only and read-only. Human output reports counts only.

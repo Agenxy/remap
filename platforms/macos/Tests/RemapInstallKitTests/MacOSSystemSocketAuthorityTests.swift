@@ -159,3 +159,29 @@ private func legacyResolverPlist(
         options: 0
     )
 }
+
+@Test
+func aGenerationImageDialsTheSystemSocketItsOwnContractNames() throws {
+    let ownerUID = UInt32(getuid())
+    let account = try MacOSAccountLookup.account(for: ownerUID)
+    let dataDirectory = account.homeDirectory.value
+        + "/Library/Application Support/org.Agenxy.Remap"
+    let configuration = try MacOSInstallConfiguration(
+        ownerUID: ownerUID,
+        dataDirectory: InstallAbsolutePath(dataDirectory),
+        controlSocket: InstallAbsolutePath(dataDirectory + "/control.sock"),
+        signingCertificateSHA256: InstallDigest.hash(Data("certificate".utf8))
+    )
+    let launchdOwned = MacOSGenerationImage(
+        configuration: configuration,
+        services: [],
+        contract: .launchdOwnedSystemSocket
+    )
+    let legacy = MacOSGenerationImage(
+        configuration: configuration,
+        services: [],
+        contract: .legacyDataDirectorySystemSocket
+    )
+    #expect(launchdOwned.systemSocketPath == "/var/run/org.agenxy.Remap.system.sock")
+    #expect(legacy.systemSocketPath == dataDirectory + "/system.sock")
+}

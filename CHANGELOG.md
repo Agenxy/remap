@@ -6,6 +6,25 @@ platform claims separate.
 
 ## Unreleased
 
+- Fixed the native macOS lifecycle on a Mac that has restarted or that runs a
+  launchd-owned system socket, found by driving `make recover` and `make update`
+  end to end: the source orchestrator's privileged sink is spawned in the
+  caller's session, so `sudo -n` keeps its ticket (a new session dropped it,
+  and a root-owned tree that refused a signal then hid the real error); a root
+  helper under sudo puts the presence prompt to the invoking user, not to
+  "System Administrator" (`remap-install presence` is the user-side half), and
+  a refusal names why the dialog ended; a job launchd reloaded from its
+  published `LaunchDaemons` plist after a restart is that generation's, not a
+  collision; `launchctl print` is read for the service's own `path` and
+  `program`, not a nested socket's; a generation image carries the socket
+  contract it was validated under, so activation dials the socket its resolver
+  serves; remapd accepts the launchd-owned system socket, whose remembered
+  address is launchd's private path, NUL-padded, not the declared one; the
+  resolver supervisor accepts launchd (root) as the listener of that socket;
+  the runtime readiness ceiling is five minutes (macOS assesses a newly signed
+  daemon before it starts), the orchestrator waits for the helper's bounded
+  work, and the post-install doctor check settles for a minute; an internal
+  installer error says what it was.
 - Added the `peer` mapping target, `supgang://<peer>/<service>` (ADR-0016). The
   gateway resolves the peer through Supgang when a request is routed, dials the
   address Supgang prefers on the port the peer's signed record advertises, and

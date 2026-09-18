@@ -156,6 +156,20 @@ final class FakeMacOSLaunchdController: @unchecked Sendable, MacOSLaunchdControl
         }
     }
 
+    /// What launchd shows after a restart: every job loaded from the copy the
+    /// manifest published under LaunchDaemons, not from the generation's plist.
+    func reloadFromPublishedPlists() throws {
+        for kind in MacOSLaunchdServiceKind.allCases {
+            let program = try programPath(for: kind)
+            let published = try InstallAbsolutePath(
+                systemRoot + "/Library/LaunchDaemons/\(kind.label).plist"
+            )
+            lock.withLock {
+                observations[kind.label] = .loaded(plistPath: published, programPath: program)
+            }
+        }
+    }
+
     func selectGeneration(_ generationID: String) {
         lock.withLock {
             self.generationID = generationID
@@ -223,16 +237,21 @@ final class FakeMacOSResolverController: @unchecked Sendable, MacOSResolverContr
         lock.withLock { events }
     }
 
+    /// Every system-socket path an activation was asked to dial.
+    var activatedSocketPaths: [String] = []
+
     func failNextActivation() {
         lock.withLock { rejectNextActivation = true }
     }
 
     func activate(
         configuration: MacOSInstallConfiguration,
-        productVersion: String
+        productVersion: String,
+        systemSocketPath: String
     ) async throws {
         try lock.withLock {
             events.append("publish-plan-before-dns")
+            activatedSocketPaths.append(systemSocketPath)
             if rejectNextActivation {
                 rejectNextActivation = false
                 state = MacOSResolverObservation(

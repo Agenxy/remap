@@ -130,10 +130,10 @@ public struct MacOSInstallSystemEffectAdapter: InstallSystemEffectAdapting, Send
             let observation = try launchd.observation(label: kind.label)
             if case let .loaded(plistPath, programPath) = observation {
                 let identity = MacOSServiceIdentity(plistPath: plistPath, programPath: programPath)
-                if identity == intended.map(MacOSServiceIdentity.init) {
+                if let intended, intended.claims(identity) {
                     continue
                 }
-                guard allowed.contains(identity) else {
+                guard allowed.contains(where: { $0.claims(identity) }) else {
                     throw InstallError.collision("launchd service \(kind.label)")
                 }
                 try launchd.bootout(label: kind.label)
@@ -181,7 +181,7 @@ public struct MacOSInstallSystemEffectAdapter: InstallSystemEffectAdapting, Send
             case (.missing, nil):
                 continue
             case let (.loaded(plistPath, programPath), .some(service))
-                where plistPath == service.plistPath && programPath == service.programPath:
+                where service.claims(MacOSServiceIdentity(plistPath: plistPath, programPath: programPath)):
                 continue
             default:
                 throw InstallError.integrity("launchd service \(kind.label) does not match the intended generation")
@@ -224,10 +224,10 @@ public struct MacOSInstallSystemEffectAdapter: InstallSystemEffectAdapting, Send
         }
     }
 
-    private func allowedServiceImages(_ context: InstallTransitionContext) throws -> Set<MacOSServiceIdentity> {
+    private func allowedServiceImages(_ context: InstallTransitionContext) throws -> [MacOSLaunchdServiceImage] {
         let current = try images.load(context.current).services
         let previous = try context.previous.map { try images.load($0).services } ?? []
-        return Set((current + previous).map(MacOSServiceIdentity.init))
+        return current + previous
     }
 
     private func reconcileDNS(
@@ -254,7 +254,8 @@ public struct MacOSInstallSystemEffectAdapter: InstallSystemEffectAdapting, Send
         if let desired, let desiredImage {
             try await resolver.activate(
                 configuration: desiredImage.configuration,
-                productVersion: desired.productVersion
+                productVersion: desired.productVersion,
+                systemSocketPath: desiredImage.systemSocketPath
             )
         }
     }
@@ -331,15 +332,30 @@ public struct MacOSInstallSystemEffectAdapter: InstallSystemEffectAdapting, Send
 private struct MacOSServiceIdentity: Equatable, Hashable, Sendable {
     let plistPath: InstallAbsolutePath
     let programPath: InstallAbsolutePath
+}
 
-    init(plistPath: InstallAbsolutePath, programPath: InstallAbsolutePath) {
-        self.plistPath = plistPath
-        self.programPath = programPath
+private extension MacOSLaunchdServiceImage {
+    /// Whether a loaded job is this image's service. Remap bootstraps the job
+    /// from the generation's own plist, but after a restart launchd loads the
+    /// exact copy the manifest publishes under LaunchDaemons for that purpose:
+    /// the same program from either path is the same service.
+    func claims(_ observed: MacOSServiceIdentity) -> Bool {
+        guard observed.programPath == programPath else {
+            return false
+        }
+        return observed.plistPath == plistPath || observed.plistPath == publicationPath
     }
 
-    init(_ image: MacOSLaunchdServiceImage) {
-        plistPath = image.plistPath
-        programPath = image.programPath
+    /// Where the manifest publishes this generation's plist for launchd to
+    /// find at boot: `<root>/Library/LaunchDaemons/<label>.plist`, `<root>`
+    /// being whatever the generation itself is installed under.
+    private var publicationPath: InstallAbsolutePath? {
+        let generations = "/" + MacOSInstallLayout.installerBase + "/Generations/"
+        guard let range = plistPath.value.range(of: generations) else {
+            return nil
+        }
+        let root = String(plistPath.value[..<range.lowerBound])
+        return try? InstallAbsolutePath(root + "/Library/LaunchDaemons/\(kind.label).plist")
     }
 }
 

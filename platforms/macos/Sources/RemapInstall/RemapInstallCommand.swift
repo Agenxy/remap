@@ -10,6 +10,7 @@ enum RemapInstallCommand: Equatable {
         approvalToken: InstallApprovalToken,
         transactionID: String?
     )
+    case presence
     case previewInstall(packageRoot: String, digest: String, sourceUID: UInt32)
     case previewRecoverBootstrapHelpers
     case previewRecoverAll
@@ -49,19 +50,10 @@ enum RemapInstallArguments {
             return RemapInstallInvocation(command: .help, json: json)
         }
         let tail = Array(values.dropFirst())
+        if let plain = try parsePlain(command, tail: tail, json: json) {
+            return plain
+        }
         switch command {
-        case "help", "--help", "-h":
-            guard tail.isEmpty else { throw usage("help accepts no arguments") }
-            return RemapInstallInvocation(command: .help, json: json)
-        case "--version", "version":
-            guard tail.isEmpty else { throw usage("version accepts no arguments") }
-            return RemapInstallInvocation(command: .version, json: json)
-        case "status":
-            guard tail.isEmpty else { throw usage("status accepts only --json") }
-            return RemapInstallInvocation(command: .status, json: json)
-        case "resolver-plan":
-            guard tail.isEmpty else { throw usage("resolver-plan accepts only --json") }
-            return RemapInstallInvocation(command: .resolverPlan, json: json)
         case "recover":
             return try parseRecover(tail, json: json)
         case "recover-bootstrap-helpers":
@@ -81,6 +73,29 @@ enum RemapInstallArguments {
         default:
             throw usage("unknown command \(command)")
         }
+    }
+
+    /// The commands that take nothing but `--json`, or nil for any other.
+    private static func parsePlain(
+        _ command: String,
+        tail: [String],
+        json: Bool
+    ) throws -> RemapInstallInvocation? {
+        let plain: [String: (RemapInstallCommand, String)] = [
+            "help": (.help, "help accepts no arguments"),
+            "--help": (.help, "help accepts no arguments"),
+            "-h": (.help, "help accepts no arguments"),
+            "version": (.version, "version accepts no arguments"),
+            "--version": (.version, "version accepts no arguments"),
+            "status": (.status, "status accepts only --json"),
+            "resolver-plan": (.resolverPlan, "resolver-plan accepts only --json"),
+            "presence": (.presence, "presence accepts only --json")
+        ]
+        guard let (parsed, complaint) = plain[command] else {
+            return nil
+        }
+        guard tail.isEmpty else { throw usage(complaint) }
+        return RemapInstallInvocation(command: parsed, json: json)
     }
 
     private static func parseMutation(

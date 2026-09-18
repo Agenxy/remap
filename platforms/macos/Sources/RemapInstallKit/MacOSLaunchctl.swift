@@ -70,11 +70,14 @@ struct NativeMacOSLaunchdController: MacOSLaunchdControlling, Sendable {
         }
     }
 
+    /// The service's own value for `key`: the line one tab deep, where
+    /// `launchctl print` puts the service's fields. Deeper lines belong to
+    /// nested dictionaries (a Unix socket under `Sockets` has a `path` too)
+    /// and are not the service's.
     private func field(_ key: String, in output: String) -> String? {
-        let prefix = key + " = "
+        let prefix = "\t" + key + " = "
         let values = output.split(separator: "\n").compactMap { line -> String? in
-            let value = line.trimmingCharacters(in: .whitespaces)
-            return value.hasPrefix(prefix) ? String(value.dropFirst(prefix.count)) : nil
+            line.hasPrefix(prefix) ? String(line.dropFirst(prefix.count)) : nil
         }
         return values.count == 1 ? values[0] : nil
     }

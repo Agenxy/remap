@@ -24,10 +24,14 @@ protocol MacOSRuntimeHealthChecking: Sendable {
 }
 
 struct NativeMacOSRuntimeHealthChecker: MacOSRuntimeHealthChecking, Sendable {
-    // The admitted launchd definitions use a five-second throttle interval.
-    // Allow one complete throttle window plus the bounded authenticated control,
-    // DNS, and HTTP challenge before declaring startup unhealthy.
-    private static let timeout = Duration.seconds(10)
+    // The admitted launchd definitions use a five-second throttle interval, but
+    // a daemon's first start after it is published is far slower than that:
+    // macOS assesses a newly locally-signed image before dyld even reaches
+    // main (observed at over a minute on macOS 27), and the daemon then opens
+    // its registry and proves its authority. The poll below returns the moment
+    // the required state holds, so this ceiling costs nothing when startup is
+    // quick; it only decides how long an unhealthy start is given.
+    private static let timeout = Duration.seconds(300)
     private static let retryDelay = Duration.milliseconds(100)
 
     func wait(
@@ -61,8 +65,9 @@ struct NativeMacOSRuntimeHealthChecker: MacOSRuntimeHealthChecking, Sendable {
                 try await Task.sleep(for: Self.retryDelay)
             }
         } while clock.now < deadline
-        throw InstallError
-            .integrity("the authenticated Remap runtime did not reach the required state within ten seconds")
+        throw InstallError.integrity(
+            "the authenticated Remap runtime did not reach the required state within five minutes"
+        )
     }
 
     private func satisfies(

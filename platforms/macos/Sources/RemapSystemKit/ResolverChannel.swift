@@ -192,10 +192,17 @@ private func connectUnixSocket(path: String) throws -> Int32 {
     }
 }
 
+/// The peer a client sees is whoever called `listen` on the socket: the daemon
+/// itself when it bound its own socket in the data directory, or launchd (root)
+/// when the socket is launchd-owned and handed to the daemon already listening.
+/// Root is accepted for that reason; nobody but root can listen as root, and a
+/// root-listened socket at a root-only path is launchd's by construction.
 private func authenticatePeer(descriptor: Int32, expectedUID: uid_t) throws {
     var userID: uid_t = 0
     var groupID: gid_t = 0
-    guard getpeereid(descriptor, &userID, &groupID) == 0, userID == expectedUID else {
+    guard getpeereid(descriptor, &userID, &groupID) == 0,
+          userID == expectedUID || userID == 0
+    else {
         throw ResolverChannelError.peerMismatch
     }
 }
