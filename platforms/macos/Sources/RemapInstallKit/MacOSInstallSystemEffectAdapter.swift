@@ -337,13 +337,24 @@ private struct MacOSServiceIdentity: Equatable, Hashable, Sendable {
 private extension MacOSLaunchdServiceImage {
     /// Whether a loaded job is this image's service. Remap bootstraps the job
     /// from the generation's own plist, but after a restart launchd loads the
-    /// exact copy the manifest publishes under LaunchDaemons for that purpose:
-    /// the same program from either path is the same service.
+    /// copy the manifest publishes under LaunchDaemons for that purpose. That
+    /// copy is the service only while its bytes are the generation's: a plist
+    /// at the published path with the same program but other arguments, account
+    /// or sockets is not ours, whoever put it there.
     func claims(_ observed: MacOSServiceIdentity) -> Bool {
         guard observed.programPath == programPath else {
             return false
         }
-        return observed.plistPath == plistPath || observed.plistPath == publicationPath
+        if observed.plistPath == plistPath {
+            return true
+        }
+        guard observed.plistPath == publicationPath,
+              let published = FileManager.default.contents(atPath: observed.plistPath.value),
+              let own = FileManager.default.contents(atPath: plistPath.value)
+        else {
+            return false
+        }
+        return published == own
     }
 
     /// Where the manifest publishes this generation's plist for launchd to

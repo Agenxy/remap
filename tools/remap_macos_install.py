@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import pwd
 import re
@@ -636,19 +637,22 @@ def verify_installed_product(root: Path, version: str, data_directory: Path) -> 
     # few seconds old can still be settling: ask again for a while before
     # calling the runtime incomplete.
     deadline = time.monotonic() + DOCTOR_SETTLE_SECONDS
-    while True:
-        if runtime_is_complete(_doctor(root, data_directory), version):
+    last = "doctor was not asked"
+    while time.monotonic() < deadline:
+        document, last = _doctor(root, data_directory)
+        if runtime_is_complete(document, version):
             return
-        if time.monotonic() >= deadline:
-            raise RuntimeError(
-                "the installed command did not authenticate the complete runtime"
-            )
         time.sleep(1)
+    raise RuntimeError(
+        "the installed command did not authenticate the complete runtime "
+        + f"within {DOCTOR_SETTLE_SECONDS} seconds; last answer: {last}"
+    )
 
 
-def _doctor(root: Path, data_directory: Path) -> dict[str, object]:
+def _doctor(root: Path, data_directory: Path) -> tuple[dict[str, object], str]:
+    """Doctor's answer, and what to say about it if it is not the one wanted."""
     try:
-        return _json_command(
+        document = _json_command(
             (
                 str(SYSTEM_CLI),
                 "--json",
@@ -658,9 +662,13 @@ def _doctor(root: Path, data_directory: Path) -> dict[str, object]:
             ),
             root=root,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except subprocess.CalledProcessError as error:
         # Not an answer: doctor refuses while the runtime is short of complete.
-        return {}
+        said = cast("bytes | None", error.stderr) or b""
+        return {}, said.decode("utf-8", "replace")[:512].strip()
+    except subprocess.TimeoutExpired:
+        return {}, "doctor did not answer within ten seconds"
+    return document, json.dumps(document.get("result"))[:512]
 
 
 def runtime_is_complete(document: dict[str, object], version: str) -> bool:

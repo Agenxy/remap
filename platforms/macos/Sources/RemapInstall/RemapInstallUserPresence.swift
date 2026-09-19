@@ -62,7 +62,9 @@ enum RemapInstallUserPresence {
     /// The user whose presence a root helper under `sudo` must prove: the one
     /// who invoked it. macOS authenticates the calling process's own account,
     /// and asking root's would name "System Administrator" and never offer
-    /// Touch ID.
+    /// Touch ID. `SUDO_UID` is sudo's own: it resets the environment and sets
+    /// this itself, so the invoking user cannot supply it; a root process
+    /// started any other way has no `SUDO_UID` and asks as itself.
     static func invokingUser(
         euid: uid_t = geteuid(),
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -100,9 +102,17 @@ enum RemapInstallUserPresence {
         )
     }
 
+    /// How long the invoking user is given to answer the dialog before the
+    /// question is withdrawn and the change refused.
+    static let presenceTimeout = Duration.seconds(300)
+
     /// Ask macOS as the invoking user: this same executable, run as that user
     /// for the `presence` command alone, which does nothing but ask. Root
-    /// needs no password to become a lesser user.
+    /// needs no password to become a lesser user. The executable is the
+    /// published bootstrap helper, root-owned and code-verified before it was
+    /// published, so the user it runs as cannot have altered it; only a child
+    /// this process started and awaited, ending of its own accord with status
+    /// zero, counts as approval, and it is given a bounded time to end.
     private static func evaluateAsUser(_ uid: uid_t) async throws -> Bool {
         guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath().path else {
             throw InstallError.approval(
@@ -117,9 +127,20 @@ enum RemapInstallUserPresence {
         let errors = Pipe()
         process.standardError = errors
         try process.run()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: presenceTimeout)
+        while process.isRunning {
+            if clock.now >= deadline {
+                process.terminate()
+                throw InstallError.approval(
+                    "macOS user authentication did not approve this installer change"
+                        + " (the prompt was not answered in time)"
+                )
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
         let said = errors.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        if process.terminationStatus == 0 {
+        if process.terminationReason == .exit, process.terminationStatus == 0 {
             return true
         }
         throw InstallError.approval(childRefusal(said))

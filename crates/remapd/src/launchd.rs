@@ -43,7 +43,7 @@ mod platform {
             None
         };
         let system_control = UnixListener::from(activate_one(SYSTEM_SOCKET)?);
-        if !is_published_at(&system_control, &config.system_socket) {
+        if !is_consistent_with_declaration(&system_control, &config.system_socket) {
             let remembered = remembered_path(&system_control).map_or_else(
                 || "an unnamed socket".to_owned(),
                 |p| p.display().to_string(),
@@ -60,14 +60,16 @@ mod platform {
         })
     }
 
-    /// Whether the socket launchd handed over is the one published at `path`,
-    /// where the resolver supervisor will dial it. launchd binds a declared
-    /// Unix socket as `<its private directory>/<socket key>` and moves it to
-    /// the declared path, so the address the socket remembers is the key's
-    /// name under that directory, not the path; the daemon cannot open the
-    /// root-only published socket to prove more than that the key matches
-    /// and a socket stands at the path.
-    fn is_published_at(listener: &UnixListener, path: &std::path::Path) -> bool {
+    /// Whether the socket launchd handed over is consistent with the declared
+    /// path, where the resolver supervisor will dial it. This is a check of the
+    /// launchd contract, not a proof of identity: the descriptor's provenance
+    /// is `launch_activate_socket` itself. launchd binds a declared Unix socket
+    /// as `<its private directory>/<socket key>` and moves it to the declared
+    /// path, so the address the socket remembers is the key's name under that
+    /// directory, not the path, and the daemon cannot open the root-only
+    /// published socket to prove more than that the key matches and a socket
+    /// stands at the path.
+    fn is_consistent_with_declaration(listener: &UnixListener, path: &std::path::Path) -> bool {
         use std::os::unix::fs::FileTypeExt;
 
         let Some(remembered) = remembered_path(listener) else {
@@ -143,7 +145,7 @@ mod platform {
 
         use remap_network::DnsRuntimeConfig;
 
-        use super::{dns_bindings, is_published_at};
+        use super::{dns_bindings, is_consistent_with_declaration};
 
         #[test]
         fn launchd_accepts_dormant_dns_sockets_before_the_supervisor_plan()
@@ -161,26 +163,26 @@ mod platform {
         }
 
         #[test]
-        fn the_activated_socket_is_the_published_one_by_path_or_by_launchd_key()
+        fn the_activated_socket_is_checked_against_the_declaration_by_path_or_by_key()
         -> Result<(), Box<dyn std::error::Error>> {
             let directory = tempfile::tempdir()?;
             let published = directory.path().join("system.sock");
             let direct = std::os::unix::net::UnixListener::bind(&published)?;
-            assert!(is_published_at(&direct, &published));
+            assert!(is_consistent_with_declaration(&direct, &published));
 
             // As launchd hands it over: bound as the socket key under a private
             // directory, published elsewhere by a move.
             let private = directory.path().join("private");
             std::fs::create_dir(&private)?;
             let managed = std::os::unix::net::UnixListener::bind(private.join("remap-system"))?;
-            assert!(is_published_at(&managed, &published));
-            assert!(!is_published_at(
+            assert!(is_consistent_with_declaration(&managed, &published));
+            assert!(!is_consistent_with_declaration(
                 &managed,
                 &directory.path().join("missing.sock")
             ));
 
             let other = std::os::unix::net::UnixListener::bind(private.join("other"))?;
-            assert!(!is_published_at(&other, &published));
+            assert!(!is_consistent_with_declaration(&other, &published));
             Ok(())
         }
 

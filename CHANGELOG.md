@@ -25,6 +25,12 @@ platform claims separate.
   daemon before it starts), the orchestrator waits for the helper's bounded
   work, and the post-install doctor check settles for a minute; an internal
   installer error says what it was.
+- After review (astra): a job loaded from the published plist is the
+  generation's only when the published bytes are the generation's plist; the
+  presence child is bounded to five minutes and must end of its own accord;
+  the post-install doctor check keeps its deadline and reports the last
+  answer; `remap system` on a source install says the lifecycle is the
+  repository's make targets. ADR-0017 records the two contracts.
 - Added the `peer` mapping target, `supgang://<peer>/<service>` (ADR-0016). The
   gateway resolves the peer through Supgang when a request is routed, dials the
   address Supgang prefers on the port the peer's signed record advertises, and
