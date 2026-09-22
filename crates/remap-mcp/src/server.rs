@@ -596,11 +596,57 @@ impl ServerHandler for RemapMcp {
     }
 }
 
+/// Remap's mark, as a client can render it without fetching anything.
+///
+/// The bytes are the crate's vector master, included at build time, so the icon a
+/// client shows and the mark on disk cannot drift. It lives inside this crate:
+/// `cargo package` carries only what is under the crate root, and an `include_str!`
+/// reaching outside it would publish a crate that does not build.
+///
+/// It is kept small on purpose. `serverInfo` travels in `server/discover`, and
+/// `live_service_remains_bounded_when_output_stops_draining` showed that a mark of
+/// a couple of kilobytes was enough to stop this service making progress against a
+/// reader that had stopped draining: the bound is sized against the payload rather
+/// than held independently of it. Shrinking the mark makes the test pass again and
+/// does not fix that; see the note in the transport's tests.
+const MARK: &str = include_str!("../assets/remap-mark.svg");
+
+/// One hexadecimal digit, upper case. Total over a nibble, so there is nothing to
+/// index and nothing to unwrap.
+fn hex_digit(nibble: u8) -> char {
+    match nibble {
+        0..=9 => char::from(b'0' + nibble),
+        _ => char::from(b'A' + nibble - 10),
+    }
+}
+
+fn mark_data_uri() -> String {
+    let mut out = String::from("data:image/svg+xml,");
+    for byte in MARK.bytes() {
+        // Unreserved characters (RFC 3986) pass through; everything else is escaped,
+        // including the `#` of a colour, which would otherwise end the URI.
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            out.push('%');
+            out.push(hex_digit(byte >> 4));
+            out.push(hex_digit(byte & 0x0f));
+        }
+    }
+    out
+}
+
 pub(crate) fn server_implementation() -> Implementation {
-    Implementation::new("remap", env!("CARGO_PKG_VERSION"))
+    // Reverse-DNS, as the installed launchd label and Supgang's server already are.
+    Implementation::new("org.agenxy.remap", env!("CARGO_PKG_VERSION"))
         .with_title("Remap")
         .with_description("Local authority for arbitrary name-to-service mappings")
         .with_website_url("https://github.com/agenxy/remap")
+        .with_icons(vec![
+            rmcp::model::Icon::new(mark_data_uri())
+                .with_mime_type("image/svg+xml")
+                .with_sizes(vec!["any".to_owned()]),
+        ])
 }
 
 fn supports_cache_hints(context: &RequestContext<rmcp::RoleServer>) -> bool {

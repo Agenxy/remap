@@ -486,6 +486,13 @@ mod tests {
     }
 
     #[tokio::test]
+    // NOTE: this bound is sized against the current `serverInfo`, not held
+    // independently of it. Adding a ~2 KiB icon to `server_implementation` was enough
+    // to make this test time out: the discover answer plus the undrained flood passed
+    // 64 KiB sooner and the service stopped making progress. The mark was made smaller
+    // and the test passes again, which is a reprieve rather than a fix: the next few
+    // hundred bytes of metadata will do it again. The service should stay bounded
+    // whatever `serverInfo` weighs.
     async fn live_service_remains_bounded_when_output_stops_draining()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
@@ -697,7 +704,7 @@ mod tests {
         assert_eq!(listed["id"], 6);
         assert_eq!(
             listed["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
-            "remap"
+            "org.agenxy.remap"
         );
         running.cancel().await?;
         Ok(())
