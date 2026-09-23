@@ -182,6 +182,28 @@ Each product's suite must contain, named so a regression names itself:
 9. A missing declared executable prevents generation publication; an existing executable
    or symlink cannot be truncated by a staging copy.
 
+## What this document does not yet require: integrity
+
+Everything above is about **reliability**: an installation that works, and that says so
+truthfully. None of it establishes **what** is being installed.
+
+As of 2026-09-22, Compass and Supgang install a binary the owner already has, by copying
+it, with no verification of its origin. Remap verifies a generation's manifest, hashes,
+modes and ownership before publishing it, which is far stronger, but the manifest is
+still one the same installer produced: it detects a damaged or incomplete image, not a
+substituted one. No product yet refuses an artifact that is intact but not the owner's.
+
+The sovereign answer is not an Apple Developer certificate or any other issuer outside
+the owner's control. It is the hive root: Supgang already carries a signed-release
+mechanism, and the sovereign-trust roadmap names code signing as a root-granted role,
+where a key is authorised to sign named products and members pin the role rather than a
+bare member chain. The end state is that every Agenxy product installs only artifacts
+signed under that role, and refuses anything else by default.
+
+Until that exists, this document claims reliability and says plainly that it does not
+claim provenance. A product must not describe its installation as verified on the
+strength of the rules above alone.
+
 ## Enforcement
 
 Each repository's quality gate must:
