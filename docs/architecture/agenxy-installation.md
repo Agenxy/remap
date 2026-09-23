@@ -62,9 +62,12 @@ $ echo $?
 Identical bytes run correctly from another path. The symptom is silence: no message, no
 log, exit 137.
 
-**Required:** an installer never writes over a binary in place. It writes a new file and
-renames it, or removes the old path first, so the installed program always has a fresh
-inode. The same rule applies to any signed bundle.
+**Required:** an installer never writes over a binary in place, and the installed program
+always has a fresh inode. Prepare and validate the replacement first, then publish it by
+an atomic rename or a generation switch. Removing the old path before the replacement is
+ready is **not** sufficient on its own: it leaves a window with nothing installed and
+nothing to go back to, and a failure inside that window has destroyed the working
+installation to no purpose. The same rule applies to any signed bundle.
 
 Prefer immutable generations: create every file exclusively in a private stage, verify
 its manifest, then publish the generation and exchange its public links atomically.
@@ -194,11 +197,23 @@ still one the same installer produced: it detects a damaged or incomplete image,
 substituted one. No product yet refuses an artifact that is intact but not the owner's.
 
 The sovereign answer is not an Apple Developer certificate or any other issuer outside
-the owner's control. It is the hive root: Supgang already carries a signed-release
-mechanism, and the sovereign-trust roadmap names code signing as a root-granted role,
-where a key is authorised to sign named products and members pin the role rather than a
-bare member chain. The end state is that every Agenxy product installs only artifacts
-signed under that role, and refuses anything else by default.
+the owner's control, and most of it already exists. Supgang's `docs/security/secure-updates.md`
+decides update trust through TUF: roles with thresholds, root and targets keys held
+offline in separate physical custody, reproducibility checks before signing, a redacted
+record of each ceremony, and a client that refuses rollback, freeze, fast-forward and
+mix-and-match. It requires no account, no Agenxy server, no Apple service, no public
+certificate authority and no public address to decide whether an artifact is authentic.
+
+Note what that design also decides, because it constrains the answer: **update authority
+is separate from hive authority**, and the hive root, device, transport and each TUF role
+key must never be derived from one another or reused. The sovereign-trust roadmap's
+code-signing role is therefore an authorisation the root grants to a separate signing key,
+naming what that key may sign, which members pin. The root does not sign artifacts itself.
+
+So the open question is narrower than it looks: this machinery guards Supgang's own
+updates, and nothing else installs through it. What each product owes is to verify an
+artifact against a pinned role before installing it, and to refuse anything else by
+default. Until it does, its installation is not verified, whatever else is true of it.
 
 Until that exists, this document claims reliability and says plainly that it does not
 claim provenance. A product must not describe its installation as verified on the
