@@ -74,9 +74,7 @@ private final class InstallerServiceLaunchdControllerFake: @unchecked Sendable, 
         }
     }
 
-    func bootout(label _: String) throws {}
-
-    func enable(label _: String) throws {}
+    func bootout(label _: String, expected _: MacOSLaunchdObservation) throws {}
 
     func kickstart(label _: String) throws {
         lock.withLock { recordedKickstartCount += 1 }

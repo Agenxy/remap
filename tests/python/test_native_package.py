@@ -42,6 +42,23 @@ from tools.remap_native_package import (
 class NativePackageTests(unittest.TestCase):
     """Verify determinism, ownership metadata, and hostile input rejection."""
 
+    def test_executable_package_copy_never_truncates_an_existing_destination(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            _ = source.write_bytes(b"replacement")
+            destination = root / "remap"
+            _ = destination.write_bytes(b"installed")
+            inode = destination.stat().st_ino
+            with self.assertRaises(FileExistsError):
+                remap_native_package.stage_package_file(
+                    source, destination, executable=True
+                )
+            self.assertEqual(destination.read_bytes(), b"installed")
+            self.assertEqual(destination.stat().st_ino, inode)
+
     def test_manifest_is_deterministic_complete_and_immutable(self) -> None:
         with tempfile.TemporaryDirectory(prefix="remap-native-package-") as directory:
             base = Path(directory)
@@ -68,6 +85,9 @@ class NativePackageTests(unittest.TestCase):
             self.assertIn("bin/remap", paths)
             self.assertIn(INSTALL_CONFIGURATION, paths)
             self.assertIn("libexec/remap-install", paths)
+            # The source product uses repository lifecycle orchestration; it
+            # must not claim the prebuilt package's self-management client.
+            self.assertNotIn("libexec/remap-lifecycle", paths)
             self.assertIn("libexec/remap-resolver", paths)
             self.assertIn("app/Remap.app/Contents/MacOS/Remap", paths)
             self.assertIn("share/man/man1/remap-doctor.1", paths)

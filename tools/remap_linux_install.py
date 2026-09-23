@@ -623,13 +623,15 @@ def _install_arguments(
 def _copy_source(source: Path, destination: Path) -> Path:
     if not source.is_file() or not os.access(source, os.X_OK):
         raise RuntimeError(f"the native Linux build did not produce {source}")
-    _ = shutil.copyfile(source, destination)
+    with source.open("rb") as reader, destination.open("xb") as writer:
+        shutil.copyfileobj(reader, writer)
     destination.chmod(0o500)
     return destination
 
 
 def _copy_asset(source: Path, destination: Path) -> None:
-    _ = shutil.copyfile(source, destination)
+    with source.open("rb") as reader, destination.open("xb") as writer:
+        shutil.copyfileobj(reader, writer)
     destination.chmod(0o400)
 
 

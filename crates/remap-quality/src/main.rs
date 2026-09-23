@@ -1,6 +1,8 @@
 //! Native repository-quality gates for Remap.
 
 mod discover;
+mod installation_policy;
+mod installation_policy_tests;
 mod limits;
 mod model;
 mod repository_policy;

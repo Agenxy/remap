@@ -207,31 +207,31 @@ def build_native_products(root: Path, version: str, staging: Path) -> NativeBuil
     products.mkdir(mode=0o700)
     signing_directory = products / "signing"
     signing_directory.mkdir(mode=0o700)
-    cli_staging = _unsigned_copy(
+    cli_staging = stage_unsigned_executable(
         root / "target/release/remap",
         signing_directory / "cli",
     )
-    daemon_staging = _unsigned_copy(
+    daemon_staging = stage_unsigned_executable(
         root / "target/release/remapd",
         signing_directory / "daemon",
     )
-    installer_staging = _unsigned_copy(
+    installer_staging = stage_unsigned_executable(
         swift_bin / "remap-install",
         signing_directory / "install-bootstrap",
     )
-    installer_service_staging = _unsigned_copy(
+    installer_service_staging = stage_unsigned_executable(
         swift_bin / "remap-installer-service",
         signing_directory / "installer-service",
     )
-    installer_bootstrap_staging = _unsigned_copy(
+    installer_bootstrap_staging = stage_unsigned_executable(
         swift_bin / "remap-installer-bootstrap",
         signing_directory / "installer-bootstrap",
     )
-    resolver_staging = _unsigned_copy(
+    resolver_staging = stage_unsigned_executable(
         swift_bin / "remap-resolver",
         signing_directory / "resolver",
     )
-    system_staging = _unsigned_copy(
+    system_staging = stage_unsigned_executable(
         swift_bin / "remap-system",
         signing_directory / "system",
     )
@@ -894,10 +894,7 @@ def _signed_copy(
     identifier: str,
     signing_identity: LocalCodeSigningIdentity,
 ) -> Path:
-    if not source.is_file() or not os.access(source, os.X_OK):
-        raise RuntimeError(f"the native build did not produce {source}")
-    _ = shutil.copyfile(source, destination)
-    os.chmod(destination, 0o500)
+    _ = stage_unsigned_executable(source, destination)
     _ = sign_path(destination, signing_identity, identifier)
     actual_identifier, _cdhash = _verified_code_identity(destination)
     if actual_identifier != identifier:
@@ -907,10 +904,12 @@ def _signed_copy(
     return destination
 
 
-def _unsigned_copy(source: Path, destination: Path) -> Path:
+def stage_unsigned_executable(source: Path, destination: Path) -> Path:
+    """Stage executable bytes into a fresh inode, refusing any existing path."""
     if not source.is_file() or not os.access(source, os.X_OK):
         raise RuntimeError(f"the native build did not produce {source}")
-    _ = shutil.copyfile(source, destination)
+    with source.open("rb") as reader, destination.open("xb") as writer:
+        shutil.copyfileobj(reader, writer)
     os.chmod(destination, 0o500)
     return destination
 

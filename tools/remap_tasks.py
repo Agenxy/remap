@@ -267,7 +267,18 @@ def task_quality() -> None:
     run(("mise", "exec", "--", "ruff", "format", "--check", *PYTHON_PATHS))
     run(("mise", "exec", "--", "basedpyright", *PYTHON_PATHS))
     if sys.platform == "darwin":
-        run(("mise", "exec", "--", "swiftformat", "--lint", "platforms/macos"))
+        run(
+            (
+                "mise",
+                "exec",
+                "--",
+                "swiftformat",
+                "--lint",
+                "platforms/macos",
+                "--cache",
+                str(ROOT / "target/swiftformat.cache"),
+            )
+        )
         run(
             (
                 "mise",
@@ -276,6 +287,8 @@ def task_quality() -> None:
                 "swiftlint",
                 "lint",
                 "--strict",
+                "--cache-path",
+                str(ROOT / "target/swiftlint-cache"),
                 "--config",
                 ".swiftlint.yml",
             )

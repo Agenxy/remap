@@ -136,12 +136,11 @@ public struct MacOSInstallSystemEffectAdapter: InstallSystemEffectAdapting, Send
                 guard allowed.contains(where: { $0.claims(identity) }) else {
                     throw InstallError.collision("launchd service \(kind.label)")
                 }
-                try launchd.bootout(label: kind.label)
+                try launchd.bootout(label: kind.label, expected: observation)
                 try await waitForServiceToUnload(kind, departing: identity)
             }
             if let intended {
                 try launchd.bootstrap(plistPath: intended.plistPath)
-                try launchd.enable(label: kind.label)
                 // Both admitted plists require RunAtLoad and KeepAlive. Bootstrap
                 // therefore starts the service. An immediate `kickstart -k`
                 // needlessly kills that fresh process and can consume launchd's

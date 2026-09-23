@@ -13,6 +13,9 @@ pub(crate) fn workspace(root: &Path) -> Result<Vec<Violation>, String> {
             .map_err(|error| format!("cannot read {} as UTF-8: {error}", path.display()))?;
         let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
         check_file_length(&relative, &source, &mut violations);
+        violations.extend(crate::installation_policy::analyze(
+            root, &relative, &source,
+        )?);
         if path.extension().is_some_and(|extension| extension == "rs") {
             violations.extend(rust_metrics::analyze(&relative, &source)?);
         }

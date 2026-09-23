@@ -265,37 +265,43 @@ def resolver_launchd_document(
 
 
 def _copy_inputs(payload: Path, files: NativeProductFiles) -> None:
-    _copy_file(files.cli, payload / "bin/remap", executable=True)
-    _copy_file(files.daemon, payload / "libexec/remapd", executable=True)
-    _copy_file(
+    stage_package_file(files.cli, payload / "bin/remap", executable=True)
+    stage_package_file(files.daemon, payload / "libexec/remapd", executable=True)
+    stage_package_file(
         files.installer,
         payload / "libexec/remap-install",
         executable=True,
     )
-    _copy_file(files.resolver, payload / "libexec/remap-resolver", executable=True)
-    _copy_file(files.system_tool, payload / "libexec/remap-system", executable=True)
+    stage_package_file(
+        files.resolver, payload / "libexec/remap-resolver", executable=True
+    )
+    stage_package_file(
+        files.system_tool, payload / "libexec/remap-system", executable=True
+    )
     _copy_tree(files.app, payload / "app/Remap.app")
     _copy_tree(files.manpages, payload / "share/man/man1")
-    _copy_file(
+    stage_package_file(
         files.license,
         payload / "share/licenses/remap/LICENSE",
         executable=False,
     )
-    _copy_file(
+    stage_package_file(
         files.notice,
         payload / "share/licenses/remap/NOTICE",
         executable=False,
     )
     for shell, source in sorted(files.completions.items()):
-        _copy_file(source, payload / _completion_path(shell), executable=False)
+        stage_package_file(source, payload / _completion_path(shell), executable=False)
 
 
-def _copy_file(source: Path, destination: Path, *, executable: bool) -> None:
+def stage_package_file(source: Path, destination: Path, *, executable: bool) -> None:
+    """Copy one package input exclusively, without overwriting a prior inode."""
     information = source.lstat()
     if not stat.S_ISREG(information.st_mode) or information.st_nlink != 1:
         raise RuntimeError(f"package source is not a unique regular file: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _ = shutil.copyfile(source, destination, follow_symlinks=False)
+    with source.open("rb") as reader, destination.open("xb") as writer:
+        shutil.copyfileobj(reader, writer)
     os.chmod(destination, 0o500 if executable else 0o400)
 
 

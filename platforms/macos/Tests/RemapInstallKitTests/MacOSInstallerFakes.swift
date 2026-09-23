@@ -132,7 +132,7 @@ final class FakeMacOSLaunchdController: @unchecked Sendable, MacOSLaunchdControl
         }
     }
 
-    func bootout(label: String) throws {
+    func bootout(label: String, expected _: MacOSLaunchdObservation) throws {
         lock.withLock {
             recordedBootouts += 1
             if pendingBootouts[label] == nil {
@@ -140,8 +140,6 @@ final class FakeMacOSLaunchdController: @unchecked Sendable, MacOSLaunchdControl
             }
         }
     }
-
-    func enable(label _: String) throws {}
 
     func kickstart(label _: String) throws {
         lock.withLock { recordedKickstarts += 1 }

@@ -36,6 +36,13 @@ enum MacOSLaunchdPropertyList {
         guard string(values, "Label") == kind.label else {
             throw InstallError.invalidManifest("the launchd label does not match the managed service")
         }
+        let declaredProgram = (values["ProgramArguments"] as? [String])?.first
+        if let program = declaredProgram, program != programPath.value {
+            let displayed = String(reflecting: String(program.prefix(4096)))
+            throw InstallError.invalidManifest(
+                "launchd program \(displayed) must be installed at \(programPath.value)"
+            )
+        }
         switch kind {
         case .daemon:
             try validateDaemon(

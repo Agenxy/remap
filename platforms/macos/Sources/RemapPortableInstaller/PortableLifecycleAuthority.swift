@@ -282,13 +282,7 @@ struct PortableLifecycleServiceController: Sendable {
     }
 
     func bootout() throws {
-        let result = try runner.run(
-            executable: "/bin/launchctl",
-            arguments: ["bootout", "system/\(MacOSInstallerServiceLaunchd.label)"]
-        )
-        guard result.exitStatus == 0 || result.exitStatus == 113 else {
-            throw InstallError.operatingSystem("stop the lifecycle service", result.exitStatus)
-        }
+        try MacOSInstallerServiceLaunchd.bootoutIfLoaded()
     }
 
     func bootstrap() throws {

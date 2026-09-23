@@ -13,6 +13,8 @@ pub(crate) enum Rule {
     Nesting,
     EmDash,
     ShellScript,
+    ExternalEmbeddedAsset,
+    ExecutableOverwrite,
 }
 
 impl Rule {
@@ -26,6 +28,8 @@ impl Rule {
             Self::Nesting => "Q006",
             Self::EmDash => "Q007",
             Self::ShellScript => "Q008",
+            Self::ExternalEmbeddedAsset => "Q009",
+            Self::ExecutableOverwrite => "Q010",
         }
     }
 
@@ -39,6 +43,8 @@ impl Rule {
             Self::Nesting => "function is nested too deeply",
             Self::EmDash => "first-party prose contains an em dash",
             Self::ShellScript => "repository contains a shell script",
+            Self::ExternalEmbeddedAsset => "embedded asset is not confined to its crate",
+            Self::ExecutableOverwrite => "installer uses an overwrite-capable executable copy",
         }
     }
 
@@ -52,6 +58,12 @@ impl Rule {
             Self::Nesting => "use guard clauses and extract nested control flow",
             Self::EmDash => "replace the punctuation with the relationship it represents",
             Self::ShellScript => "move maintained automation into a typed tool",
+            Self::ExternalEmbeddedAsset => {
+                "keep embedded source assets inside the crate; verify generated assets with cargo package"
+            }
+            Self::ExecutableOverwrite => {
+                "create the destination exclusively, then publish by atomic rename; never truncate executable bytes"
+            }
         }
     }
 }

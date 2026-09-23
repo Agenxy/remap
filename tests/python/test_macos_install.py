@@ -35,6 +35,39 @@ from tools.remap_native_package import NativePackage, NativeProductFiles
 class MacOSInstallOrchestratorTests(unittest.TestCase):
     """Reject malformed helper output before it can steer privileged work."""
 
+    def test_executable_staging_refuses_an_existing_inode_and_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            _ = source.write_bytes(b"new executable")
+            source.chmod(0o700)
+            old = root / "old"
+            _ = old.write_bytes(b"old executable")
+            old_inode = old.stat().st_ino
+            alias = root / "alias"
+            alias.symlink_to(old)
+            for destination in (old, alias):
+                with self.assertRaises(FileExistsError):
+                    _ = remap_macos_install.stage_unsigned_executable(
+                        source, destination
+                    )
+            self.assertEqual(old.read_bytes(), b"old executable")
+            self.assertEqual(old.stat().st_ino, old_inode)
+            self.assertTrue(alias.is_symlink())
+
+    def test_executable_staging_creates_a_fresh_inode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            _ = source.write_bytes(b"executable")
+            source.chmod(0o700)
+            result = remap_macos_install.stage_unsigned_executable(
+                source, root / "generation"
+            )
+            self.assertEqual(result.read_bytes(), source.read_bytes())
+            self.assertNotEqual(result.stat().st_ino, source.stat().st_ino)
+            self.assertEqual(result.stat().st_mode & 0o777, 0o500)
+
     def test_status_validates_active_generation_and_recovery_counts(self) -> None:
         document = success(
             "status",

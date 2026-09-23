@@ -39,14 +39,7 @@ pub(crate) fn run_native_lifecycle(
         }
         let status = process.status().map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
-                // The source installation ships no lifecycle client: its
-                // lifecycle is the repository's own, and saying "recover" here
-                // would send the owner in a circle.
-                return Diagnostic::native_lifecycle(
-                    "this Remap was installed from source, which has no installed \
-                     lifecycle client; use the repository's make recover, make update \
-                     or make uninstall instead of remap system",
-                );
+                return Diagnostic::missing_lifecycle_client();
             }
             Diagnostic::native_lifecycle(format!(
                 "could not start the installed lifecycle client: {error}"
