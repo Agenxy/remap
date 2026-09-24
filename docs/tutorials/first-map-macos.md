@@ -136,7 +136,10 @@ Program, and this workflow does not claim Apple review or public Apple trust.
 
 Apple Installer asks for administrator approval. Remap then verifies its signed
 release manifest and every payload entry. It creates or reuses a durable local
-code-signing identity named `Remap Local Codesign`, signs the verified
+code-signing identity named `Remap Local Codesign`, whose creation records a trust
+setting; macOS will not record one without interactive approval, so this step needs a
+graphical session on that Mac and fails over SSH with `Operation not permitted`. It signs
+the verified
 executables on this Mac, installs the product transactionally, and proves the
 running authority, DNS listeners, and HTTP gateway belong to the same Remap
 instance.

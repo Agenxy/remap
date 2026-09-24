@@ -67,7 +67,10 @@ a root-owned staging directory, re-verifies those exact bytes, and invokes
 Apple Installer on that immutable path. This closes the gap between signature
 verification and root execution without a paid Apple identity or notarization.
 
-The Apple Installer asks for administrator approval once. It then:
+The Apple Installer asks for administrator approval. Creating the local signing
+identity also records a trust setting, and macOS will not record one without interactive
+approval, so installation needs a graphical session on that Mac and cannot be done
+unattended or over SSH. It then:
 
 1. verifies the signed Remap release manifest and every packaged byte;
 2. creates or reuses `Remap Local Codesign` in the System keychain;
