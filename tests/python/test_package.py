@@ -5,12 +5,44 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.remap_package import (
     cargo_target_directory,
+    share_registry_cache,
     verify_exact_copies,
     verify_publishable_dependency_closure,
 )
+
+
+class RegistryCacheTests(unittest.TestCase):
+    """The development gate must not need the network where nothing is missing."""
+
+    def test_private_cargo_home_reuses_the_machine_registry_cache(self) -> None:
+        """A private Cargo home holds patch configuration, not a second download."""
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            shared = base / "cargo"
+            (shared / "registry").mkdir(parents=True)
+            cargo_home = base / "cargo-home"
+            cargo_home.mkdir()
+            with patch.dict("os.environ", {"CARGO_HOME": str(shared)}):
+                link = share_registry_cache(cargo_home)
+            self.assertEqual(link, cargo_home / "registry")
+            self.assertTrue(link is not None and link.is_symlink())
+            self.assertEqual(
+                (cargo_home / "registry").resolve(), (shared / "registry").resolve()
+            )
+
+    def test_absent_machine_cache_is_not_an_error(self) -> None:
+        """A machine with no cache at all must still be able to run the gate."""
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            cargo_home = base / "cargo-home"
+            cargo_home.mkdir()
+            with patch.dict("os.environ", {"CARGO_HOME": str(base / "missing")}):
+                self.assertIsNone(share_registry_cache(cargo_home))
+            self.assertFalse((cargo_home / "registry").exists())
 
 
 class PackagePolicyTests(unittest.TestCase):

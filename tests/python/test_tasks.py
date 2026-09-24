@@ -117,6 +117,71 @@ class FreshCloneQualityTests(unittest.TestCase):
                     f"cache directory for {argument} must exist before the linter runs",
                 )
 
+    def test_every_make_target_that_uses_mise_trusts_the_configuration_first(
+        self,
+    ) -> None:
+        """The documented entry point is `make`, and `mise trust` cannot live in Python.
+
+        The task runner is itself invoked through mise, so a target that reaches mise
+        without the prerequisite that trusts the repository config fails in a fresh
+        clone no matter what the Python tasks do.
+        """
+        makefile = (Path(__file__).resolve().parents[2] / "Makefile").read_text()
+        prerequisites: dict[str, list[str]] = {}
+        bodies: dict[str, list[str]] = {}
+        target: str | None = None
+        for raw in makefile.splitlines():
+            if raw.startswith("\t"):
+                if target is not None:
+                    bodies[target].append(raw)
+                continue
+            if not (raw[:1].isalnum() or raw.startswith("_")):
+                continue
+            head, separator, rest = raw.partition(":")
+            if not separator or ":=" in raw or "=" in head:
+                target = None
+                continue
+            target = head.strip()
+            prerequisites[target] = rest.split()
+            bodies[target] = []
+        # Recipes reach mise through variables such as $(TASK), so the literal text of
+        # a line is not enough: expand the Makefile's own simple assignments first.
+        definitions: dict[str, str] = {}
+        for raw in makefile.splitlines():
+            for separator in (":=", "="):
+                head, found, tail = raw.partition(separator)
+                if found and head.strip().isidentifier() and not raw.startswith("\t"):
+                    definitions[head.strip()] = tail.strip()
+                    break
+
+        def expand(line: str) -> str:
+            for _ in range(8):
+                grown = line
+                for name, value in definitions.items():
+                    grown = grown.replace(f"$({name})", value)
+                if grown == line:
+                    return grown
+                line = grown
+            return line
+
+        self.assertIn("_require-mise", bodies, "expected the mise prerequisite")
+        self.assertTrue(
+            any("mise trust" in line for line in bodies["_require-mise"]),
+            "the mise prerequisite must trust the repository configuration",
+        )
+        offenders = [
+            name
+            for name, body in bodies.items()
+            if name != "_require-mise"
+            and any("mise" in expand(line) for line in body)
+            and "_require-mise" not in prerequisites[name]
+        ]
+        self.assertEqual(
+            offenders,
+            [],
+            f"these targets reach mise without trusting it first: {offenders}",
+        )
+
     def test_setup_trusts_the_repository_configuration_before_using_mise(self) -> None:
         """Every later `mise` call fails in a fresh clone until the config is trusted."""
         with record_commands() as commands:

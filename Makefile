@@ -62,35 +62,34 @@ _require-mise:
 		'For a package-managed install, update it through that manager.' >&2; \
 		exit 2; \
 	fi
+	@mise trust --quiet
 
 setup-install: _require-mise
 	@mise install rust python uv
 	@$(NATIVE_TASK) setup-install
 
 setup: _require-mise
-	@mise install
-	@mise exec -- bun install --frozen-lockfile
-	@mise exec -- bunx playwright install chromium webkit
+	@$(TASK) setup
 
-format:
+format: _require-mise
 	@$(TASK) format
 
-check:
+check: _require-mise
 	@$(TASK) check
 
-release-check:
+release-check: _require-mise
 	@$(TASK) release-check
 
-test:
+test: _require-mise
 	@$(TASK) test
 
-quality:
+quality: _require-mise
 	@$(TASK) quality
 
-dependencies:
+dependencies: _require-mise
 	@$(TASK) dependencies
 
-docs:
+docs: _require-mise
 	@$(TASK) docs
 
 package-macos: _require-mise
@@ -117,10 +116,10 @@ install-system: _require-mise
 install-check: _require-mise
 	@$(NATIVE_TASK) install-check
 
-run-macos:
+run-macos: _require-mise
 	@$(TASK) run-macos
 
-verify-macos:
+verify-macos: _require-mise
 	@$(TASK) verify-macos
 
 update: _require-mise

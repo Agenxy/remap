@@ -166,6 +166,38 @@ install the linker's ad-hoc signed binaries; the installer says plainly that mac
 cannot name them in a permission prompt. This exception is stated, never mistaken for
 an installation carrying the product's chosen signing identity.
 
+### 8. A gate that has only ever run on a developed machine tests the machine, not the clone
+
+Remap's development gate was split so it needs no network, no reviewed toolchain and
+nothing installed outside the repository. It passed everywhere it was run. Run on a Mac
+that had never held the repository, the first documented command failed:
+
+```
+mise ERROR Config files in ~/remap-gate-test/mise.toml are not trusted.
+```
+
+`make setup` began by calling the toolchain manager, which refuses to read a
+configuration file it has not been told to trust, so every later call failed with it.
+Past that, the quality gate handed a Swift linter a cache path under `target/` and
+expected the linter to create the directory. It does not:
+
+```
+error: Specified cache file directory does not exist: .../target
+```
+
+Nothing has built at that point in the gate, so `target/` did not exist. Neither failure
+is visible on a machine that has built the product before, which was every machine the
+gate had ever run on.
+
+**Required:** a development gate runs to completion in a fresh clone on a machine with
+no product state: nothing built, no toolchain configuration trusted, no signing identity,
+and a keychain that cannot be unlocked. It asks nothing of anyone. Whatever the gate
+needs, the gate creates: a directory it hands to a tool, and the trust a toolchain
+manager requires to read the repository's own configuration, which running that
+repository's setup task is the act of granting. This is proven by running the gate on
+such a machine and comparing the signing identities and trust settings before and after,
+not by reading the code and concluding it would pass.
+
 ## What an installer must also do
 
 - **State what is installed, and whether it is the thing that is running.** A service's
@@ -216,6 +248,10 @@ Each product's suite must contain, named so a regression names itself:
     installer's signing identifier, and the product asserts the expected value. Signing
     and strict verification precede publication; a failure leaves the prior binaries
     intact. The development path installs without an identity and states its limitation.
+
+11. The gate's own prerequisites are created by the gate: a cache directory named for a
+    tool exists before that tool runs, and the toolchain configuration is trusted before
+    any other call to that toolchain manager. Each test fails when its fix is reverted.
 
 ## What this document does not yet require: integrity
 
@@ -269,6 +305,11 @@ Each repository's quality gate must:
 - run the installer's own tests on macOS and on Linux;
 - reject a source file that writes over an existing binary path without removing or
   renaming it first, where that is statically detectable.
+
+No gate can check rule 8 from inside a machine that already satisfies it, so each
+product's development gate is run on a machine holding no product state before a release,
+and the result is recorded with the identities and trust settings observed before and
+after. A gate verified only where the product has already been built is unverified.
 
 A product that cannot yet satisfy a rule says so in its own documentation, naming the
 rule. Silence is not an exemption.
