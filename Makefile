@@ -7,7 +7,7 @@ NATIVE_TASK = MISE_AUTO_INSTALL=0 \
 MISE_VERSION := 2026.9.8
 export PREFIX REMAP_INSTALL_ROOT REMAP_LINUX_LINK
 
-.PHONY: help setup setup-install _require-mise format check test quality dependencies docs package-macos release-evidence release-evidence-verify install install-cli install-system install-check install-package-macos recover run-macos verify-macos update uninstall uninstall-cli uninstall-system
+.PHONY: help setup setup-install _require-mise format check release-check test quality dependencies docs package-macos release-evidence release-evidence-verify install install-cli install-system install-check install-package-macos recover run-macos verify-macos update uninstall uninstall-cli uninstall-system
 
 help:
 	@printf '%s\n' \
@@ -16,7 +16,8 @@ help:
 		'  make setup-install Install only the pinned tools needed for native install' \
 		'  make setup         Install all pinned contributor and browser tools' \
 		'  make format        Format first-party Rust, Swift, Python, and TypeScript code' \
-		'  make check         Run the complete local release and evidence gate' \
+		'  make check         Run the development gate: what judges this working copy' \
+		'  make release-check Run the release gate: the above, plus what protects other machines' \
 		'  make test          Run all Rust, Swift, Python, and browser tests' \
 		'  make quality       Enforce structural and repository policy' \
 		'  make dependencies  Audit advisories, licenses, sources, and versions' \
@@ -76,6 +77,9 @@ format:
 
 check:
 	@$(TASK) check
+
+release-check:
+	@$(TASK) release-check
 
 test:
 	@$(TASK) test

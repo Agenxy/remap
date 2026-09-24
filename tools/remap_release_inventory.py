@@ -69,7 +69,7 @@ def run_dependency_policy(root: Path) -> None:
 
 def swift_inventory(root: Path, metadata_path: Path) -> SwiftInventory:
     """Ask SwiftPM for the exact native graph and reject unaudited externals."""
-    verify_selected_xcode()
+    verify_selected_xcode(required=True)
     result = capture(
         root,
         (

@@ -27,7 +27,9 @@ def main() -> int:
         verify_javascript_dependencies()
         verify_mise_tools()
         verify_mise_release()
-        verify_selected_xcode()
+        # The freshness audit is a release concern in its own right, so it holds the
+        # pin whatever mode the process is in.
+        verify_selected_xcode(required=True)
     except (OSError, RuntimeError, TypeError, ValueError, HTTPError, URLError) as error:
         print(f"Dependency freshness failed: {error}", file=sys.stderr)
         return 1
@@ -94,8 +96,34 @@ def verify_mise_release() -> None:
     require_current("mise", installed, latest)
 
 
-def verify_selected_xcode() -> None:
+_release_toolchain_required = False
+
+
+def require_release_toolchain() -> None:
+    """Make the reviewed-toolchain pin refuse for the rest of this process.
+
+    Release and packaging paths call this. Everything else reports a mismatch and
+    continues, so that a machine whose Xcode has moved can still build, test and
+    install locally. What the pin buys is the ability to say which compiler produced
+    an artifact, which matters to whoever installs it, not to the person writing it.
+    """
+    global _release_toolchain_required
+    _release_toolchain_required = True
+
+
+def release_toolchain_required() -> bool:
+    """Whether the reviewed-toolchain pin refuses rather than reports."""
+    return _release_toolchain_required
+
+
+def verify_selected_xcode(*, required: bool | None = None) -> None:
     """Require macOS builds to use one of the repository's reviewed Xcode builds.
+
+    `required=False` reports the mismatch and continues. A local build is judged by
+    the same tests either way; what an unreviewed toolchain costs is the ability to
+    say which compiler produced an artifact, which matters only for something
+    someone else installs. Refusing a developer's build for it blocks work and
+    protects nobody, so the release paths pass `required=True` and keep the pin.
 
     The pin file names one Xcode version and then every reviewed build of it,
     one per line. More than one build is allowed because Apple withdraws beta
@@ -105,6 +133,8 @@ def verify_selected_xcode() -> None:
     """
     if sys.platform != "darwin":
         return
+    if required is None:
+        required = _release_toolchain_required
     expected = (
         (ROOT / "platforms/macos/XCODE_VERSION")
         .read_text(encoding="utf-8")
@@ -119,8 +149,13 @@ def verify_selected_xcode() -> None:
         [f"Xcode {expected[0]}", f"Build version {build}"] for build in expected[1:]
     ]
     if actual not in accepted:
-        raise RuntimeError(
-            f"selected Xcode is {actual!r}; the reviewed builds are {accepted!r}"
+        message = f"selected Xcode is {actual!r}; the reviewed builds are {accepted!r}"
+        if required:
+            raise RuntimeError(message)
+        advice = "This build is for local use and must not be distributed;"
+        print(
+            f"warning: {message}. {advice} `make release-check` enforces the pin.",
+            file=sys.stderr,
         )
 
 

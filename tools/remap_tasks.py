@@ -17,7 +17,12 @@ import tomllib
 
 from tools.remap_app import build as build_native_app
 from tools.remap_app import launch as launch_native_app
-from tools.remap_freshness import mise_tool_version, verify_selected_xcode
+from tools.remap_freshness import (
+    mise_tool_version,
+    release_toolchain_required,
+    require_release_toolchain,
+    verify_selected_xcode,
+)
 from tools.remap_help import print_task_help
 from tools.remap_linux_install import (
     install_or_update as install_or_update_linux,
@@ -171,6 +176,10 @@ def installation_root() -> Path:
     return root.resolve()
 
 
+# Whether the reviewed-toolchain pin refuses, rather than reports. `make check` judges
+# code and distributes nothing, so it reports; `make release-check` and every packaging
+# path set this and enforce the pin, because an artifact someone else installs must be
+# able to name the compiler that produced it.
 def task_help() -> None:
     """Print the stable Make-facing task catalog."""
     print_task_help()
@@ -583,9 +592,14 @@ def task_install_check() -> None:
 
 
 def task_check() -> None:
-    """Run the complete reproducible local release gate."""
+    """Run the development gate: everything that judges this working copy.
+
+    Not the release gate. This must pass on any Mac or Linux box with the pinned
+    tools installed, without network access to a package registry, without the
+    reviewed Xcode, and without upgrading anything outside the repository. A gate a
+    contributor cannot run is a gate nobody runs.
+    """
     verify_policy_copies(ROOT, PRODUCT_VERSION)
-    task_dependencies()
     task_quality()
     run(("mise", "exec", "--", "cargo", "fmt", "--all", "--check"))
     run(
@@ -607,12 +621,25 @@ def task_check() -> None:
     task_test()
     macos_bundle = task_build_macos_app() if sys.platform == "darwin" else None
     verify_packages()
-    if macos_bundle is not None:
-        verify_release_evidence_in_isolation()
     task_docs()
     task_install_check()
-    if macos_bundle is not None:
+    if macos_bundle is not None and release_toolchain_required():
+        verify_release_evidence_in_isolation()
         verify_macos_release_metadata(macos_bundle)
+
+
+def task_release_check() -> None:
+    """Run the complete reproducible release gate: the development gate and more.
+
+    What this adds is everything that protects a machine other than this one: pins
+    current with their registries, advisories and licences clean, the reviewed
+    toolchain enforced rather than reported, release evidence rebuilt in isolation,
+    and the linked SDK stamped as expected. It needs the network and a reviewed
+    Xcode, and it is the gate a release must pass.
+    """
+    require_release_toolchain()
+    task_dependencies()
+    task_check()
 
 
 def verify_macos_release_metadata(bundle: Path) -> None:
@@ -648,6 +675,7 @@ TASKS: dict[str, Callable[[], None]] = {
     "setup": task_setup,
     "format": task_format,
     "check": task_check,
+    "release-check": task_release_check,
     "test": task_test,
     "quality": task_quality,
     "dependencies": task_dependencies,

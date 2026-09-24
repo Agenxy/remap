@@ -69,7 +69,7 @@ def build(
     installer_identity: ReleaseInstallerSigningIdentity,
 ) -> PortablePackage:
     """Build and verify one no-shell portable package without a paid identity."""
-    verify_selected_xcode()
+    verify_selected_xcode(required=True)
     architecture = _architecture()
     validate_version(product_version)
     _validate_signing_key(signing_key, root=root)

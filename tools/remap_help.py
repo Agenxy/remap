@@ -11,7 +11,8 @@ def print_task_help() -> None:
   make setup-install Install only the pinned tools needed for native install
   make setup         Install all pinned contributor and browser tools
   make format        Format first-party Rust, Swift, Python, and TypeScript code
-  make check         Run the complete local release and evidence gate
+  make check         Run the development gate: what judges this working copy
+  make release-check Run the release gate: the above, plus what protects other machines
   make test          Run all Rust, Swift, Python, and browser tests
   make quality       Enforce structural and repository policy
   make dependencies  Audit advisories, licenses, sources, and versions
