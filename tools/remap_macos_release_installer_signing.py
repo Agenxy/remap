@@ -297,23 +297,39 @@ def _create(keychain: Path) -> None:
         private_key,
         identity_name=IDENTITY_NAME,
     )
-    _ = local_signing.run_binary(
-        (
-            "/usr/bin/security",
-            "import",
-            "/dev/stdin",
-            "-k",
-            str(keychain),
-            "-P",
-            local_signing.ARCHIVE_TRANSPORT_PASSWORD,
-            "-x",
-            "-T",
-            "/usr/bin/productsign",
-            "-f",
-            "pkcs12",
-        ),
-        archive,
-    )
+    # macOS labels an imported private key after the path it was read from, so importing
+    # through `/dev/stdin` produced a keychain item called `stdin`, and the system asked
+    # the owner to authorise `key "stdin"`: a request nobody can evaluate. The PKCS#12
+    # already carries the product's chosen name and macOS does not use it for the key.
+    # The archive is therefore handed over through a file named for the identity, in a
+    # directory only this user can enter, and removed as soon as the import returns.
+    # `security import` needs to seek, so a pipe cannot carry it.
+    with tempfile.TemporaryDirectory(prefix="remap-installer-identity-") as raw:
+        transport_directory = Path(raw)
+        transport_directory.chmod(0o700)
+        transport = transport_directory / f"{IDENTITY_NAME}.p12"
+        transport.touch(mode=0o600)
+        _ = transport.write_bytes(archive)
+        try:
+            _ = local_signing.run_binary(
+                (
+                    "/usr/bin/security",
+                    "import",
+                    str(transport),
+                    "-k",
+                    str(keychain),
+                    "-P",
+                    local_signing.ARCHIVE_TRANSPORT_PASSWORD,
+                    "-x",
+                    "-T",
+                    "/usr/bin/productsign",
+                    "-f",
+                    "pkcs12",
+                ),
+                b"",
+            )
+        finally:
+            transport.unlink(missing_ok=True)
 
 
 def _capture(arguments: tuple[str, ...]) -> str:

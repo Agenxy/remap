@@ -214,6 +214,38 @@ deleting and re-cloning the directory. Verify at a path never used before, delet
 state the tool keeps outside the repository, and confirm the starting condition rather
 than assuming a fresh clone implies it.
 
+### 9. A prompt the owner cannot answer is a prompt that should not exist
+
+macOS asked:
+
+> `remap-release-xar-signer` wants to sign using key **"stdin"** in your keychain.
+> To allow this, enter the "login" keychain password.
+
+Two defects in one dialog. The key is called `stdin` because the installer identity was
+imported with `security import /dev/stdin`, and macOS labels an imported key after the
+path it was read from; the product had chosen the name `Remap Release Installer` and put
+it in the PKCS#12, and the dialog still showed none of it. And the dialog appeared at all
+during a development build, because the key's access list did not name the program that
+was asking, so a person had to authorise a step that protects nobody on the machine that
+built it.
+
+The owner is asked to weigh a request they cannot evaluate: not what is being signed, not
+which key, not on whose behalf. The only safe answer to an illegible prompt is Deny, which
+is also the answer that stops the work.
+
+**Required:** every identity, key, credential, service and process a product creates is
+named for what it is and which product it belongs to, in whatever field the platform will
+show a person: the keychain item's label, the launchd label and unit description, the
+signing identifier, the embedded plist, the process name, the log identifier. A platform
+default, an input path, a temporary file name, or an empty field where a name belongs is a
+defect, not a cosmetic one. Where a product's own name for a credential does not reach the
+system dialog, that is a bug in how it was created, and it is fixed at creation.
+
+**And:** a development path never asks for a credential at all. An authorisation that
+protects whoever installs an artifact belongs to the release path, which is also the only
+place a prompt can be legible, because there the owner is deliberately making something for
+other people. See rule 8.
+
 ## What an installer must also do
 
 - **State what is installed, and whether it is the thing that is running.** A service's
@@ -272,6 +304,11 @@ Each product's suite must contain, named so a regression names itself:
     point's variables before looking for the tool's name in a recipe. A private tool home
     shares the machine's package cache. Each test fails when its fix is reverted, and
     that reversion is performed rather than assumed.
+
+12. Every name the platform will show a person is asserted against the product's chosen
+    value: the keychain label of any identity the product imports, the service label and
+    description, the signing identifier, and the embedded plist name. A test that reads
+    back a platform default, an input path such as `stdin`, or an empty field fails.
 
 ## What this document does not yet require: integrity
 

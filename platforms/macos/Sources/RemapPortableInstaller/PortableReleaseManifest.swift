@@ -126,7 +126,7 @@ struct PortableReleaseVerifier: Sendable {
     static let signingIdentity = "remap-release"
     static let signingNamespace = "remap-release"
     static let releasePublicKey = """
-    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGDuwpKP+y7P4EN1/3snVhNRVTugTbFLTRZLvtA5P5kU remap-release-v1
+    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDz/2DGz1HxwE5JHhxzabvtiXAKvV5W8tsBzGV3R15xg remap-release-development-only
     """
 
     private let runner: PortableCommandRunner

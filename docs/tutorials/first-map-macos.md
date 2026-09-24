@@ -25,10 +25,14 @@ Download these files from the same Remap release into one directory:
 - `remap-release-signing-key.pub`
 - `remap-release-installer.pem`
 
+The public-key fingerprint must be exactly this. The name in it says which key
+signed the download: a key marked `remap-release-development-only` signs packages
+built for the machine that built them, and is not the key a public release carries.
+
 The public-key fingerprint must be exactly:
 
 ```text
-256 SHA256:bG9pik9VV1jT2rZrsC7sYJCZOfc0tiuSrL05/v6FmtI remap-release-v1 (ED25519)
+256 SHA256:GoJridmNxBJxsXWfCvP1SxQyMpWl8cWX0dGOSB1WjSc remap-release-development-only (ED25519)
 ```
 
 From that download directory, check it:

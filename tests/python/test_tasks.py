@@ -15,6 +15,7 @@ import tempfile
 import unittest
 from collections.abc import Generator, Sequence
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from tools import remap_tasks
@@ -407,6 +408,65 @@ class NativeProductTaskTests(unittest.TestCase):
             task_package_macos()
         build.assert_not_called()
 
+    @staticmethod
+    def _package_fixture() -> PortablePackage:
+        return PortablePackage(
+            path=Path("/private/release/Remap.pkg"),
+            sha256="a" * 64,
+            signature_path=Path("/private/release/Remap.pkg.sig"),
+            signature_sha256="c" * 64,
+            release_manifest_sha256="b" * 64,
+            architecture="arm64",
+            product_version="0.2.0",
+        )
+
+    def test_a_development_pin_refuses_to_build_a_package_by_default(self) -> None:
+        """A signature from a key anyone can read proves nothing to anyone else."""
+        with (
+            patch.dict(
+                "tools.remap_tasks.os.environ",
+                {"REMAP_RELEASE_SIGNING_KEY": "/private/release/remap-release"},
+                clear=True,
+            ),
+            patch("tools.remap_tasks.require_macos"),
+            patch(
+                "tools.remap_tasks.pinned_release_key_is_development", return_value=True
+            ),
+            patch("tools.remap_tasks.build_portable_macos_package") as build,
+            self.assertRaisesRegex(RuntimeError, "development-only"),
+        ):
+            task_package_macos()
+        build.assert_not_called()
+
+    def test_a_development_package_needs_no_identity_and_says_what_it_is(self) -> None:
+        """It is installed on the machine that built it, so it needs no keychain."""
+        with (
+            patch.dict(
+                "tools.remap_tasks.os.environ",
+                {
+                    "REMAP_RELEASE_SIGNING_KEY": "/private/release/remap-release",
+                    "REMAP_DEVELOPMENT_PACKAGE": "1",
+                },
+                clear=True,
+            ),
+            patch("tools.remap_tasks.require_macos"),
+            patch(
+                "tools.remap_tasks.pinned_release_key_is_development", return_value=True
+            ),
+            patch(
+                "tools.remap_tasks.ensure_release_installer_identity"
+            ) as installer_identity,
+            patch("tools.remap_tasks.build_portable_macos_package") as build,
+        ):
+            build.return_value = self._package_fixture()
+            task_package_macos()
+        installer_identity.assert_not_called()
+        keywords = cast("dict[str, object]", build.call_args.kwargs)
+        self.assertIsNone(keywords["installer_identity"])
+        output = keywords["output"]
+        self.assertIsInstance(output, Path)
+        self.assertIn("-development", Path(str(output)).name)
+
     def test_macos_package_uses_only_the_explicit_release_key(self) -> None:
         release_key = "/private/release/remap-release.pub"
         expected_identity = ReleaseInstallerSigningIdentity(
@@ -425,6 +485,10 @@ class NativeProductTaskTests(unittest.TestCase):
             patch(
                 "tools.remap_tasks.ensure_release_installer_identity"
             ) as installer_identity,
+            patch(
+                "tools.remap_tasks.pinned_release_key_is_development",
+                return_value=False,
+            ),
             patch("tools.remap_tasks.build_portable_macos_package") as build,
         ):
             installer_identity.return_value = expected_identity

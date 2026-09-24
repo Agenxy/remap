@@ -369,6 +369,21 @@ def task_verify_macos_app() -> None:
     launch_native_app(ROOT, bundle, verify_process=True)
 
 
+DEVELOPMENT_KEY_MARKER = "remap-release-development-only"
+DEVELOPMENT_PACKAGE_VARIABLE = "REMAP_DEVELOPMENT_PACKAGE"
+
+
+def pinned_release_key_is_development(root: Path) -> bool:
+    """Whether the pinned public key announces itself as a development key.
+
+    The comment field is not part of what the pin matches, so it is free to carry this
+    statement, and it travels with the repository: anyone who builds a package can see
+    which key the result will be signed by.
+    """
+    pin = root / "docs/release/remap-release-signing-key.pub"
+    return DEVELOPMENT_KEY_MARKER in pin.read_text(encoding="utf-8")
+
+
 def task_package_macos() -> None:
     """Build the prebuilt package that signs Remap locally on the target Mac."""
     require_macos()
@@ -379,16 +394,36 @@ def task_package_macos() -> None:
             + "a personal SSH key is never selected automatically"
         )
     key = Path(configured_key).expanduser()
-    output = ROOT / "dist" / f"Remap-{PRODUCT_VERSION}-{platform.machine()}.pkg"
+    development = pinned_release_key_is_development(ROOT)
+    if development and not os.environ.get(DEVELOPMENT_PACKAGE_VARIABLE):
+        raise RuntimeError(
+            "the pinned release key is marked "
+            + f"{DEVELOPMENT_KEY_MARKER}, so this package would carry a signature that "
+            + "proves nothing to anyone else. Set "
+            + f"{DEVELOPMENT_PACKAGE_VARIABLE}=1 to build one for local testing, or "
+            + "pin a real release key to build a distributable package."
+        )
+    suffix = "-development" if development else ""
+    output = ROOT / "dist" / f"Remap-{PRODUCT_VERSION}-{platform.machine()}{suffix}.pkg"
     package = build_portable_macos_package(
         ROOT,
         product_version=PRODUCT_VERSION,
         output=output,
         signing_key=key,
-        installer_identity=ensure_release_installer_identity(ROOT),
+        # A development package is installed on the machine that built it, so it needs
+        # no Apple installer signature and therefore no keychain and no person.
+        installer_identity=(
+            None if development else ensure_release_installer_identity(ROOT)
+        ),
     )
     print(f"Built {package.path} (SHA-256 {package.sha256})")
     print(f"Signed {package.signature_path} " + f"(SHA-256 {package.signature_sha256})")
+    if development:
+        print(
+            "This package is signed by a development key held in a file, not by "
+            + "hardware. Its signature establishes that these bytes came from this "
+            + "machine and nothing more. Do not distribute it."
+        )
 
 
 def task_install_package_macos() -> None:

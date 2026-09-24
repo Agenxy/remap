@@ -222,18 +222,50 @@ class PortablePackageTests(unittest.TestCase):
 """
         )
         for listing in (
-            ".\n./Library/._Application Support\n",
-            ".\n./Library/Application Support/._remap\n",
             ".\n./Library/../private/file\n",
             ".\n./Library//file\n",
             ".\nLibrary/file\n",
             ".\n./Library/file\x00suffix\n",
+            # An AppleDouble path component is never the platform's doing.
+            ".\n./Library/._Application Support/file\n",
         ):
             with (
                 self.subTest(listing=listing),
                 self.assertRaisesRegex(RuntimeError, "unsafe member"),
             ):
                 verify_payload_member_names(listing)
+
+    def test_orphan_appledouble_members_are_refused(self) -> None:
+        """A sidecar with no counterpart is a file smuggled in under a metadata name."""
+        for listing in (
+            ".\n./Library/._Application Support\n",
+            ".\n./Library/Application Support/._remap\n",
+            ".\n./._\n",
+        ):
+            with (
+                self.subTest(listing=listing),
+                self.assertRaisesRegex(RuntimeError, "no counterpart"),
+            ):
+                verify_payload_member_names(listing)
+
+    def test_paired_appledouble_members_are_accepted(self) -> None:
+        """macOS 27 emits one beside every member and cannot be told not to.
+
+        `com.apple.provenance` is stamped on every created file and cannot be removed
+        even as root, so pkgbuild carries it as a sidecar. On extraction the installer
+        decodes these back into extended attributes and no `._` file reaches disk.
+        Refusing them refuses every package this platform can build.
+        """
+        members = (
+            ".",
+            "./Library",
+            "./._Library",
+            "./Library/Application Support",
+            "./Library/._Application Support",
+            "./Library/Application Support/remap",
+            "./Library/Application Support/._remap",
+        )
+        verify_payload_member_names("".join(f"{member}\n" for member in members))
 
     def test_strip_removes_existing_signature_before_mutating_binary(self) -> None:
         binary = self.directory / "signed-binary"

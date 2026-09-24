@@ -23,6 +23,7 @@ from tools.remap_macos_artifact import expected_macos_sdk, normalize_macos_sdk_m
 from tools.remap_macos_package_metadata import (
     normalize_package_extended_attributes,
     normalize_package_timestamps,
+    removable_extended_attributes,
     verify_payload_member_names,
 )
 from tools.remap_macos_release_installer_signing import (
@@ -66,9 +67,17 @@ def build(
     product_version: str,
     output: Path,
     signing_key: Path,
-    installer_identity: ReleaseInstallerSigningIdentity,
+    installer_identity: ReleaseInstallerSigningIdentity | None,
 ) -> PortablePackage:
-    """Build and verify one no-shell portable package without a paid identity."""
+    """Build and verify one no-shell portable package without a paid identity.
+
+    `installer_identity` is `None` for a development package. Apple's installer
+    signature is what lets another Mac accept the package, so it is required for
+    anything distributed; producing one needs a private key in a keychain, and macOS
+    asks a human for the keychain password when the key's access list does not name the
+    signer. A package built to be installed on the machine that built it does not need
+    that signature and must not need that person.
+    """
     verify_selected_xcode(required=True)
     architecture = _architecture()
     validate_version(product_version)
@@ -131,6 +140,21 @@ def build(
                 "recommended",
                 "--component-plist",
                 str(component_plist),
+                # macOS 27 stamps every created file with `com.apple.provenance`, which
+                # cannot be removed even as root, and pkgbuild carries an unremovable
+                # attribute into the payload as an AppleDouble `._` sidecar.
+                # `COPYFILE_DISABLE` below does not prevent it. Excluding the sidecars
+                # keeps the payload to the files Remap actually installs. Specifying a
+                # filter at all inhibits pkgbuild's own defaults, so those are restated
+                # here rather than silently lost.
+                "--filter",
+                r"(^|/)\._[^/]*$",
+                "--filter",
+                r"(^|/)\.DS_Store$",
+                "--filter",
+                r"(^|/)\.svn(/|$)",
+                "--filter",
+                r"(^|/)CVS(/|$)",
                 str(unsigned),
             ),
             root=root,
@@ -143,21 +167,24 @@ def build(
             product_version=product_version,
             expected_manifest=manifest_bytes,
         )
-        signed = workspace / "Remap-signed.pkg"
-        sign_release_installer_package(unsigned, signed, installer_identity)
-        canonicalize_xar_metadata(
-            signed,
-            signature_signer=products / "remap-release-xar-signer",
-            certificate_sha256=installer_identity.sha256,
-            keychain=installer_identity.keychain,
-        )
-        _verify_package(
-            signed,
-            workspace / "signed-expanded",
-            product_version=product_version,
-            expected_manifest=manifest_bytes,
-            require_unsigned=False,
-        )
+        if installer_identity is None:
+            signed = unsigned
+        else:
+            signed = workspace / "Remap-signed.pkg"
+            sign_release_installer_package(unsigned, signed, installer_identity)
+            canonicalize_xar_metadata(
+                signed,
+                signature_signer=products / "remap-release-xar-signer",
+                certificate_sha256=installer_identity.sha256,
+                keychain=installer_identity.keychain,
+            )
+            _verify_package(
+                signed,
+                workspace / "signed-expanded",
+                product_version=product_version,
+                expected_manifest=manifest_bytes,
+                require_unsigned=False,
+            )
         _sign_file(signed, signing_key, namespace=PACKAGE_NAMESPACE)
         signed_signature = signed.with_suffix(signed.suffix + ".sig")
         pinned_public_key = (
@@ -560,7 +587,7 @@ def _generated_signature_matches(path: Path, data: bytes) -> bool:
         and information.st_uid == os.getuid()
         and stat.S_IMODE(information.st_mode) == 0o400
         and information.st_size == len(data)
-        and not _extended_attribute_names(path)
+        and not removable_extended_attributes(_extended_attribute_names(path))
         and hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(data).digest()
     )
 
