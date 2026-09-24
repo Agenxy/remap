@@ -190,11 +190,21 @@ Each product's suite must contain, named so a regression names itself:
 Everything above is about **reliability**: an installation that works, and that says so
 truthfully. None of it establishes **what** is being installed.
 
-As of 2026-09-22, Compass and Supgang install a binary the owner already has, by copying
-it, with no verification of its origin. Remap verifies a generation's manifest, hashes,
-modes and ownership before publishing it, which is far stronger, but the manifest is
-still one the same installer produced: it detects a damaged or incomplete image, not a
-substituted one. No product yet refuses an artifact that is intact but not the owner's.
+As of 2026-09-22 the mechanisms exist unevenly, and each product's honest answer differs.
+
+Remap's package path is the strongest and does check provenance: `install-package-macos`
+verifies a detached signature over the package and installs from root-owned staging, and
+the signing identity is one created locally and trusted by the administrator, so no issuer
+outside the owner is involved. Its source path builds from a checkout instead, where
+provenance is whatever that checkout was. Separately, every install publishes a generation
+whose declared files, hashes, modes and ownership are verified first, which catches a
+damaged or incomplete image but, being a manifest the same installer produced, not a
+substituted one.
+
+Supgang's TUF design decides this properly for Supgang's own updates, and nothing else
+installs through it.
+
+Compass copies a binary and verifies nothing about where it came from.
 
 The sovereign answer is not an Apple Developer certificate or any other issuer outside
 the owner's control, and most of it already exists. Supgang's `docs/security/secure-updates.md`

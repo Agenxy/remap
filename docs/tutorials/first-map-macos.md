@@ -66,6 +66,43 @@ The certificate is self-signed and is therefore not publicly Apple-trusted;
 the exact fingerprint and detached Ed25519 signature provide the release
 identity without a paid Apple account.
 
+## Trust the release installer certificate, once per Mac
+
+Apple Installer refuses a package whose signer it does not trust, and
+`-allowUntrusted` does not change that: the refusal happens in its preflight, as
+`PKTrustLevelNotTrusted`. So a Mac installing Remap for the first time must be told
+this certificate is trusted, once. That is what `remap-release-installer.pem` is for.
+
+Compare its fingerprint with the one above before trusting anything:
+
+```sh
+openssl x509 -in remap-release-installer.pem -noout -fingerprint -sha256
+```
+
+Continue only if it is exactly
+`44C5C1BFEE4479F03AFF134F1A8E7971EA55C981698CFC6E0E7A100CE4239618`. Then:
+
+```sh
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain remap-release-installer.pem
+```
+
+**This must be run by someone sitting at that Mac.** macOS requires interactive
+approval to change trust settings, and refuses over SSH with "the authorization was
+denied since no user interaction was possible", whatever sudo allows. It is the one
+step in this tutorial that cannot be automated or performed remotely.
+
+This does change system trust, unlike the `ssh-keygen` allow-list above, and it is
+the only step here that does. It says that packages signed by this exact certificate
+may be installed on this Mac. `make uninstall` removes it again, and you can remove it
+yourself at any time:
+
+```sh
+sudo security delete-certificate -Z \
+  44C5C1BFEE4479F03AFF134F1A8E7971EA55C981698CFC6E0E7A100CE4239618 \
+  /Library/Keychains/System.keychain
+```
+
 ## Install
 
 Do not open the mutable download directly in Finder. Copy it to a new
