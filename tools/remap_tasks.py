@@ -46,6 +46,7 @@ from tools.remap_macos_portable_package import build as build_portable_macos_pac
 from tools.remap_macos_release_installer_signing import (
     ensure_release_installer_identity,
 )
+from tools.remap_macos_signing import ensure_local_codesigning_identity
 from tools.remap_macos_verified_package_install import install_verified_package
 from tools.remap_package import (
     cargo_target_directory,
@@ -101,6 +102,7 @@ PYTHON_PATHS = (
     "tools/remap_release_artifacts.py",
     "tools/remap_release_inventory.py",
     "tools/remap_release_model.py",
+    "tests/python/test_app.py",
     "tests/python/test_docs.py",
     "tests/python/test_freshness.py",
     "tests/python/test_linux_bootstrap.py",
@@ -335,7 +337,12 @@ def task_build_macos_app() -> Path:
     """Build and verify one project-local native application bundle."""
     require_macos()
     verify_selected_xcode()
-    return build_native_app(ROOT, PRODUCT_VERSION, release=False)
+    identity = (
+        ensure_local_codesigning_identity() if release_toolchain_required() else None
+    )
+    return build_native_app(
+        ROOT, PRODUCT_VERSION, release=False, signing_identity=identity
+    )
 
 
 def task_run_macos_app() -> None:
