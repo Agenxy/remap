@@ -191,12 +191,28 @@ gate had ever run on.
 
 **Required:** a development gate runs to completion in a fresh clone on a machine with
 no product state: nothing built, no toolchain configuration trusted, no signing identity,
-and a keychain that cannot be unlocked. It asks nothing of anyone. Whatever the gate
-needs, the gate creates: a directory it hands to a tool, and the trust a toolchain
-manager requires to read the repository's own configuration, which running that
-repository's setup task is the act of granting. This is proven by running the gate on
-such a machine and comparing the signing identities and trust settings before and after,
-not by reading the code and concluding it would pass.
+and a keychain that cannot be unlocked. It asks nothing of anyone, and it needs no
+network where nothing is actually missing: a private tool home built to hold generated
+configuration shares the machine's package cache rather than discarding it. Whatever the
+gate needs, the gate creates: a directory it hands to a tool, and the trust a toolchain
+manager requires to read the repository's own configuration.
+
+**The fix belongs wherever the documented entry point reaches it.** Trust could not live
+in the Python task runner, because that runner is itself invoked through the toolchain
+manager and so needs the trust it would establish. It belongs in the prerequisite every
+target declares. A fix placed in a layer the documented command never reaches is not a
+fix, and a test that calls the inner function directly will not notice.
+
+Both properties are proven by running the gate on such a machine, comparing signing
+identities and trust settings before and after, and running it again with the package
+manager forced offline. Reading the code and concluding it would pass is not proof.
+
+**A clean-machine test is easy to contaminate with your own earlier attempt.** The first
+run of this proof reported success at a path where the config had been trusted by hand
+minutes before; the toolchain manager keys trust by **path**, so the entry survived
+deleting and re-cloning the directory. Verify at a path never used before, delete the
+state the tool keeps outside the repository, and confirm the starting condition rather
+than assuming a fresh clone implies it.
 
 ## What an installer must also do
 
@@ -251,7 +267,11 @@ Each product's suite must contain, named so a regression names itself:
 
 11. The gate's own prerequisites are created by the gate: a cache directory named for a
     tool exists before that tool runs, and the toolchain configuration is trusted before
-    any other call to that toolchain manager. Each test fails when its fix is reverted.
+    any other call to that toolchain manager. The trust test asserts against the
+    **documented entry point**, not only the inner function, and resolves that entry
+    point's variables before looking for the tool's name in a recipe. A private tool home
+    shares the machine's package cache. Each test fails when its fix is reverted, and
+    that reversion is performed rather than assumed.
 
 ## What this document does not yet require: integrity
 
