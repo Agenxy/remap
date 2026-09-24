@@ -1,3 +1,8 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.14"
+# dependencies = []
+# ///
 """Typed development, verification, and CLI installation tasks for Remap."""
 
 from __future__ import annotations
@@ -236,7 +241,7 @@ def task_format() -> None:
 
 
 def task_test() -> None:
-    """Run every supported Rust, Swift, Python, and browser test target."""
+    """Run development tests; the signed native image contract is release-only."""
     run(
         (
             "mise",
@@ -252,7 +257,6 @@ def task_test() -> None:
     if sys.platform == "darwin":
         verify_selected_xcode()
         run(("xcrun", "swift", "test", "--package-path", "platforms/macos"))
-        verify_generated_package_contract(ROOT, PRODUCT_VERSION)
     run(
         (
             "mise",
@@ -605,6 +609,10 @@ def task_check() -> None:
     tools installed, without network access to a package registry, without the
     reviewed Xcode, and without upgrading anything outside the repository. A gate a
     contributor cannot run is a gate nobody runs.
+
+    Installation checks belong to release-check: neither the isolated CLI install
+    nor the certificate-backed native image contract is a development prerequisite.
+    Building the development app requires no keychain item or trust approval.
     """
     verify_policy_copies(ROOT, PRODUCT_VERSION)
     task_quality()
@@ -629,7 +637,6 @@ def task_check() -> None:
     macos_bundle = task_build_macos_app() if sys.platform == "darwin" else None
     verify_packages()
     task_docs()
-    task_install_check()
     if macos_bundle is not None and release_toolchain_required():
         verify_release_evidence_in_isolation()
         verify_macos_release_metadata(macos_bundle)
@@ -642,11 +649,18 @@ def task_release_check() -> None:
     current with their registries, advisories and licences clean, the reviewed
     toolchain enforced rather than reported, release evidence rebuilt in isolation,
     and the linked SDK stamped as expected. It needs the network and a reviewed
-    Xcode, and it is the gate a release must pass.
+    Xcode, and it is the gate a release must pass. This gate also owns the isolated
+    CLI install-check and macOS's generated native package contract. The latter
+    builds certificate-backed products and may require keychain or trust approval;
+    it must never run as a prerequisite for the development gate.
     """
     require_release_toolchain()
     task_dependencies()
+    if sys.platform == "darwin":
+        # Produce the native binaries before task_check's release metadata checks.
+        verify_generated_package_contract(ROOT, PRODUCT_VERSION)
     task_check()
+    task_install_check()
 
 
 def verify_macos_release_metadata(bundle: Path) -> None:

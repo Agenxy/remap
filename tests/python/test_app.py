@@ -111,6 +111,8 @@ class AppSigningTests(unittest.TestCase):
             mock.patch("tools.remap_tasks.require_macos"),
             mock.patch("tools.remap_tasks.verify_selected_xcode"),
             mock.patch("tools.remap_tasks.task_dependencies"),
+            mock.patch("tools.remap_tasks.verify_generated_package_contract"),
+            mock.patch("tools.remap_tasks.task_install_check"),
             mock.patch(
                 "tools.remap_tasks.task_check",
                 side_effect=remap_tasks.task_build_macos_app,

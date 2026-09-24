@@ -1,3 +1,8 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.14"
+# dependencies = []
+# ///
 """Task-front-door behavior that must remain honest across platforms."""
 
 from __future__ import annotations
@@ -7,13 +12,17 @@ import io
 import subprocess
 import tempfile
 import unittest
+from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import patch
 
+from tools import remap_tasks
+from tools.remap_macos_install import verify_generated_package_contract
 from tools.remap_macos_portable_package import PortablePackage
 from tools.remap_macos_release_installer_signing import (
     ReleaseInstallerSigningIdentity,
 )
+from tools.remap_macos_signing import LocalCodeSigningIdentity
 from tools.remap_release_model import ArtifactSpec
 from tools.remap_tasks import (
     task_build_macos_app,
@@ -28,6 +37,160 @@ from tools.remap_tasks import (
     task_update,
     verify_release_evidence_in_isolation,
 )
+
+
+@contextlib.contextmanager
+def gate_tool_boundaries() -> Generator[None]:
+    """Keep task dispatch real while replacing external builds and read boundaries."""
+    with contextlib.ExitStack() as stack:
+        for name in (
+            "run",
+            "task_quality",
+            "verify_policy_copies",
+            "verify_packages",
+            "task_docs",
+            "task_dependencies",
+            "verify_selected_xcode",
+        ):
+            _ = stack.enter_context(patch(f"tools.remap_tasks.{name}"))
+        _ = stack.enter_context(
+            patch("tools.remap_macos_install.verify_selected_xcode")
+        )
+        _ = stack.enter_context(patch("tools.remap_macos_install.native_user"))
+        _ = stack.enter_context(
+            patch("tools.remap_freshness._release_toolchain_required", False)
+        )
+        _ = stack.enter_context(
+            patch(
+                "subprocess.run",
+                side_effect=AssertionError("unexpected external command"),
+            )
+        )
+        yield
+
+
+class GateSigningBoundaryTests(unittest.TestCase):
+    """Exercise the gate call graph without requiring keychain or native authority."""
+
+    def test_development_gate_never_acquires_an_identity_or_checks_installation(
+        self,
+    ) -> None:
+        for platform in ("darwin", "linux"):
+            with (
+                self.subTest(platform=platform),
+                gate_tool_boundaries(),
+                contextlib.ExitStack() as stack,
+            ):
+                _ = stack.enter_context(
+                    patch("tools.remap_tasks.sys.platform", platform)
+                )
+                signers = [
+                    stack.enter_context(
+                        patch(
+                            f"tools.{module}.ensure_local_codesigning_identity",
+                            side_effect=AssertionError(
+                                "locked keychain must not be reached"
+                            ),
+                        )
+                    )
+                    for module in (
+                        "remap_tasks",
+                        "remap_app",
+                        "remap_macos_install",
+                        "remap_macos_signing",
+                    )
+                ]
+                install = stack.enter_context(
+                    patch(
+                        "tools.remap_tasks.task_install_check",
+                        side_effect=AssertionError("development gate must not install"),
+                    )
+                )
+                native_contract = stack.enter_context(
+                    patch(
+                        "tools.remap_tasks.verify_generated_package_contract",
+                        wraps=verify_generated_package_contract,
+                    )
+                )
+                build = stack.enter_context(
+                    patch(
+                        "tools.remap_tasks.build_native_app",
+                        return_value=Path("/unused/Remap.app"),
+                    )
+                )
+                remap_tasks.task_check()
+                for signer in signers:
+                    signer.assert_not_called()
+                install.assert_not_called()
+                native_contract.assert_not_called()
+                if platform == "darwin":
+                    build.assert_called_once_with(
+                        remap_tasks.ROOT,
+                        remap_tasks.PRODUCT_VERSION,
+                        release=False,
+                        signing_identity=None,
+                    )
+                else:
+                    build.assert_not_called()
+
+    def test_release_gate_reaches_native_identity_and_propagates_unavailability(
+        self,
+    ) -> None:
+        with (
+            gate_tool_boundaries(),
+            patch("tools.remap_tasks.sys.platform", "darwin"),
+            patch(
+                "tools.remap_macos_install.ensure_local_codesigning_identity",
+                side_effect=RuntimeError("locked keychain"),
+            ) as ensure,
+            patch("tools.remap_tasks.build_native_app") as build,
+            self.assertRaisesRegex(RuntimeError, "locked keychain"),
+        ):
+            remap_tasks.task_release_check()
+        ensure.assert_called_once_with()
+        build.assert_not_called()
+
+    def test_release_gate_retains_install_check_and_signed_native_contract(
+        self,
+    ) -> None:
+        identity = LocalCodeSigningIdentity(
+            "Remap Local Codesign", "A" * 40, "B" * 64, Path("/unused/keychain")
+        )
+        with (
+            gate_tool_boundaries(),
+            patch("tools.remap_tasks.sys.platform", "darwin"),
+            patch(
+                "tools.remap_tasks.verify_generated_package_contract"
+            ) as native_contract,
+            patch("tools.remap_tasks.task_install_check") as install,
+            patch(
+                "tools.remap_tasks.ensure_local_codesigning_identity",
+                return_value=identity,
+            ) as ensure,
+            patch(
+                "tools.remap_tasks.build_native_app",
+                return_value=Path("/unused/Remap.app"),
+            ) as build,
+            patch("tools.remap_tasks.verify_release_evidence_in_isolation") as evidence,
+            patch("tools.remap_tasks.verify_macos_release_metadata") as metadata,
+        ):
+            remap_tasks.task_release_check()
+        native_contract.assert_called_once_with(
+            remap_tasks.ROOT, remap_tasks.PRODUCT_VERSION
+        )
+        install.assert_called_once_with()
+        ensure.assert_called_once_with()
+        build.assert_called_once_with(
+            remap_tasks.ROOT,
+            remap_tasks.PRODUCT_VERSION,
+            release=False,
+            signing_identity=identity,
+        )
+        evidence.assert_called_once_with()
+        metadata.assert_called_once_with(Path("/unused/Remap.app"))
+        self.assertIs(
+            remap_tasks.TASKS["install-check"], remap_tasks.task_install_check
+        )
 
 
 class NativeProductTaskTests(unittest.TestCase):

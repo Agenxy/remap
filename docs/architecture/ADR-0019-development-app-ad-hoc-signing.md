@@ -26,6 +26,14 @@ the existing downstream signing and release verification remain required.
 The shared app task supplies the durable identity explicitly when called by
 `release-check`, preserving that gate's existing build configuration and checks.
 
+The development `check` and `test` tasks do not build certificate-backed native
+installation images. The generated-package contract check belongs to `release-check`,
+where it runs before the release metadata checks that consume its native binaries.
+The isolated CLI install/uninstall check also belongs to `release-check` and remains
+available separately as `make install-check`. Neither check performs a system-wide
+native installation. Deliberate native installs and setup packages retain their
+certificate requirements, manifests, and Swift signature verification unchanged.
+
 ## Consequences and verification
 
 Development bundles establish local code integrity without signer provenance.
@@ -39,3 +47,8 @@ verifies a real Mach-O bundle, checks its identifier and runtime flag, and execu
 it without keychain access. Its fixture substitutes compilation, icon generation,
 and SDK normalization; it does not claim a full application build or release
 keychain acceptance.
+
+Gate orchestration tests also run the development call graph with identity acquisition
+set to fail, and require the release gate to reach native identity acquisition and
+propagate its failure. These tests prove dispatch and failure behavior, not successful
+execution of the complete gate on a fresh Mac with a locked keychain.
