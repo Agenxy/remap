@@ -42,7 +42,23 @@ human at exactly the moment a human cannot evaluate the question.
 
 The standard is that a signing key is generated inside hardware that will not surrender
 it: the Secure Enclave on Apple silicon, a TPM elsewhere, behind one boundary with a
-per-platform implementation. Remap should not be minting and storing its own identities at
-all; it should be asking Supgang for one, as the owner of identity across these products.
-Until that exists, no Remap release may describe its signing as hardware backed, and this
-page is the statement of what it is instead.
+per-platform implementation. Remap mints and holds its own identity, in that hardware
+where the machine has it, and that path must work on a machine that has never heard of
+any other Agenxy tool. Until it does, no Remap release may describe its signing as
+hardware backed, and this page is the statement of what it is instead.
+
+## What Supgang is, and is not
+
+Supgang is a **convenience, not a dependency**. Remap must install and sign without it.
+What Supgang adds, when it is there, is that the owner does not have to be standing at
+the machine: it can supply the trust and identity that installation would otherwise ask a
+person for, which is the difference between administering a gang of computers and
+visiting each one.
+
+That places real requirements on Supgang rather than on Remap. It is reachable over a
+network, so it has to establish that the requester is the same owner before it vouches
+for anything, and it has to hold what it vouches with in hardware that will not give it
+up. A convenience that can be hijacked is worse than no convenience, because it converts
+a task the owner would have done in person into one an attacker can do remotely. Remap
+asking Supgang for an identity is therefore never a reason for Remap to hold its own key
+less carefully, and never a path Remap may require.

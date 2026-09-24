@@ -350,6 +350,31 @@ updates, and nothing else installs through it. What each product owes is to veri
 artifact against a pinned role before installing it, and to refuse anything else by
 default. Until it does, its installation is not verified, whatever else is true of it.
 
+### A sibling that supplies trust is a convenience, never a dependency
+
+There is a tempting shortcut in all of this: let Supgang own identity, and have the other
+products ask it for one. That is the wrong shape, and it is worth naming because the
+sibling rule points at it. Each product mints and holds its own identity, in hardware
+where the machine has it, and every install path works on a machine that has never heard
+of any other Agenxy tool. A product that cannot sign or install without a sibling running
+has made that sibling a single point of failure, which the sovereignty invariant forbids
+whether the dependency is a company or a program of the owner's own.
+
+What a sibling legitimately adds is the owner's **presence**. Installing on a machine
+otherwise means someone standing at it to approve a trust decision, and across a gang of
+computers that does not scale. A trust broker that can vouch for the owner remotely
+removes the visit, not the sovereign path underneath it.
+
+That places the requirements on the broker rather than on the product asking. Because it
+is reached over a network, it must establish that the requester is the same owner before
+it vouches for anything, and it must hold what it vouches with in hardware that will not
+surrender it. **A convenience that can be hijacked is worse than no convenience**, since it
+converts a decision the owner would have made in person into one an attacker can make
+remotely, on every machine at once. So: the broker is optional, the product is whole
+without it, the broker authenticates the owner over the network, its own keys live in a
+Secure Enclave or TPM, and a product asking a broker for an identity is never a reason to
+hold its own key less carefully.
+
 Until that exists, this document claims reliability and says plainly that it does not
 claim provenance. A product must not describe its installation as verified on the
 strength of the rules above alone.
