@@ -47,8 +47,54 @@ class LocalCodeSigningIdentity:
     keychain: Path
 
 
+def visible_identity_fingerprints() -> list[str]:
+    """Every usable identity named `IDENTITY_NAME` that codesign can reach, by name.
+
+    `resolve_identity` inspects one keychain, but `codesign --sign <name>` resolves
+    against the whole search list. Validating the narrower space lets a second identity
+    of the same name exist in another keychain, and then signing by name is ambiguous
+    and macOS picks nothing:
+
+        Remap Local Codesign: ambiguous (matches "Remap Local Codesign" in
+        .../login.keychain-db and "Remap Local Codesign" in /Library/Keychains/System.keychain)
+
+    Remap always signs by fingerprint, so it is not the victim. The configuration is
+    still invalid, and this repository creates it, so this repository refuses it.
+    """
+    result = _run_result(
+        ("/usr/bin/security", "find-identity", "-v", "-p", "codesigning"),
+        check=False,
+    )
+    if result.returncode not in {0, 1}:
+        raise RuntimeError("macOS could not enumerate usable code signing identities")
+    return [
+        fingerprint
+        for line in result.stdout.splitlines()
+        if (match := IDENTITY_PATTERN.fullmatch(line)) is not None
+        for fingerprint, name in [match.groups()]
+        if name == IDENTITY_NAME
+    ]
+
+
+def require_one_visible_identity() -> None:
+    """Refuse a machine that holds more than one identity under the same name."""
+    fingerprints = visible_identity_fingerprints()
+    if len(fingerprints) <= 1:
+        return
+    listed = ", ".join(fingerprints)
+    raise RuntimeError(
+        f"{len(fingerprints)} usable identities are named {IDENTITY_NAME!r} on this "
+        + f"machine ({listed}). `codesign --sign` by name cannot choose between them. "
+        + "Remove all but the one this machine should sign with, with "
+        + "`sudo security delete-certificate -Z <fingerprint> <keychain>`, and run again."
+    )
+
+
 def ensure_local_codesigning_identity() -> LocalCodeSigningIdentity:
     """Return Remap's durable identity, creating it once when absent."""
+    # Before anything else, and before creating a second one: an ambiguous name is an
+    # invalid configuration, and refusing it here is what stops this tool producing it.
+    require_one_visible_identity()
     keychain = login_keychain()
     existing = resolve_identity(keychain)
     if existing is not None:

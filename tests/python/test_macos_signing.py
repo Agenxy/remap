@@ -7,12 +7,84 @@ import subprocess
 import tempfile
 import unittest
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import cast, override
 from unittest import mock
 
 from tools import remap_macos_signing
 from tools.remap_macos_signing import LocalCodeSigningIdentity
+
+
+class AmbiguousIdentityTests(unittest.TestCase):
+    """An ambiguous identity name is a configuration this tool must not create."""
+
+    FIRST: str = "A" * 40
+    SECOND: str = "B" * 40
+
+    @staticmethod
+    def _listing(*fingerprints: str) -> str:
+        lines = [
+            f'  {index + 1}) {fingerprint} "{remap_macos_signing.IDENTITY_NAME}"'
+            for index, fingerprint in enumerate(fingerprints)
+        ]
+        lines.append(f"     {len(fingerprints)} valid identities found")
+        return "\n".join(lines) + "\n"
+
+    def _with_listing(self, listing: str) -> AbstractContextManager[object]:
+        return mock.patch.object(
+            remap_macos_signing,
+            "_run_result",
+            return_value=subprocess.CompletedProcess(
+                args=(), returncode=0, stdout=listing, stderr=""
+            ),
+        )
+
+    def test_one_identity_is_accepted(self) -> None:
+        with self._with_listing(self._listing(self.FIRST)):
+            remap_macos_signing.require_one_visible_identity()
+
+    def test_no_identity_is_accepted_here(self) -> None:
+        """Absence is handled by the caller, which creates one."""
+        with self._with_listing("     0 valid identities found\n"):
+            remap_macos_signing.require_one_visible_identity()
+
+    def test_two_identities_of_the_same_name_are_refused(self) -> None:
+        with (
+            self._with_listing(self._listing(self.FIRST, self.SECOND)),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            remap_macos_signing.require_one_visible_identity()
+        message = str(raised.exception)
+        self.assertIn(self.FIRST, message)
+        self.assertIn(self.SECOND, message)
+        self.assertIn("delete-certificate", message)
+
+    def test_other_products_identities_are_not_counted(self) -> None:
+        """Only this product's name is this product's business."""
+        listing = (
+            f'  1) {self.FIRST} "{remap_macos_signing.IDENTITY_NAME}"\n'
+            f'  2) {self.SECOND} "Some Other Product"\n'
+            "     2 valid identities found\n"
+        )
+        with self._with_listing(listing):
+            remap_macos_signing.require_one_visible_identity()
+
+    def test_ensure_refuses_before_creating_a_second_identity(self) -> None:
+        """The refusal has to come first, or this tool is what made the mess."""
+        with (
+            mock.patch.object(
+                remap_macos_signing,
+                "require_one_visible_identity",
+                side_effect=RuntimeError("ambiguous"),
+            ),
+            mock.patch.object(remap_macos_signing, "create_identity") as create,
+            mock.patch.object(remap_macos_signing, "login_keychain") as keychain,
+            self.assertRaisesRegex(RuntimeError, "ambiguous"),
+        ):
+            _ = remap_macos_signing.ensure_local_codesigning_identity()
+        create.assert_not_called()
+        keychain.assert_not_called()
 
 
 class MacOSSigningTests(unittest.TestCase):
