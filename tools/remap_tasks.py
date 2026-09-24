@@ -194,6 +194,10 @@ def task_help() -> None:
 
 def task_setup() -> None:
     """Install pinned compilers, analyzers, packages, and browser runtime."""
+    # mise refuses to read a configuration file it has not been told to trust, so in a
+    # fresh clone every later `mise` call fails until this runs. Running the repository's
+    # own setup task is the act of trusting it.
+    run(("mise", "trust", "--quiet"))
     run(("mise", "install"))
     run(("mise", "exec", "--", "bun", "install", "--frozen-lockfile"))
     run(
@@ -282,6 +286,10 @@ def task_quality() -> None:
     run(("mise", "exec", "--", "ruff", "format", "--check", *PYTHON_PATHS))
     run(("mise", "exec", "--", "basedpyright", *PYTHON_PATHS))
     if sys.platform == "darwin":
+        # Both Swift linters keep a cache under `target/`, and the quality gate runs
+        # before anything builds, so in a fresh clone that directory does not exist yet
+        # and swiftformat exits 70 rather than creating it.
+        (ROOT / "target").mkdir(parents=True, exist_ok=True)
         run(
             (
                 "mise",

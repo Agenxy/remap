@@ -10,9 +10,10 @@ from __future__ import annotations
 import contextlib
 import io
 import subprocess
+import sys
 import tempfile
 import unittest
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from pathlib import Path
 from unittest.mock import patch
 
@@ -67,6 +68,76 @@ def gate_tool_boundaries() -> Generator[None]:
             )
         )
         yield
+
+
+@contextlib.contextmanager
+def record_commands() -> Generator[list[tuple[str, ...]]]:
+    """Capture the commands a task would run, without running any of them."""
+    commands: list[tuple[str, ...]] = []
+
+    def record(command: Sequence[str], **_: object) -> None:
+        commands.append(tuple(command))
+
+    with patch("tools.remap_tasks.run", side_effect=record):
+        yield commands
+
+
+class FreshCloneQualityTests(unittest.TestCase):
+    """The quality gate must run in a clone where nothing has been built yet."""
+
+    @unittest.skipUnless(
+        sys.platform == "darwin",
+        "the Swift linters and their caches are macOS only",
+    )
+    def test_quality_creates_the_cache_directory_it_passes_to_the_swift_linters(
+        self,
+    ) -> None:
+        """A fresh clone has no `target/`, and swiftformat refuses to create it."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            with (
+                patch("tools.remap_tasks.ROOT", root),
+                record_commands() as commands,
+            ):
+                remap_tasks.task_quality()
+            self.assertTrue(
+                (root / "target").is_dir(),
+                "the quality gate must create the cache directory it names",
+            )
+            cache_arguments = [
+                argument
+                for command in commands
+                for argument in command
+                if "swiftformat.cache" in argument or "swiftlint-cache" in argument
+            ]
+            self.assertTrue(cache_arguments, "expected the Swift linters to be invoked")
+            for argument in cache_arguments:
+                self.assertTrue(
+                    Path(argument).parent.is_dir(),
+                    f"cache directory for {argument} must exist before the linter runs",
+                )
+
+    def test_setup_trusts_the_repository_configuration_before_using_mise(self) -> None:
+        """Every later `mise` call fails in a fresh clone until the config is trusted."""
+        with record_commands() as commands:
+            remap_tasks.task_setup()
+        self.assertTrue(commands, "expected setup to run commands")
+        trusting = [
+            index for index, command in enumerate(commands) if "trust" in command
+        ]
+        self.assertTrue(trusting, "setup must trust the repository mise config")
+        trust = trusting[0]
+        other = [
+            index
+            for index, command in enumerate(commands)
+            if command and command[0] == "mise" and "trust" not in command
+        ]
+        self.assertTrue(other, "expected setup to use mise after trusting it")
+        self.assertLess(
+            trust,
+            min(other),
+            "trusting the config must precede every other mise call",
+        )
 
 
 class GateSigningBoundaryTests(unittest.TestCase):
