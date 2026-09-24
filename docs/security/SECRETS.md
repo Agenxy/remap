@@ -19,6 +19,20 @@ gives them a real identity. And the public half of the release key is pinned in 
 places that must move together: `docs/release/remap-release-signing-key.pub`, the Swift
 verifier in `PortableReleaseManifest.swift`, and the fingerprint in the macOS tutorial.
 
+One of those three ships **inside** every package, because the portable installer that
+runs on the target verifies the release manifest with its own embedded copy. So rotating
+the release key invalidates every package built before the rotation, and the symptom is
+a refusal from the package's own postinstall rather than anything a signature check on the
+outside would catch:
+
+```text
+Installation stopped safely: Installer integrity validation failed:
+the portable Remap release signature is invalid.
+```
+
+Rotate the key, then rebuild. A test keeps the source copies in step with each other;
+nothing can keep an artifact that has already been built in step with them.
+
 ## What a development package needs
 
 A development package touches **no keychain on the machine that builds it**. It skips the

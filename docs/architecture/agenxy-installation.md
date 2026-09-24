@@ -368,7 +368,27 @@ removes the visit, not the sovereign path underneath it.
 That places the requirements on the broker rather than on the product asking. Because it
 is reached over a network, it must establish that the requester is the same owner before
 it vouches for anything, and it must hold what it vouches with in hardware that will not
-surrender it. **A convenience that can be hijacked is worse than no convenience**, since it
+surrender it.
+
+**The gap is measured, not hypothetical.** Remap's portable macOS package signs its
+products on the machine that receives them, which needs a local code signing identity,
+which needs a trust setting. Driven over SSH on a second Mac on 2026-09-24, the package's
+own postinstall reached that step and stopped:
+
+```text
+Installation stopped safely: The operating system could not trust Remap's local
+signing certificate: Operation not permitted.
+```
+
+The trust setting is not optional decoration. On macOS 27 an untrusted self-signed
+identity does not appear in `security find-identity -v -p codesigning` at all, and
+`codesign` refuses it with `errSecInternalComponent`; both were observed directly. And
+`SecTrustSettingsSetTrustSettings` will not record one without interactive approval, under
+sudo or inside the installer's own script sandbox. So this install path cannot complete
+without a person at that machine, and no amount of privilege substitutes for presence.
+That is the exact thing a broker exists to remove, and it is why the broker's own security
+is the whole question: whatever it vouches with is what a person would otherwise have
+travelled to approve. **A convenience that can be hijacked is worse than no convenience**, since it
 converts a decision the owner would have made in person into one an attacker can make
 remotely, on every machine at once. So: the broker is optional, the product is whole
 without it, the broker authenticates the owner over the network, its own keys live in a
