@@ -23,7 +23,7 @@ from tools import remap_app, remap_tasks
 from tools.remap_macos_signing import LocalCodeSigningIdentity
 
 IDENTITY = LocalCodeSigningIdentity(
-    name="Remap Local Codesign",
+    name="Remap Build Signing",
     sha1="A" * 40,
     sha256="B" * 64,
     keychain=Path("/unused/login.keychain-db"),
@@ -35,7 +35,7 @@ AD_HOC_DETAILS = (
 )
 DURABLE_DETAILS = (
     "Identifier=org.agenxy.Remap\n"
-    + "Authority=Remap Local Codesign\n"
+    + "Authority=Remap Build Signing\n"
     + "CodeDirectory v=20500 size=100 flags=0x10000(runtime)\n"
     + "CDHash="
     + "a" * 40
@@ -325,7 +325,7 @@ class AppSigningTests(unittest.TestCase):
             with (
                 mock.patch("tools.remap_app.subprocess.run", side_effect=run),
                 self.assertRaisesRegex(
-                    RuntimeError, "does not use Remap Local Codesign"
+                    RuntimeError, "does not use Remap Build Signing"
                 ),
             ):
                 remap_app.verify(root, root / "Remap.app", IDENTITY)

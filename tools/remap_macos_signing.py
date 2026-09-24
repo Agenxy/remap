@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-IDENTITY_NAME = "Remap Local Codesign"
+IDENTITY_NAME = "Remap Build Signing"
 CERTIFICATE_LIFETIME_DAYS = 3_650
 ARCHIVE_TRANSPORT_PASSWORD = "remap-ephemeral-pipe"
 MAXIMUM_COMMAND_OUTPUT_BYTES = 1_048_576
@@ -51,15 +51,19 @@ def visible_identity_fingerprints() -> list[str]:
     """Every usable identity named `IDENTITY_NAME` that codesign can reach, by name.
 
     `resolve_identity` inspects one keychain, but `codesign --sign <name>` resolves
-    against the whole search list. Validating the narrower space lets a second identity
-    of the same name exist in another keychain, and then signing by name is ambiguous
-    and macOS picks nothing:
+    against the whole search list, so a second identity of the same name in another
+    keychain makes signing by name ambiguous and macOS chooses nothing:
 
         Remap Local Codesign: ambiguous (matches "Remap Local Codesign" in
-        .../login.keychain-db and "Remap Local Codesign" in /Library/Keychains/System.keychain)
+        .../login.keychain-db and "Remap Local Codesign" in
+        /Library/Keychains/System.keychain)
 
-    Remap always signs by fingerprint, so it is not the victim. The configuration is
-    still invalid, and this repository creates it, so this repository refuses it.
+    That is how it was observed, when this identity and the one the portable installer
+    creates on a target Mac shared a name across two keychains. They no longer do. This
+    check remains because nothing stops a name colliding again, and because a machine
+    holding two identities of one name is invalid whatever produced it. Remap itself
+    signs by fingerprint with an explicit keychain, so it is never the victim, only ever
+    the cause.
     """
     result = _run_result(
         ("/usr/bin/security", "find-identity", "-v", "-p", "codesigning"),

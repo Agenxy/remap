@@ -70,7 +70,7 @@ class MacOSReleaseInstallerSigningTests(unittest.TestCase):
         self.assertIn("OU = Remap Release Signing", configuration)
         self.assertIn("1.2.840.113635.100.4.13", configuration)
         self.assertNotIn("codeSigning", configuration)
-        self.assertNotIn("Remap Local Codesign", configuration)
+        self.assertNotIn("Remap Build Signing", configuration)
 
     def test_complete_package_signing_pins_fingerprint_without_timestamp(self) -> None:
         identity = release_signing.ReleaseInstallerSigningIdentity(

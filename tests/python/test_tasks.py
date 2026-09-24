@@ -291,7 +291,7 @@ class GateSigningBoundaryTests(unittest.TestCase):
         self,
     ) -> None:
         identity = LocalCodeSigningIdentity(
-            "Remap Local Codesign", "A" * 40, "B" * 64, Path("/unused/keychain")
+            "Remap Build Signing", "A" * 40, "B" * 64, Path("/unused/keychain")
         )
         with (
             gate_tool_boundaries(),

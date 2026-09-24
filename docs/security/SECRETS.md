@@ -9,9 +9,9 @@ from where it should be. Measured on macOS 27 on 2026-09-24, not inferred from d
 | --- | --- | --- | --- |
 | Release package signing key (Ed25519) | `~/.ssh/remap_release_dev_ed25519`, an ordinary file, mode 0600 | File permissions and whole-disk encryption. **No passphrase.** | The detached `.pkg.sig` that proves the package bytes are the ones that were built |
 | `Remap Release Installer` (RSA and certificate) | The building Mac's **login keychain** | The login keychain, plus a per-key access list naming which programs may use it | `productsign`, which is what lets another Mac's Installer accept the package |
-| `Remap Local Codesign` | The building Mac's **login keychain** | The login keychain | Signing products on a release build |
+| `Remap Build Signing` | The building Mac's **login keychain** | The login keychain | Signing products on a release build |
+| `Remap Local Codesign` | The installing Mac's **System keychain** | Root ownership | Signing the shipped products on the machine that receives them |
 | `Remap Local Installer` | The building Mac's **login keychain** | The login keychain | Locally built installer packages |
-| Target code signing identity | The installing Mac's **System keychain** | Root ownership, which is why installation needs no login password | The portable installer re-signs the shipped products on the machine that receives them |
 
 Two things in the package are not secrets and deserve saying so. The products inside a
 portable package are **ad hoc signed**, which involves no key at all; the installing Mac

@@ -151,7 +151,7 @@ class MacOSSigningTests(unittest.TestCase):
     def test_openssl_policy_is_a_durable_codesigning_root(self) -> None:
         configuration = remap_macos_signing.openssl_configuration()
 
-        self.assertIn("CN = Remap Local Codesign", configuration)
+        self.assertIn("CN = Remap Build Signing", configuration)
         self.assertIn("rsa:3072", _creation_arguments())
         self.assertIn("extendedKeyUsage = critical,codeSigning", configuration)
         self.assertIn("basicConstraints = critical,CA:TRUE,pathlen:0", configuration)
@@ -164,7 +164,7 @@ class MacOSSigningTests(unittest.TestCase):
                 returncode=0,
                 stdout=(
                     "  1) 0123456789ABCDEF0123456789ABCDEF01234567 "
-                    + '"Remap Local Codesign"\n     1 valid identities found\n'
+                    + '"Remap Build Signing"\n     1 valid identities found\n'
                 ),
                 stderr="",
             ),
@@ -188,7 +188,7 @@ class MacOSSigningTests(unittest.TestCase):
         self.assertEqual(
             identity,
             LocalCodeSigningIdentity(
-                name="Remap Local Codesign",
+                name="Remap Build Signing",
                 sha1="0123456789ABCDEF0123456789ABCDEF01234567",
                 sha256="A" * 64,
                 keychain=keychain,
@@ -196,8 +196,8 @@ class MacOSSigningTests(unittest.TestCase):
         )
 
     def test_duplicate_named_identity_is_rejected(self) -> None:
-        output = """  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Remap Local Codesign"
-  2) 89ABCDEF0123456789ABCDEF0123456789ABCDEF "Remap Local Codesign"
+        output = """  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Remap Build Signing"
+  2) 89ABCDEF0123456789ABCDEF0123456789ABCDEF "Remap Build Signing"
      2 valid identities found
 """
         with (
@@ -270,7 +270,7 @@ class MacOSSigningTests(unittest.TestCase):
 
     def test_artifact_batch_uses_one_codesign_process(self) -> None:
         identity = LocalCodeSigningIdentity(
-            name="Remap Local Codesign",
+            name="Remap Build Signing",
             sha1="A" * 40,
             sha256="B" * 64,
             keychain=Path("/Users/example/Library/Keychains/login.keychain-db"),
@@ -295,7 +295,7 @@ class MacOSSigningTests(unittest.TestCase):
 
     def test_signature_verification_rejects_a_non_hardened_artifact(self) -> None:
         identity = LocalCodeSigningIdentity(
-            name="Remap Local Codesign",
+            name="Remap Build Signing",
             sha1="A" * 40,
             sha256="B" * 64,
             keychain=Path("/Users/example/Library/Keychains/login.keychain-db"),
@@ -303,7 +303,7 @@ class MacOSSigningTests(unittest.TestCase):
         details = "\n".join(
             (
                 "Identifier=org.agenxy.Remap.cli",
-                "Authority=Remap Local Codesign",
+                "Authority=Remap Build Signing",
                 "CDHash=" + "a" * 40,
                 "CodeDirectory v=20400 size=100 flags=0x0(none)",
             )
