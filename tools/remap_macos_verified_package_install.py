@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import re
 import stat
 import subprocess
 import uuid
 from pathlib import Path
 
-from tools.remap_macos_portable_package import verify_detached_package_signature
+from tools.remap_macos_portable_package import (
+    DEVELOPMENT_PACKAGE_VARIABLE,
+    pinned_release_key_is_development,
+    verify_detached_package_signature,
+)
 from tools.remap_macos_release_installer_signing import verify_package_signature
 
 STAGING_PARENT = Path("/private/var/tmp")
@@ -21,8 +26,27 @@ def install_verified_package(root: Path, package: Path, signature: Path) -> None
         encoding="utf-8"
     )
     installer_certificate = root / "docs/release/remap-release-installer.pem"
+    # A development package carries no Apple installer signature, because producing one
+    # needs a key in a keychain and a person to release it. Apple's installer accepts an
+    # unsigned package, unlike one signed by a certificate the machine does not trust,
+    # which it refuses in preflight. What still has to hold is the detached signature over
+    # the exact root-owned bytes, which is checked below either way.
+    development = pinned_release_key_is_development(root)
+    if development and not os.environ.get(DEVELOPMENT_PACKAGE_VARIABLE):
+        raise RuntimeError(
+            "this package is pinned to a development key, so it carries no installer "
+            + "signature and its detached signature proves only that the bytes came "
+            + f"from the machine that built them. Set {DEVELOPMENT_PACKAGE_VARIABLE}=1 "
+            + "to install one deliberately."
+        )
     verify_detached_package_signature(package, signature, public_key=public_key)
-    verify_package_signature(package, installer_certificate)
+    if development:
+        print(
+            "Installing a development package: no Apple installer signature, and a "
+            + "signing key held in a file rather than in hardware."
+        )
+    else:
+        verify_package_signature(package, installer_certificate)
     staging = STAGING_PARENT / f"{STAGING_PREFIX}{uuid.uuid4()}"
     staged_package = staging / "Remap.pkg"
     try:
@@ -48,7 +72,8 @@ def install_verified_package(root: Path, package: Path, signature: Path) -> None
             public_key=public_key,
             expected_package_owner_uid=0,
         )
-        verify_package_signature(staged_package, installer_certificate)
+        if not development:
+            verify_package_signature(staged_package, installer_certificate)
         verify_staging(staging, staged_package)
         _run(
             (

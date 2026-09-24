@@ -47,6 +47,11 @@ from tools.remap_macos_install import (
     verify_generated_package_contract,
 )
 from tools.remap_macos_install import uninstall as uninstall_macos
+from tools.remap_macos_portable_package import (
+    DEVELOPMENT_KEY_MARKER,
+    DEVELOPMENT_PACKAGE_VARIABLE,
+    pinned_release_key_is_development,
+)
 from tools.remap_macos_portable_package import build as build_portable_macos_package
 from tools.remap_macos_release_installer_signing import (
     ensure_release_installer_identity,
@@ -367,21 +372,6 @@ def task_verify_macos_app() -> None:
     """Build, launch, and prove the native application remains alive."""
     bundle = task_build_macos_app()
     launch_native_app(ROOT, bundle, verify_process=True)
-
-
-DEVELOPMENT_KEY_MARKER = "remap-release-development-only"
-DEVELOPMENT_PACKAGE_VARIABLE = "REMAP_DEVELOPMENT_PACKAGE"
-
-
-def pinned_release_key_is_development(root: Path) -> bool:
-    """Whether the pinned public key announces itself as a development key.
-
-    The comment field is not part of what the pin matches, so it is free to carry this
-    statement, and it travels with the repository: anyone who builds a package can see
-    which key the result will be signed by.
-    """
-    pin = root / "docs/release/remap-release-signing-key.pub"
-    return DEVELOPMENT_KEY_MARKER in pin.read_text(encoding="utf-8")
 
 
 def task_package_macos() -> None:

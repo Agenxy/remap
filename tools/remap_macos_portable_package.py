@@ -837,6 +837,21 @@ def _validate_signing_key(path: Path, *, root: Path) -> None:
         )
 
 
+DEVELOPMENT_KEY_MARKER = "remap-release-development-only"
+DEVELOPMENT_PACKAGE_VARIABLE = "REMAP_DEVELOPMENT_PACKAGE"
+
+
+def pinned_release_key_is_development(root: Path) -> bool:
+    """Whether the pinned public key announces itself as a development key.
+
+    The comment field is not part of what the pin matches, so it is free to carry this
+    statement, and it travels with the repository: both the machine that builds a package
+    and the machine that installs one can see which key the signature came from.
+    """
+    pin = root / "docs/release/remap-release-signing-key.pub"
+    return DEVELOPMENT_KEY_MARKER in pin.read_text(encoding="utf-8")
+
+
 def canonical_release_public_key(value: str) -> str:
     fields = value.strip().split()
     if len(fields) not in {2, 3} or fields[0] != "ssh-ed25519":
