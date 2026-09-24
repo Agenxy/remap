@@ -388,7 +388,39 @@ sudo or inside the installer's own script sandbox. So this install path cannot c
 without a person at that machine, and no amount of privilege substitutes for presence.
 That is the exact thing a broker exists to remove, and it is why the broker's own security
 is the whole question: whatever it vouches with is what a person would otherwise have
-travelled to approve. **A convenience that can be hijacked is worse than no convenience**, since it
+travelled to approve.
+
+**A broker removes the question, it does not answer the prompt.** There is a wrong way to
+read the paragraph above: make the broker satisfy `authenticate-admin` on the owner's
+behalf, by holding an admin password or by installing an authorisation plugin into
+`SecurityAgent`. Both put the broker inside the operating system's authentication path, so
+compromising it compromises administrative authority on every machine it serves, which is
+the hijack this section exists to prevent. Reaching the same machine over Screen Sharing is
+not an answer either: that is the same person typing the same password, at a distance.
+
+The right shape removes the authorisation entirely. The target needs a trust setting only
+because it *mints* a signature locally, and `codesign` refuses an untrusted identity. It
+does not need one to *accept* a signature. Measured on 2026-09-24: a binary signed on one
+Mac with a certificate the second Mac has never held passes `codesign --verify --strict`
+there ("valid on disk", "satisfies its Designated Requirement"), reports its chosen
+identifier, and runs. Remap's own product verifier asks for exactly that, a
+certificate-backed identity under strict validation, and never for system trust.
+
+So an artifact that arrives already signed by a key the owner's root certified needs no
+local minting, no local trust setting, and no authorisation right. The broker's job is to
+hold that signing key in hardware and to certify it to the machines that will accept it,
+which is what a code-signing role granted by the root already means. Nobody authenticates
+to macOS on the owner's behalf, because macOS is never asked.
+
+This is designed rather than hypothetical: Supgang's ADR 0003 certifies subordinate keys
+with a purpose and a stated custody, and its sovereign-trust roadmap names code signing as
+a role the root grants, ordered immediately after the ADR 0003 primitive and the threshold
+root. What is not yet true is that the primitive is operational: live identity is still
+file held.
+
+Not yet proven, and worth proving before this is relied on: that a launchd daemon loads,
+and that a permission prompt names the product, under a certificate the machine does not
+hold. Execution and strict verification are measured; those two are not. **A convenience that can be hijacked is worse than no convenience**, since it
 converts a decision the owner would have made in person into one an attacker can make
 remotely, on every machine at once. So: the broker is optional, the product is whole
 without it, the broker authenticates the owner over the network, its own keys live in a
