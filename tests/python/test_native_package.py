@@ -232,9 +232,7 @@ class NativePackageTests(unittest.TestCase):
                 account_name="the maintainer",
                 owner_uid=501,
                 group_name="staff",
-                data_directory=Path(
-                    "~/Library/Application Support/org.Agenxy.Remap"
-                ),
+                data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
                 upstreams=["198.51.100.53:53"],
                 previous_generation_id=None,
             )
@@ -264,17 +262,13 @@ class NativePackageTests(unittest.TestCase):
             generation_id="0.1.0-a1b2c3d4",
             account_name="the maintainer",
             group_name="staff",
-            data_directory=Path(
-                "~/Library/Application Support/org.Agenxy.Remap"
-            ),
+            data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
             upstreams=["192.0.2.53:53"],
         )
         resolver = resolver_launchd_document(
             generation_id="0.1.0-a1b2c3d4",
             owner_uid=501,
-            data_directory=Path(
-                "~/Library/Application Support/org.Agenxy.Remap"
-            ),
+            data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
         )
         self.assertEqual(daemon["Label"], DAEMON_LABEL)
         self.assertEqual(daemon["UserName"], "the maintainer")
@@ -339,9 +333,7 @@ class NativePackageTests(unittest.TestCase):
             generation_id="0.1.0-a1b2c3d4",
             account_name="the maintainer",
             group_name="staff",
-            data_directory=Path(
-                "~/Library/Application Support/org.Agenxy.Remap"
-            ),
+            data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
             upstreams=["192.0.2.53:53", "[2001:db8::53]:53"],
         )
 
