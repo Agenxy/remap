@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use remap_protocol::{
     Command, CommandResult, ControlClient, Diagnostic, MAX_MAPPING_PAGE_SIZE, Surface,
 };

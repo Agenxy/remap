@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Adversarial proofs for the Linux root-helper bootstrap boundary."""
 
 from __future__ import annotations

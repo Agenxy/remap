@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Release-package policy regressions."""
 
 from __future__ import annotations

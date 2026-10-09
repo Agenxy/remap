@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use crate::install_model::{
     DirectoryProvenance, Generation, InstallPhase, PublicDirectory, RollbackStep, UninstallStep,
 };

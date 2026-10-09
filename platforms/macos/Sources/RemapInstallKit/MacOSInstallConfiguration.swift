@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// Manifest-bound native settings stored inside every immutable macOS generation.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Live local-control proofs against a real Unix listener and registry thread.
 
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};

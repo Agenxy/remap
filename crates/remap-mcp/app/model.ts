@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 export type JsonRecord = Record<string, unknown>;
 
 export interface MappingView extends JsonRecord {

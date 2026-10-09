@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Adversarial tests for deterministic, non-claiming release evidence."""
 
 from __future__ import annotations

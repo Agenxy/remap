@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::net::{IpAddr, Ipv6Addr};

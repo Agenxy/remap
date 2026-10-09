@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 pub(crate) const REQUIRED_STABLE_OBSERVATIONS: u8 = 3;
 
 pub(crate) fn deadline_reached(now: tokio::time::Instant, deadline: tokio::time::Instant) -> bool {

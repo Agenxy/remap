@@ -156,7 +156,7 @@ does not download the browser test runtimes or contributor linters. Use
 
 `make install` requests administrator approval once. It installs the CLI,
 daemon, native resolver adapter, complete generated manual-page family, Bash,
-Fish, and Zsh completions, and exact Apache license notices under `/usr/local`;
+Fish, and Zsh completions, and the exact license notices under `/usr/local`;
 launchd owns the low ports while the daemon runs as the active non-root
 account. Before mutation, the preview enumerates every public path and any
 previous immutable generation that a successful update will purge. Activation
@@ -331,6 +331,19 @@ platforms/macos          native Apple products and adapters
 platforms/linux          Linux lifecycle and resolver adapters
 ```
 
-Remap is licensed under the [Apache License 2.0](LICENSE). The name has passed a
-preliminary open-source ecosystem collision review; that is not a legal
-trademark opinion.
+Remap is licensed under the [GNU General Public License, version 3 or
+later](LICENSE), and was Apache-2.0 until 2026-10-09. Versions already published
+under Apache-2.0 stay Apache-2.0 permanently; the new licence applies from that
+commit onward, with no history rewritten and no tag moved. A commercial licence is
+offered alongside it for closed distribution: see
+[COMMERCIAL-LICENSING](COMMERCIAL-LICENSING.md), and
+[CONTRIBUTING](CONTRIBUTING.md) for what that asks of contributors.
+
+GPL rather than AGPL is deliberate, and the consequence belongs here rather than in
+a footnote: GPL obligations attach to distribution, not to network use, so a third
+party may run a modified `remapd` as a hosted service without publishing their
+changes. The commercial licence reaches anyone shipping binaries; it does not reach
+the hosted case.
+
+The name has passed a preliminary open-source ecosystem collision review; that is
+not a legal trademark opinion.

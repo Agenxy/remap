@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// Manifest-verified, crash-resumable deletion for one journal-bound generation.

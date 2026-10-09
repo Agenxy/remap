@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// Shared product identity for native Remap executables.
 public enum RemapProduct {
     /// Version of the native product built from this source tree.

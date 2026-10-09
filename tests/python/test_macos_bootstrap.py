@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Adversarial contracts for macOS source-helper bootstrap and recovery."""
 
 from __future__ import annotations

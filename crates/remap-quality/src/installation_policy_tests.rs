@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #[cfg(test)]
 mod tests {
     use std::fs;

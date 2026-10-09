@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The gateway routing a peer mapping end to end (ADR-0016): a TLS upstream
 //! serving the peer's chain, a resolver standing in for Supgang, and the
 //! one property the per-key clients exist for: a connection verified under

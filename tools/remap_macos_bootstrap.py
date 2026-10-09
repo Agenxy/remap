@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Descriptor-pinned, crash-recoverable macOS source-helper bootstrap."""
 
 from __future__ import annotations

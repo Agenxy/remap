@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Install only a root-pinned copy of a verified Remap macOS package."""
 
 from __future__ import annotations

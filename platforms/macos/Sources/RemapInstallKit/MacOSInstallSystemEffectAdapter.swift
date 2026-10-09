@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// Production macOS adapter for launchd, SystemConfiguration, and authenticated runtime effects.

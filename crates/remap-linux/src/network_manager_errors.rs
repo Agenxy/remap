@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use crate::{LinuxError, LinuxErrorKind, LinuxResult, ResolverLinkManager};
 
 pub(super) fn manager_identity_ready(

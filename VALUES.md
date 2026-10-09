@@ -35,7 +35,7 @@ tiers. Its foundations must not depend on paid, proprietary, subscription-only,
 or irreplaceable hosted services. Monetization is not forbidden, but it must be
 obvious, optional, honest, and subordinate to the people using the software.
 
-Remap is licensed under Apache-2.0. Legally required notices must be preserved;
+Remap is licensed under GPL-3.0-or-later. Legally required notices must be preserved;
 additional credit and citation are warmly appreciated, never extracted through
 dark patterns.
 

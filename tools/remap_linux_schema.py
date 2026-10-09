@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Exact field sets for Remap's native Linux lifecycle JSON v1 contract."""
 
 SUCCESS_ENVELOPE_KEYS = frozenset({"command", "data", "ok", "schemaVersion"})

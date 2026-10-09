@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use crate::{
     ActivationPhase, ActivationRecord, LinuxError, LinuxErrorKind, LinuxResult, RecordMetadata,
     ResolvedBackend,

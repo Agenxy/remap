@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Atomic publication and safe opening of bounded Remap release artifacts."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use remap_core::{HostHeaderPolicy, MappingTarget, NamePattern};
 use remap_protocol::CommandResult;
 

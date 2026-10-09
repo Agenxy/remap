@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Executable specifications for the bounded local-control frame.
 
 use remap_protocol::{

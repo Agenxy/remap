@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Executable specifications for routing to a Supgang peer's service
 //! (ADR-0016): what a signed answer becomes, and which upstream keys the
 //! gateway then accepts.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Supgang peers as routed destinations (ADR-0016).
 //!
 //! A `supgang://<peer>/<service>` mapping is resolved when a request is

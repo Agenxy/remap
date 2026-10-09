@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use crate::health::{self, HealthReport};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};

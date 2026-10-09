@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Root-only native filesystem contract tests for Linux CI and package hosts.
 
 #![cfg(target_os = "linux")]

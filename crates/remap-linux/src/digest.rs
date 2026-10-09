@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use sha2::{Digest, Sha256};
 
 /// Returns the SHA-256 digest of one exact byte sequence.

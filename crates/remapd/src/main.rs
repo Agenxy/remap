@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Authoritative per-user Remap daemon entry point.
 
 use std::ffi::OsString;

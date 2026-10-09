@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Authenticated local-control server and single-writer daemon runtime.
 
 mod engine;

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Fail when an exact first-party tool or dependency pin is no longer current."""
 
 from __future__ import annotations

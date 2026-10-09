@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// Authenticated status for one daemon instance and its network listeners.
 public struct RemapRuntimeHealth: Equatable, Sendable {
     public let instanceID: String?

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Contracts for the native Apple Installer setup builder."""
 
 from __future__ import annotations

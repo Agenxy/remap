@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build and orchestrate Remap's transactional native macOS source install."""
 
 from __future__ import annotations

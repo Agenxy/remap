@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build and orchestrate Remap's native Linux source lifecycle."""
 
 from __future__ import annotations

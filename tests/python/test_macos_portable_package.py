@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Contract tests for the target-Mac-self-signed native package."""
 
 from __future__ import annotations

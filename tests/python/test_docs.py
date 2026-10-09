@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for local documentation-link validation."""
 
 from __future__ import annotations

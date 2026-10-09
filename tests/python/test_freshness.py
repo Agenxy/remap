@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Pure tests for dependency-freshness contract parsing."""
 
 from __future__ import annotations

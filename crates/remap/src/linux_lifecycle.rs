@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::collections::BTreeSet;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::{Command as ProcessCommand, Stdio};

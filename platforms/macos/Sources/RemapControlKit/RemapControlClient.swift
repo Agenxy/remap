@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// Stateless, bounded client for the authenticated per-user Remap authority.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Adversarial resolver-ownership and systemd contract tests.
 
 use std::error::Error;

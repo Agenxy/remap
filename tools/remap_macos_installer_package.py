@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Native Apple Installer bootstrap package for Remap's lifecycle service."""
 
 from __future__ import annotations

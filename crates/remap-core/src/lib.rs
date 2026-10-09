@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Portable, side-effect-free Remap domain and policy primitives.
 
 mod advisory;

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Create and verify deterministic, explicitly unsigned Remap release evidence."""
 
 from __future__ import annotations

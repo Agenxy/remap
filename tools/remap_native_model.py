@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Pure native macOS install models shared by Remap's typed task runner."""
 
 from __future__ import annotations

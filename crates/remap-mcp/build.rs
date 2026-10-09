@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Builds the self-contained, content-addressed MCP App document.
 
 use std::env;

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Pure contract tests for the native macOS lifecycle orchestrator."""
 
 from __future__ import annotations

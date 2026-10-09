@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Typed package and tool inventory for deterministic release evidence."""
 
 from __future__ import annotations

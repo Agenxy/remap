@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Contracts for Remap's durable local Installer signing identity."""
 
 from __future__ import annotations

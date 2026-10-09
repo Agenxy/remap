@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Live DNS/runtime proofs against one authoritative daemon.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

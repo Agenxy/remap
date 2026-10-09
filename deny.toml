@@ -20,6 +20,8 @@ ignore = []
 confidence-threshold = 0.93
 allow = [
     "Apache-2.0",
+    # Remap itself, and its sibling Agenxy crates.
+    "GPL-3.0-or-later",
     "BSD-3-Clause",
     "ISC",
     "MIT",

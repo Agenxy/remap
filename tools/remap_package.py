@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Exact local verification for unpublished Remap Cargo packages."""
 
 from __future__ import annotations

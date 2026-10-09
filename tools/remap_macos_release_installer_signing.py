@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Dedicated self-signed release authority for complete Remap Installer XARs."""
 
 from __future__ import annotations

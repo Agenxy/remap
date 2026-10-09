@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::convert::Infallible;
 use std::str::FromStr;
 use std::sync::Arc;

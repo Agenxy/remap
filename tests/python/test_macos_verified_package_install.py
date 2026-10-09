@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Root-owned staging contract for verified macOS packages."""
 
 from __future__ import annotations

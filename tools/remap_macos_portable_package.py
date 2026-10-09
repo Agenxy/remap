@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build Remap's prebuilt, target-Mac-self-signed Apple Installer package."""
 
 from __future__ import annotations

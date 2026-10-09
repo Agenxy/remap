@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Contracts for the dedicated complete-package Installer signer."""
 
 from __future__ import annotations

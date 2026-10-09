@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// A bounded resolver plan suitable for the portable daemon's startup contract.

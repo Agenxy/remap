@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use remap_protocol::{Change, HostPolicy};
 use schemars::JsonSchema;
 use serde::Deserialize;

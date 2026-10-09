@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use hickory_proto::op::{Message, MessageType, Metadata, OpCode, ResponseCode};

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build and validate Remap's API, Markdown, and generated manual pages."""
 
 from __future__ import annotations

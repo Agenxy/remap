@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Remap's human and machine-readable command-line interface.
 
 mod app;

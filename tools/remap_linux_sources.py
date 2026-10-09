@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Descriptor-pinned Linux generation source manifest."""
 
 from __future__ import annotations

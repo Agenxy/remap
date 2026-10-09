@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Deterministic source image and manifest for the native macOS installer."""
 
 from __future__ import annotations

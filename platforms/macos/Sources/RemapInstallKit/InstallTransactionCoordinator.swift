@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// Executes fresh install, update, and uninstall transactions under one exclusive native lock.

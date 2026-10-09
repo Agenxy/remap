@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Executable specifications for one authoritative registry and revision order.
 
 use remap_protocol::{Change, Command, CommandResult, HostPolicy, Surface};

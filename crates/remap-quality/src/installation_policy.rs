@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::path::{Component, Path, PathBuf};
 
 use proc_macro2::{TokenStream, TokenTree};

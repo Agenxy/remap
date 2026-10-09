@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Adversarial tests for the unprivileged native package image."""
 
 from __future__ import annotations

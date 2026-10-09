@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Worst-case executable proof that valid results fit the control wire.
 
 use remap_protocol::{

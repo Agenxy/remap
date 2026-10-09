@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Durable user-owned macOS code-signing identity for Remap artifacts."""
 
 from __future__ import annotations
