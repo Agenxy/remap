@@ -160,10 +160,25 @@ public actor ResolverReconciler {
             orphanedActivationID = nil
             return .released
         } catch {
-            let orphan = observed?.activationID ?? activationID ?? orphanedActivationID
+            let orphan = ownOrphan(observed: observed)
             orphanedActivationID = orphan
             return .pending(activationID: orphan)
         }
+    }
+
+    /// Only an activation this host bound can become its orphan. The daemon's
+    /// report corroborates one of those identities and never supplies its own:
+    /// a binding made by another controller is never adopted, so it can never
+    /// be released by a later reconciliation.
+    private func ownOrphan(observed: ResolverSystemResult?) -> UUID? {
+        let own = [activationID, orphanedActivationID, recordedOrphan()].compactMap(\.self)
+        guard let observed else {
+            return own.first
+        }
+        guard let bound = observed.activationID, own.contains(bound) else {
+            return nil
+        }
+        return bound
     }
 
     /// Accepts a foreign daemon binding only when it is the one this host's own
