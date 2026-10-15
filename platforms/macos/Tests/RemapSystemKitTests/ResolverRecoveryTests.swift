@@ -56,6 +56,37 @@ func aRestartedReconcilerReleasesTheOrphanNamedByTheDurableBypassRecord() async 
 }
 
 @Test
+func anOrphanIsReleasedOnlyOnceACompleteReplacementPlanExists() async throws {
+    let orphan = try healingRecord(createdAt: 1).activationIdentifier()
+    let current = try healingRecord(createdAt: 2)
+    let observable = Mutex(false)
+    let daemon = ResolverTestDaemon(ResolverTestDaemon.State(
+        activationID: orphan,
+        activeGeneration: 5,
+        highestGeneration: 5
+    ))
+    let reconciler = ResolverReconciler(
+        channel: daemon,
+        loadRecord: { current },
+        makePlan: { _ in
+            guard observable.withLock({ $0 }) else { throw ResolverError.noUsableUpstream }
+            return singleServicePlan()
+        },
+        recordedOrphan: { orphan }
+    )
+    await #expect(throws: ResolverError.noUsableUpstream) {
+        try await reconciler.reconcile()
+    }
+    #expect(daemon.snapshot().activationID == orphan)
+    #expect(daemon.snapshot().invalidations.isEmpty)
+
+    observable.withLock { $0 = true }
+    try await reconciler.reconcile()
+    #expect(daemon.snapshot().invalidations == [orphan])
+    #expect(daemon.snapshot().activeGeneration == 6)
+}
+
+@Test
 func safeBypassReportsTheActivationItCouldNotRelease() async throws {
     let record = try healingRecord()
     let daemon = ResolverTestDaemon()

@@ -94,8 +94,9 @@ public actor ResolverReconciler {
             return
         }
         let identifier = try record.activationIdentifier()
+        var orphan: (activationID: UUID, generation: UInt64)?
         if let bound = health.activationID, bound != identifier {
-            health = try releaseOrphan(bound: bound, health: health)
+            orphan = try releasableOrphan(bound: bound, health: health)
         }
         let plan: DNSPlan
         do {
@@ -105,6 +106,10 @@ public actor ResolverReconciler {
             // last complete generation active so a transient observation cannot
             // turn ordinary DNS into an immediate SERVFAIL outage.
             throw error
+        }
+        if let orphan {
+            // Released only once a complete replacement plan exists.
+            health = try release(orphan.activationID, generation: orphan.generation)
         }
         let unchangedPublishedPlan = health.activationID == identifier
             && health.activeGeneration == activeGeneration
@@ -161,20 +166,25 @@ public actor ResolverReconciler {
         }
     }
 
-    /// Releases a daemon binding left by this host's own failed bypass. Any
-    /// other bound activation is still a mismatch: that check is what keeps
-    /// two controllers from fighting over one daemon.
-    private func releaseOrphan(
+    /// Accepts a foreign daemon binding only when it is the one this host's own
+    /// failed bypass left behind. Any other bound activation is still a
+    /// mismatch: that check is what keeps two controllers from fighting over
+    /// one daemon.
+    private func releasableOrphan(
         bound: UUID,
         health: ResolverSystemResult
-    ) throws -> ResolverSystemResult {
+    ) throws -> (activationID: UUID, generation: UInt64) {
         guard bound == (orphanedActivationID ?? recordedOrphan()),
               let generation = health.activeGeneration
         else {
             throw ResolverReconciliationError.activationMismatch
         }
+        return (bound, generation)
+    }
+
+    private func release(_ orphan: UUID, generation: UInt64) throws -> ResolverSystemResult {
         let released = try channel.exchange(
-            .invalidate(activationID: bound, generation: generation)
+            .invalidate(activationID: orphan, generation: generation)
         )
         guard released.activationID == nil, released.activeGeneration == nil else {
             throw ResolverReconciliationError.invalidInvalidation
