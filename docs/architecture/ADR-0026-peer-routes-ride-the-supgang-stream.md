@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-10-15. Amends ADR-0016 (peers are Supgang's). Depends on Supgang
+Proposed, 2026-10-15, for the owner's review before it is installed. Amends ADR-0016 (peers are Supgang's). Depends on Supgang
 ADR 0006, "Local stream endpoint, version 1", which is shipped.
 
 ## Context
