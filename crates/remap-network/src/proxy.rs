@@ -8,16 +8,19 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE, HOST, HeaderName};
 use hyper::http::uri::{Authority, PathAndQuery};
+use hyper::upgrade::OnUpgrade;
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use remap_core::{
     HostHeaderPolicy, HttpScheme, HttpUpstream, MappingTarget, PeerService, RemapName,
 };
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::time::timeout;
 
 use crate::gateway::{PeerRouting, SelfRejectingConnector};
 use crate::peer::PeerResolveError;
+use crate::tunnel::{self, Tunnels};
 use crate::{RuntimeIdentity, SnapshotStore};
 
 const HEALTH_HOST: &[u8] = b"_health.remap.invalid";
@@ -47,14 +50,35 @@ impl RouteError {
     }
 }
 
+/// A client's WebSocket switch, admitted and waiting for the upstream's answer.
+struct PendingUpgrade {
+    permit: OwnedSemaphorePermit,
+    client: OnUpgrade,
+}
+
+/// Everything one gateway connection routes its requests with.
+#[derive(Clone)]
+pub(crate) struct Router {
+    pub(crate) client: ProxyClient,
+    pub(crate) snapshots: SnapshotStore,
+    pub(crate) upstream_timeout: Duration,
+    pub(crate) identity: Option<RuntimeIdentity>,
+    pub(crate) routing: PeerRouting,
+    pub(crate) tunnels: Tunnels,
+}
+
 pub(crate) async fn route(
-    request: Request<Incoming>,
-    client: ProxyClient,
-    snapshots: SnapshotStore,
-    upstream_timeout: Duration,
-    identity: Option<RuntimeIdentity>,
-    routing: PeerRouting,
+    mut request: Request<Incoming>,
+    router: Router,
 ) -> Result<Response<ProxyBody>, Infallible> {
+    let Router {
+        client,
+        snapshots,
+        upstream_timeout,
+        identity,
+        routing,
+        tunnels,
+    } = router;
     if let Some(response) = health_response(&request, identity.as_ref()) {
         return Ok(response);
     }
@@ -62,12 +86,19 @@ pub(crate) async fn route(
         Ok(selected) => selected,
         Err(error) => return Ok(error.response()),
     };
-    let request = match upstream_request(request, &upstream) {
+    let upgrade = match admit_upgrade(&mut request, &tunnels) {
+        Ok(upgrade) => upgrade,
+        Err(error) => return Ok(error.response()),
+    };
+    let request = match upstream_request(request, &upstream, upgrade.is_some()) {
         Ok(request) => request,
         Err(error) => return Ok(error.response()),
     };
     let response = match timeout(upstream_timeout, client.request(request)).await {
-        Ok(Ok(response)) => sanitize_response(response),
+        Ok(Ok(response)) => match upgrade {
+            Some(pending) => switch_response(response, pending, &tunnels),
+            None => sanitize_response(response),
+        },
         Ok(Err(_error)) => gateway_error(
             StatusCode::BAD_GATEWAY,
             "E_GATEWAY_UPSTREAM",
@@ -216,9 +247,58 @@ const fn invalid_host(message: &'static str) -> RouteError {
     RouteError::new(StatusCode::BAD_REQUEST, "E_GATEWAY_HOST", message)
 }
 
+/// Takes a tunnel slot and the client's side of the switch when the request
+/// asks for WebSocket; any other request passes untouched.
+fn admit_upgrade(
+    request: &mut Request<Incoming>,
+    tunnels: &Tunnels,
+) -> Result<Option<PendingUpgrade>, RouteError> {
+    if !tunnel::requests_websocket(request.headers()) {
+        return Ok(None);
+    }
+    let permit = tunnels.admit().ok_or_else(|| {
+        RouteError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "E_GATEWAY_TUNNEL_LIMIT",
+            "The gateway is carrying as many WebSocket connections as it allows.",
+        )
+    })?;
+    Ok(Some(PendingUpgrade {
+        permit,
+        client: hyper::upgrade::on(request),
+    }))
+}
+
+/// The upstream's answer to a WebSocket request. A refusal is relayed like
+/// any response; a switch is relayed and the two connections joined.
+fn switch_response(
+    mut response: Response<Incoming>,
+    pending: PendingUpgrade,
+    tunnels: &Tunnels,
+) -> Response<ProxyBody> {
+    if response.status() != StatusCode::SWITCHING_PROTOCOLS {
+        return sanitize_response(response);
+    }
+    if !tunnel::upgrades_to_websocket(response.headers()) {
+        return RouteError::new(
+            StatusCode::BAD_GATEWAY,
+            "E_GATEWAY_UPGRADE",
+            "The selected service switched to a protocol other than the WebSocket requested.",
+        )
+        .response();
+    }
+    let upstream = hyper::upgrade::on(&mut response);
+    tunnels.spawn(pending.permit, pending.client, upstream);
+    let (mut parts, body) = response.into_parts();
+    remove_hop_by_hop(&mut parts.headers);
+    tunnel::mark_websocket(&mut parts.headers);
+    Response::from_parts(parts, body.boxed())
+}
+
 fn upstream_request(
     request: Request<Incoming>,
     upstream: &HttpUpstream,
+    websocket: bool,
 ) -> Result<Request<Incoming>, RouteError> {
     let authority = upstream_authority(upstream);
     let path = upstream_path(upstream.base_path(), request.uri())?;
@@ -241,6 +321,9 @@ fn upstream_request(
     let (mut parts, body) = request.into_parts();
     parts.uri = uri;
     remove_hop_by_hop(&mut parts.headers);
+    if websocket {
+        tunnel::mark_websocket(&mut parts.headers);
+    }
     if upstream.host_header_policy() == HostHeaderPolicy::UseUpstream {
         let host = authority.parse().map_err(|_| {
             RouteError::new(
@@ -285,6 +368,16 @@ fn upstream_path(base_path: &str, incoming: &Uri) -> Result<PathAndQuery, RouteE
 
 fn sanitize_response(response: Response<Incoming>) -> Response<ProxyBody> {
     let (mut parts, body) = response.into_parts();
+    if parts.status == StatusCode::SWITCHING_PROTOCOLS {
+        // Only `switch_response` relays a switch, and only one the client
+        // asked for; any other would leave the client on a dead protocol.
+        return RouteError::new(
+            StatusCode::BAD_GATEWAY,
+            "E_GATEWAY_UPGRADE",
+            "The selected service switched protocols without being asked to.",
+        )
+        .response();
+    }
     remove_hop_by_hop(&mut parts.headers);
     Response::from_parts(parts, body.boxed())
 }
