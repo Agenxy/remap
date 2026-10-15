@@ -10,6 +10,7 @@ mod proxy;
 mod resolver;
 mod server;
 mod snapshot;
+mod tunnel;
 
 pub use dns::{DnsDecision, DnsEngine, DnsPolicy};
 pub use error::NetworkError;
