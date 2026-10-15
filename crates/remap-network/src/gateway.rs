@@ -23,7 +23,8 @@ use tokio::time::{sleep, timeout, timeout_at};
 use tower_service::Service;
 
 use crate::peer::{PEER_CACHE_LIMIT, PeerResolver, PinnedVerifier, SupgangResolver};
-use crate::proxy::{ProxyClient, route};
+use crate::proxy::{ProxyClient, Router, route};
+use crate::tunnel::Tunnels;
 use crate::{NetworkError, RuntimeIdentity, SnapshotStore};
 
 /// Bounded listener, upstream, and shutdown configuration for the HTTP gateway.
@@ -43,6 +44,12 @@ pub struct GatewayRuntimeConfig {
     pub connection_timeout: Duration,
     /// Maximum time to drain accepted connections during shutdown.
     pub shutdown_grace: Duration,
+    /// Maximum concurrent WebSocket tunnels, counted apart from connections.
+    pub tunnel_limit: usize,
+    /// Longest a WebSocket tunnel may carry no bytes in either direction.
+    pub tunnel_idle_timeout: Duration,
+    /// Maximum total lifetime of one WebSocket tunnel.
+    pub tunnel_lifetime: Duration,
 }
 
 impl GatewayRuntimeConfig {
@@ -57,6 +64,9 @@ impl GatewayRuntimeConfig {
             pool_idle_timeout: Duration::from_secs(90),
             connection_timeout: Duration::from_secs(60),
             shutdown_grace: Duration::from_secs(5),
+            tunnel_limit: 256,
+            tunnel_idle_timeout: Duration::from_mins(5),
+            tunnel_lifetime: Duration::from_hours(12),
         }
     }
 
@@ -83,6 +93,28 @@ impl GatewayRuntimeConfig {
                     "HTTP gateway deadlines must be from 1 nanosecond through 300 seconds",
                 ));
             }
+        }
+        self.validate_tunnels()
+    }
+
+    fn validate_tunnels(&self) -> Result<(), NetworkError> {
+        if !(1..=4_096).contains(&self.tunnel_limit) {
+            return Err(NetworkError::Configuration(
+                "the WebSocket tunnel limit must be between 1 and 4096",
+            ));
+        }
+        if self.tunnel_idle_timeout.is_zero() || self.tunnel_idle_timeout > Duration::from_hours(1)
+        {
+            return Err(NetworkError::Configuration(
+                "the WebSocket idle deadline must be from 1 nanosecond through 1 hour",
+            ));
+        }
+        if self.tunnel_lifetime < self.tunnel_idle_timeout
+            || self.tunnel_lifetime > Duration::from_hours(24)
+        {
+            return Err(NetworkError::Configuration(
+                "the WebSocket lifetime must be from the idle deadline through 24 hours",
+            ));
         }
         Ok(())
     }
@@ -256,6 +288,12 @@ impl GatewayRuntime {
     /// Returns a sanitized listener or bounded-shutdown failure.
     pub async fn serve(self, mut shutdown: watch::Receiver<bool>) -> Result<(), NetworkError> {
         let mut connections = JoinSet::new();
+        let tunnels = Tunnels::new(
+            self.config.tunnel_limit,
+            self.config.tunnel_idle_timeout,
+            self.config.tunnel_lifetime,
+            shutdown.clone(),
+        );
         loop {
             let permit = tokio::select! {
                 () = shutdown_requested(&mut shutdown) => break,
@@ -278,27 +316,22 @@ impl GatewayRuntime {
             };
             let (stream, _peer) =
                 accepted.map_err(|error| NetworkError::io("HTTP listener accept", error))?;
-            let client = self.client.clone();
-            let snapshots = self.snapshots.clone();
+            let router = Router {
+                client: self.client.clone(),
+                snapshots: self.snapshots.clone(),
+                upstream_timeout: self.config.upstream_timeout,
+                identity: self.identity.clone(),
+                routing: PeerRouting {
+                    resolver: self.peers.clone(),
+                    clients: self.pinned.clone(),
+                },
+                tunnels: tunnels.clone(),
+            };
             let connection_shutdown = shutdown.clone();
             let config = self.config.clone();
-            let identity = self.identity.clone();
-            let routing = PeerRouting {
-                resolver: self.peers.clone(),
-                clients: self.pinned.clone(),
-            };
             connections.spawn(async move {
                 let _permit = permit;
-                serve_connection(
-                    stream,
-                    client,
-                    snapshots,
-                    config,
-                    identity,
-                    routing,
-                    connection_shutdown,
-                )
-                .await;
+                serve_connection(stream, router, &config, connection_shutdown).await;
             });
         }
         drain_connections(&mut connections, self.config.shutdown_grace).await
@@ -433,30 +466,22 @@ fn build_pinned_client(
 
 async fn serve_connection(
     stream: TcpStream,
-    client: ProxyClient,
-    snapshots: SnapshotStore,
-    config: GatewayRuntimeConfig,
-    identity: Option<RuntimeIdentity>,
-    routing: PeerRouting,
+    router: Router,
+    config: &GatewayRuntimeConfig,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    let service = service_fn(move |request| {
-        route(
-            request,
-            client.clone(),
-            snapshots.clone(),
-            config.upstream_timeout,
-            identity.clone(),
-            routing.clone(),
-        )
-    });
+    let service = service_fn(move |request| route(request, router.clone()));
     let mut builder = http1::Builder::new();
     builder
         .timer(TokioTimer::new())
         .header_read_timeout(Some(config.header_timeout))
         .max_headers(128)
         .keep_alive(true);
-    let connection = builder.serve_connection(TokioIo::new(stream), service);
+    // An upgraded connection leaves this future: it completes once the 101
+    // is written, and the tunnel runs under its own bounds (ADR-0021).
+    let connection = builder
+        .serve_connection(TokioIo::new(stream), service)
+        .with_upgrades();
     tokio::pin!(connection);
     tokio::select! {
         _result = &mut connection => {}
@@ -540,7 +565,7 @@ impl std::error::Error for GuardedConnectError {
     }
 }
 
-async fn shutdown_requested(shutdown: &mut watch::Receiver<bool>) {
+pub(crate) async fn shutdown_requested(shutdown: &mut watch::Receiver<bool>) {
     if *shutdown.borrow() {
         return;
     }
