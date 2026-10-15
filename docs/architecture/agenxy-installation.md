@@ -440,6 +440,35 @@ sovereignty invariant exists to prevent, and being the owner's own program does 
 Supgang is what removes the owner's journey to the machine when it is there and has been
 turned on, and nothing is lost when it is not.
 
+**Turning it on is the moment to defend.** Owner, 15 October, in his words: "Each tool
+should have their own auth, but also support supgang as a secure alternative without
+compromising security (so strong auth/verification would be needed to even initially set
+this up so it can't be hijacked)."
+
+Everything a tool later accepts on the owner's signature rests on which hive it pinned as
+the provider, so enrolment is where an attacker would attack, and it is the one step that
+earns the owner's presence rather than spending it. A tool enabling the Supgang path
+authenticates the owner strongly and locally at that moment, and verifies the hive's
+fingerprint through a channel other than the one being enrolled. Confirming a fingerprint
+over the link that is presenting it proves only that the link is consistent with itself.
+
+Three properties follow, and the third is the one usually missed.
+
+A pin names one hive, by fingerprint, and not whatever answers next.
+
+Disabling the Supgang path is always available and needs no ceremony, because the tool's
+own auth is still there underneath and turning it off removes capability rather than
+granting it. The asymmetry is the point: hard to enable, easy to leave.
+
+**Changing an existing pin is an enrolment, not an edit.** Rotating or replacing the
+anchor demands exactly what first enrolment demanded. A system that is careful once and
+lax about rotation has a front door with a lock and a back door without one, and the
+attacker uses the back door.
+
+(The owner's words are quoted above. "Out of band" and the three properties are this
+contract reading them; they are the reading that makes the instruction enforceable, and
+they are not his wording.)
+
 **Administering security from another node.** The owner's signature over the exact request
 replaces the requirement to be at the console. "Exact" is the whole of it, so the contract
 says what a signature must cover: the request itself, in a form with one meaning; the node
