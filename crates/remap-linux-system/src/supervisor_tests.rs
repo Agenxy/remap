@@ -71,18 +71,9 @@ fn resolver_generation_survives_a_backward_clock() {
 #[test]
 fn ambiguous_publication_state_is_never_treated_as_empty() {
     let activation_id = Uuid::new_v4();
-    let exact = SystemResult {
-        activation_id: Some(activation_id),
-        active_generation: Some(42),
-    };
-    let empty = SystemResult {
-        activation_id: None,
-        active_generation: None,
-    };
-    let partial = SystemResult {
-        activation_id: Some(activation_id),
-        active_generation: None,
-    };
+    let exact = SystemResult::new(Some(activation_id), Some(42), None);
+    let empty = SystemResult::new(None, None, None);
+    let partial = SystemResult::new(Some(activation_id), None, None);
     assert_eq!(plan_state(&exact, activation_id, 42), PlanState::Exact);
     assert_eq!(plan_state(&empty, activation_id, 42), PlanState::Empty);
     assert_eq!(plan_state(&partial, activation_id, 42), PlanState::Other);

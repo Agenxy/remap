@@ -147,19 +147,13 @@ mod tests {
     #[test]
     fn health_acceptance_rejects_stale_or_partial_identity() {
         let activation = uuid::Uuid::from_u128(7);
-        let exact = remap_protocol::SystemResult {
-            activation_id: Some(activation),
-            active_generation: Some(11),
-        };
+        let exact = remap_protocol::SystemResult::new(Some(activation), Some(11), None);
         assert!(health_matches((activation, 11), &exact));
         assert!(!health_matches((activation, 12), &exact));
         assert!(!health_matches((uuid::Uuid::from_u128(8), 11), &exact));
         assert!(!health_matches(
             (activation, 11),
-            &remap_protocol::SystemResult {
-                activation_id: None,
-                active_generation: Some(11),
-            },
+            &remap_protocol::SystemResult::new(None, Some(11), None),
         ));
     }
 }
