@@ -30,6 +30,7 @@ enum RemapResolverCommand {
                         reactivatePreparedDNS: true
                     ),
                     monitor: ResolverChangeMonitor(watchedSocketPath: socketPath),
+                    bypassLog: LoggedResolverBypassLog(store: .standard, logger: logger),
                     observe: logState
                 )
                 await supervisor.run()
@@ -91,6 +92,40 @@ enum RemapResolverCommand {
     This root service observes native network changes and publishes only bounded
     resolver generations to the selected user's non-root Remap authority.
     """
+}
+
+/// Keeps the durable bypass record beside the activation record. A record
+/// that cannot be written is logged and never changes resolver behavior.
+private struct LoggedResolverBypassLog: ResolverBypassRecording {
+    let store: ResolverBypassStore
+    let logger: Logger
+
+    func record(_ payload: ResolverBypassPayload) {
+        let reason = payload.reasonCode
+        let outcome = payload.outcomeCode
+        let pending = payload.releasePending
+        if payload.rearmedAtMilliseconds == nil {
+            logger.fault(
+                "resolver bypass \(reason, privacy: .public) \(outcome, privacy: .public) release pending \(pending)"
+            )
+        } else {
+            logger.notice("resolver re-armed after a bypass caused by \(reason, privacy: .public)")
+        }
+        do {
+            try store.write(payload)
+        } catch {
+            logger.error("resolver bypass record not written: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    func lastBypass() -> ResolverBypassPayload? {
+        do {
+            return try store.read()?.payload
+        } catch {
+            logger.error("resolver bypass record unreadable: \(String(describing: error), privacy: .public)")
+            return nil
+        }
+    }
 }
 
 private enum SupervisorInvocation {

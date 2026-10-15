@@ -109,6 +109,20 @@ impl ResolverPlanStore {
         self.active.load().as_ref().map(|plan| plan.generation)
     }
 
+    /// Returns the highest generation this store has ever accepted, if any.
+    ///
+    /// Invalidation clears the active plan but never lowers this high-water
+    /// mark, because [`Self::publish`] keeps refusing every generation at or
+    /// below it. A supervisor that starts without memory of earlier
+    /// publications reads this value to choose a generation the store will
+    /// accept. An unavailable publisher lock reports no value; the next
+    /// publication then fails closed on the same lock.
+    #[must_use]
+    pub fn highest_accepted_generation(&self) -> Option<u64> {
+        let publisher = self.publisher.lock().ok()?;
+        (publisher.latest_generation > 0).then_some(publisher.latest_generation)
+    }
+
     pub(crate) fn capture(&self) -> Option<Arc<ResolverPlan>> {
         self.active.load_full()
     }
@@ -201,6 +215,23 @@ mod tests {
         assert_eq!(store.active_generation(), Some(4));
         assert!(store.invalidate(4)?);
         assert_eq!(store.active_generation(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn invalidation_keeps_the_accepted_generation_high_water() -> Result<(), Box<dyn Error>> {
+        let store = ResolverPlanStore::dormant();
+        assert_eq!(store.highest_accepted_generation(), None);
+        store.publish(3, vec![endpoint(3)])?;
+        assert_eq!(store.highest_accepted_generation(), Some(3));
+        assert!(store.publish(2, vec![endpoint(2)]).is_err());
+        assert_eq!(store.highest_accepted_generation(), Some(3));
+        assert!(store.invalidate(3)?);
+        assert_eq!(store.active_generation(), None);
+        assert_eq!(store.highest_accepted_generation(), Some(3));
+        assert!(store.publish(3, vec![endpoint(3)]).is_err());
+        store.publish(4, vec![endpoint(4)])?;
+        assert_eq!(store.highest_accepted_generation(), Some(4));
         Ok(())
     }
 

@@ -15,10 +15,14 @@ public actor ResolverReconciler {
     private let makePlan: @Sendable (ActivationRecord) throws -> DNSPlan
     private let restoreSystemDNS: @Sendable () throws -> Void
     private let commitPreparedDNS: @Sendable (ActivationRecord) throws -> Void
+    private let recordedOrphan: @Sendable () -> UUID?
     private var activationID: UUID?
     private var activeGeneration: UInt64?
     private var highestGeneration: UInt64 = 0
     private var lastUpstreams: [String]?
+    /// Activation a safe bypass meant to release from the daemon but could
+    /// not. Only this exact identity may be released on a later mismatch.
+    private var orphanedActivationID: UUID?
 
     public init(
         resolver: SystemResolver = SystemResolver(),
@@ -27,6 +31,11 @@ public actor ResolverReconciler {
         reactivatePreparedDNS: Bool = false
     ) {
         self.channel = channel
+        let bypassStore = ResolverBypassStore(directory: activationStore.directory)
+        // A supervisor restart or a separate `remap-system activate` has no
+        // memory of an earlier failed release, so the durable bypass record
+        // carries that one identity across processes.
+        recordedOrphan = { (try? bypassStore.read())?.payload.outstandingOrphan }
         loadRecord = { try resolver.activeRecord(store: activationStore) }
         makePlan = { try resolver.reconciliationPlan(record: $0) }
         restoreSystemDNS = {
@@ -65,28 +74,29 @@ public actor ResolverReconciler {
         loadRecord: @escaping @Sendable () throws -> ActivationRecord?,
         makePlan: @escaping @Sendable (ActivationRecord) throws -> DNSPlan,
         restoreSystemDNS: @escaping @Sendable () throws -> Void = {},
-        commitPreparedDNS: @escaping @Sendable (ActivationRecord) throws -> Void = { _ in }
+        commitPreparedDNS: @escaping @Sendable (ActivationRecord) throws -> Void = { _ in },
+        recordedOrphan: @escaping @Sendable () -> UUID? = { nil }
     ) {
         self.channel = channel
         self.loadRecord = loadRecord
         self.makePlan = makePlan
         self.restoreSystemDNS = restoreSystemDNS
         self.commitPreparedDNS = commitPreparedDNS
+        self.recordedOrphan = recordedOrphan
     }
 
     /// Reconciles daemon generation state after startup or a native network change.
     public func reconcile() throws {
-        let health = try channel.exchange(.health)
-        if let generation = health.activeGeneration {
-            highestGeneration = max(highestGeneration, generation)
-        }
+        var health = try channel.exchange(.health)
+        observeGenerations(health)
         guard let record = try loadRecord() else {
             try invalidateIfNeeded(health: health)
             return
         }
         let identifier = try record.activationIdentifier()
+        var orphan: (activationID: UUID, generation: UInt64)?
         if let bound = health.activationID, bound != identifier {
-            throw ResolverReconciliationError.activationMismatch
+            orphan = try releasableOrphan(bound: bound, health: health)
         }
         let plan: DNSPlan
         do {
@@ -96,6 +106,10 @@ public actor ResolverReconciler {
             // last complete generation active so a transient observation cannot
             // turn ordinary DNS into an immediate SERVFAIL outage.
             throw error
+        }
+        if let orphan {
+            // Released only once a complete replacement plan exists.
+            health = try release(orphan.activationID, generation: orphan.generation)
         }
         let unchangedPublishedPlan = health.activationID == identifier
             && health.activeGeneration == activeGeneration
@@ -121,6 +135,7 @@ public actor ResolverReconciler {
         activeGeneration = generation
         highestGeneration = max(highestGeneration, generation)
         lastUpstreams = plan.upstreams
+        orphanedActivationID = nil
         try commitPreparedDNS(record)
     }
 
@@ -129,10 +144,66 @@ public actor ResolverReconciler {
     /// Public connectivity is restored before the daemon plan is invalidated.
     /// A channel failure after restoration therefore cannot put the Mac back on
     /// the local listener.
-    public func enterSafeBypass() throws {
+    ///
+    /// Only a failure to restore ordinary DNS throws. A failure to release the
+    /// daemon's plan afterwards is returned, and the activation it may still
+    /// hold is remembered so a later reconciliation can release exactly that
+    /// identity instead of reporting an activation mismatch forever.
+    public func enterSafeBypass() throws -> ResolverBypassRelease {
         try restoreSystemDNS()
-        guard let health = try? channel.exchange(.health) else { return }
-        try? invalidateIfNeeded(health: health)
+        var observed: ResolverSystemResult?
+        do {
+            let health = try channel.exchange(.health)
+            observed = health
+            observeGenerations(health)
+            try invalidateIfNeeded(health: health)
+            orphanedActivationID = nil
+            return .released
+        } catch {
+            let orphan = observed?.activationID ?? activationID ?? orphanedActivationID
+            orphanedActivationID = orphan
+            return .pending(activationID: orphan)
+        }
+    }
+
+    /// Accepts a foreign daemon binding only when it is the one this host's own
+    /// failed bypass left behind. Any other bound activation is still a
+    /// mismatch: that check is what keeps two controllers from fighting over
+    /// one daemon.
+    private func releasableOrphan(
+        bound: UUID,
+        health: ResolverSystemResult
+    ) throws -> (activationID: UUID, generation: UInt64) {
+        guard bound == (orphanedActivationID ?? recordedOrphan()),
+              let generation = health.activeGeneration
+        else {
+            throw ResolverReconciliationError.activationMismatch
+        }
+        return (bound, generation)
+    }
+
+    private func release(_ orphan: UUID, generation: UInt64) throws -> ResolverSystemResult {
+        let released = try channel.exchange(
+            .invalidate(activationID: orphan, generation: generation)
+        )
+        guard released.activationID == nil, released.activeGeneration == nil else {
+            throw ResolverReconciliationError.invalidInvalidation
+        }
+        observeGenerations(released)
+        highestGeneration = max(highestGeneration, generation)
+        orphanedActivationID = nil
+        activationID = nil
+        activeGeneration = nil
+        lastUpstreams = nil
+        return released
+    }
+
+    private func observeGenerations(_ result: ResolverSystemResult) {
+        highestGeneration = max(
+            highestGeneration,
+            result.activeGeneration ?? 0,
+            result.highestAcceptedGeneration ?? 0
+        )
     }
 
     private func invalidateIfNeeded(
@@ -151,11 +222,17 @@ public actor ResolverReconciler {
         guard result.activeGeneration == nil else {
             throw ResolverReconciliationError.invalidInvalidation
         }
+        observeGenerations(result)
         activeGeneration = nil
         activationID = nil
         lastUpstreams = nil
+        orphanedActivationID = nil
     }
 
+    /// The daemon refuses any generation at or below the highest it has
+    /// accepted, including after invalidation clears its active plan, so the
+    /// next generation exceeds the active generation, the daemon's reported
+    /// high-water (ADR-0025), and every generation this reconciler has seen.
     private func nextGeneration(after daemonGeneration: UInt64?) throws -> UInt64 {
         let greatest = max(daemonGeneration ?? 0, highestGeneration)
         guard greatest < UInt64.max else {
@@ -171,6 +248,13 @@ func systemDNSNeedsReactivation(
 ) -> Bool {
     let expected = record.payload.services.map(\.serviceID).sorted()
     return remapServiceIDs.sorted() != expected
+}
+
+/// Whether a safe bypass also released the daemon's resolver plan.
+public enum ResolverBypassRelease: Equatable, Sendable {
+    case released
+    /// The daemon may still be bound to this activation, when it is known.
+    case pending(activationID: UUID?)
 }
 
 /// Fail-closed resolver publication failures with no upstream-address context.

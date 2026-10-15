@@ -188,6 +188,7 @@ public enum ResolverError: Error, CustomStringConvertible, Equatable {
     case activeUserMismatch
     case configurationConflict([String])
     case invalidActivationRecord
+    case invalidBypassRecord
     case listenerUnavailable
     case noEnabledDNSService
     case noUsableUpstream
@@ -195,6 +196,15 @@ public enum ResolverError: Error, CustomStringConvertible, Equatable {
     case preferences(String)
     case secureStorage(String)
     case unsupportedResolverScope(Int)
+
+    /// True when the network exposed no usable resolver at the moment it was
+    /// observed: the service is asleep, rejoining, or down. In reconciliation
+    /// these come only from the network observation, never from a refusal,
+    /// a conflict, or storage, so they alone may preserve the last complete
+    /// generation for a bounded time (ADR-0006).
+    public var isIncompleteNetworkObservation: Bool {
+        self == .noUsableUpstream || self == .noEnabledDNSService
+    }
 
     public var description: String {
         switch self {
@@ -210,6 +220,8 @@ public enum ResolverError: Error, CustomStringConvertible, Equatable {
             "DNS changed outside Remap for service IDs: \(services.joined(separator: ", "))."
         case .invalidActivationRecord:
             "The native activation record is malformed or unsupported."
+        case .invalidBypassRecord:
+            "The resolver bypass record is malformed or failed its integrity check."
         case .listenerUnavailable:
             "The local Remap DNS listener did not answer a valid loopback query."
         case .noEnabledDNSService:

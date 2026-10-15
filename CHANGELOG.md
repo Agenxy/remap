@@ -6,6 +6,18 @@ platform claims separate.
 
 ## Unreleased
 
+- Fixed the macOS resolver supervisor falling back to ordinary DNS and never
+  re-arming until `remapd` restarted (ADR-0025). The daemon reports the
+  highest generation it has accepted, so a fresh reconciler publishes above
+  it; a bypass that cannot release the daemon's plan remembers that one
+  activation, durably, and a later reconciliation releases exactly it instead
+  of reporting an activation mismatch forever; an unobserved network (sleep,
+  Wi-Fi rejoining) keeps the last complete plan for up to 20 awake seconds,
+  while a channel failure, daemon refusal, or conflict still bypasses at once;
+  and every fallback records its reason, time, and re-arm in a root-owned
+  `resolver-bypass-v1.json` that `remap-system status` shows. Following a
+  different active network service, such as tethering, is proposed in
+  ADR-0024 and not yet implemented.
 - Fixed the native macOS lifecycle on a Mac that has restarted or that runs a
   launchd-owned system socket, found by driving `make recover` and `make update`
   end to end: the source orchestrator's privileged sink is spawned in the
