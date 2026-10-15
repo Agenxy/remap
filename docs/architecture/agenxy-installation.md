@@ -420,12 +420,50 @@ file held.
 
 Not yet proven, and worth proving before this is relied on: that a launchd daemon loads,
 and that a permission prompt names the product, under a certificate the machine does not
-hold. Execution and strict verification are measured; those two are not. **A convenience that can be hijacked is worse than no convenience**, since it
-converts a decision the owner would have made in person into one an attacker can make
-remotely, on every machine at once. So: the broker is optional, the product is whole
-without it, the broker authenticates the owner over the network, its own keys live in a
-Secure Enclave or TPM, and a product asking a broker for an identity is never a reason to
-hold its own key less carefully.
+hold. Execution and strict verification are measured; those two are not.
+
+### Supgang is the provider, and no tool may require it
+
+Owner's direction, 2026-10-14: Supgang is the identity, certificate, permissions and
+authentication provider for every Agenxy tool. It certifies that an action comes from an
+authorised user, using that user's keys, identity and entitlements, so the owner does not
+approve in person for each tool separately. Every tool supports it as that provider, and a
+tool with a native mechanism of its own offers a mode that uses Supgang instead.
+
+The owner settled the emphasis the same week, and it is the emphasis rather than the idea
+that matters: Supgang is meant as an optional provider, not the default, so that it does
+not become a dependency and every tool stays independent. So, precisely: **each tool's own
+identity, approvals and TLS remain its default; Supgang is an opt-in provider mode; and no
+tool may require it.** A product that cannot install, sign or start because Supgang is
+absent has made one program a single point of failure for all of them, which is what the
+sovereignty invariant exists to prevent, and being the owner's own program does not help.
+Supgang is what removes the owner's journey to the machine when it is there and has been
+turned on, and nothing is lost when it is not.
+
+**Administering security from another node.** The owner's signature over the exact request
+replaces the requirement to be at the console. "Exact" is the whole of it, so the contract
+says what a signature must cover: the request itself, in a form with one meaning; the node
+it is addressed to, so a signature for one machine does not act on another; the authority
+being exercised, named rather than implied; and a freshness bound with single use, so a
+signature captured in transit cannot be replayed later or at a second node. A signature
+over a request that does not name its target and its moment is a reusable credential
+wearing a signature's clothes.
+
+**What a signature cannot do, which belongs here because it will be assumed.** An owner
+signature replaces a requirement *Agenxy* imposes. It cannot replace an authorisation the
+operating system imposes: macOS will not record an administrator-domain trust setting
+without interactive approval, under sudo and inside an installer's own script sandbox
+alike, and no signature of the owner's changes that. Those requirements are removed by
+designing them out, as the section above does for code signing, and never by substituting
+a signature for a prompt the product does not own. A tool that claims otherwise is wrong in
+a way that will only be discovered on a machine nobody is sitting at.
+
+**A convenience that can be hijacked is worse than no convenience**, since it converts a
+decision the owner would have made in person into one an attacker can make remotely, on
+every machine at once. So: the broker is optional, the product is whole without it, the
+broker authenticates the owner over the network, its own keys live in a Secure Enclave or
+TPM, and a product asking a broker for an identity is never a reason to hold its own key
+less carefully.
 
 Until that exists, this document claims reliability and says plainly that it does not
 claim provenance. A product must not describe its installation as verified on the
