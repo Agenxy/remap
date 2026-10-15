@@ -95,7 +95,19 @@ meet all of the following:
   hive just because it learned of it over the network.
 - **The pin is exact.** It binds the `HiveId` and the root key, plus Remap's
   local allowlist of operations and scope, which may only be narrower than
-  any grant. Changing or removing the pin repeats the same local ceremony.
+  any grant. It names one hive by fingerprint, not whatever hive answers
+  next.
+- **Changing a pin is an enrolment, not an edit.** Rotating or replacing the
+  pinned hive repeats the full ceremony above. Re-pinning is no easier than
+  first enrolment, so it cannot serve as an unguarded way in.
+- **Disabling is easy.** Turning the Supgang path off needs only Remap's
+  native root authority, with no presence prompt and no fingerprint check.
+  Disabling only removes capability, and native authority remains
+  underneath, so it is hard to enable and easy to leave. No remote assertion
+  can disable the mode either: that is a native act, like enabling.
+
+These three rules follow the shared installation contract
+(`docs/architecture/agenxy-installation.md`).
 - **It is visible.** Enabling, re-pinning and disabling are recorded in the
   root-owned store and shown by `remap doctor` and `remap system status`. If
   the mode is on, every status read says so, together with the pinned
