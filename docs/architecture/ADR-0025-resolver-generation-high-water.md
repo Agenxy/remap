@@ -107,10 +107,9 @@ optional wire field and one more root-owned file.
 
 A network that is genuinely gone for more than 20 awake seconds still falls
 back to ordinary DNS, which ADR-0006 requires. A move to a different network
-service, such as USB tethering after Wi-Fi turns off, is seen as an unobserved
-network because reconciliation follows only the services recorded at
-activation. It falls back after the window and does not re-arm until the
-recorded service returns. ADR-0024 proposes following the active service.
+service, such as USB tethering after Wi-Fi turns off, is not an unobserved
+network: ADR-0024 hands the activation over to the one service that now
+carries DNS.
 
 The durable record keeps only the last bypass. It is evidence for diagnosis,
 not a history.

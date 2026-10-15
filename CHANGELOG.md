@@ -15,9 +15,16 @@ platform claims separate.
   Wi-Fi rejoining) keeps the last complete plan for up to 20 awake seconds,
   while a channel failure, daemon refusal, or conflict still bypasses at once;
   and every fallback records its reason, time, and re-arm in a root-owned
-  `resolver-bypass-v1.json` that `remap-system status` shows. Following a
-  different active network service, such as tethering, is proposed in
-  ADR-0024 and not yet implemented.
+  `resolver-bypass-v1.json` that `remap-system status` shows.
+- The macOS resolver follows the network service that carries DNS
+  (ADR-0024). When Wi-Fi turns off and a tethered phone or Ethernet takes
+  over, or the reverse, the supervisor captures the new service's prior DNS
+  configuration, publishes its plan, restores the service it leaves, and
+  points the new one at Remap, as the same activation. Two services with DNS
+  at once are refused as split DNS, during supervision as at activation, so a
+  second network or a VPN with its own resolver now restores ordinary DNS
+  until one service remains. Deactivation restores every service Remap
+  changed, including both during an interrupted move.
 - Fixed the native macOS lifecycle on a Mac that has restarted or that runs a
   launchd-owned system socket, found by driving `make recover` and `make update`
   end to end: the source orchestrator's privileged sink is spawned in the
