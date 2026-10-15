@@ -75,6 +75,7 @@ impl PeerResolver for Advertised {
                 .lock()
                 .map_err(|_| PeerResolveError::Unavailable("poisoned".into()))?;
             Ok(ResolvedPeerService {
+                node_id: [0x5a; 32],
                 host: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 port,
                 key_pin: pin,

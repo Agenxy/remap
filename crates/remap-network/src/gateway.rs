@@ -24,6 +24,7 @@ use tower_service::Service;
 
 use crate::peer::{PEER_CACHE_LIMIT, PeerResolver, PinnedVerifier, SupgangResolver};
 use crate::proxy::{ProxyClient, Router, route};
+use crate::supgang_stream::SupgangStreams;
 use crate::tunnel::Tunnels;
 use crate::{NetworkError, RuntimeIdentity, SnapshotStore};
 
@@ -131,6 +132,7 @@ pub struct GatewayRuntime {
     local_addr: SocketAddr,
     identity: Option<RuntimeIdentity>,
     peers: Option<Arc<dyn PeerResolver>>,
+    streams: Option<Arc<SupgangStreams>>,
     pinned: PinnedClients,
 }
 
@@ -254,6 +256,9 @@ impl GatewayRuntime {
         // peer mapping to an error that says so (ADR-0016).
         let peers =
             SupgangResolver::discover().map(|resolver| Arc::new(resolver) as Arc<dyn PeerResolver>);
+        // The stream endpoint is optional too: without it a pinned peer is
+        // dialled directly and a plaintext-in-tunnel peer is refused (ADR-0026).
+        let streams = SupgangStreams::discover().map(Arc::new);
         Ok(Self {
             listener,
             client,
@@ -263,6 +268,7 @@ impl GatewayRuntime {
             local_addr: bindings.local_addr,
             identity,
             peers,
+            streams,
             pinned,
         })
     }
@@ -272,6 +278,13 @@ impl GatewayRuntime {
     #[must_use]
     pub fn with_peer_resolver(mut self, resolver: Arc<dyn PeerResolver>) -> Self {
         self.peers = Some(resolver);
+        self
+    }
+
+    /// Replaces where Supgang's stream endpoint is, for a test.
+    #[must_use]
+    pub fn with_supgang_streams(mut self, streams: SupgangStreams) -> Self {
+        self.streams = Some(Arc::new(streams));
         self
     }
 
@@ -324,6 +337,7 @@ impl GatewayRuntime {
                 routing: PeerRouting {
                     resolver: self.peers.clone(),
                     clients: self.pinned.clone(),
+                    streams: self.streams.clone(),
                 },
                 tunnels: tunnels.clone(),
             };
@@ -345,6 +359,7 @@ impl GatewayRuntime {
 pub(crate) struct PeerRouting {
     pub(crate) resolver: Option<Arc<dyn PeerResolver>>,
     pub(crate) clients: PinnedClients,
+    pub(crate) streams: Option<Arc<SupgangStreams>>,
 }
 
 /// The most TLS clients kept for pinned peers at once; past it the least
@@ -442,16 +457,7 @@ fn build_pinned_client(
     local_addr: SocketAddr,
     pin: [u8; 32],
 ) -> Result<ProxyClient, NetworkError> {
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let verifier = PinnedVerifier::for_pin(pin, Arc::clone(&provider));
-    let tls = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .map_err(|error| {
-            NetworkError::io("TLS protocol versions", io::Error::other(error.to_string()))
-        })?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(verifier))
-        .with_no_client_auth();
+    let tls = pinned_tls_config(pin)?;
     let https = HttpsConnectorBuilder::new()
         .with_tls_config(tls)
         .https_only()
@@ -462,6 +468,21 @@ fn build_pinned_client(
         .pool_idle_timeout(config.pool_idle_timeout)
         .pool_max_idle_per_host(8)
         .build(https))
+}
+
+/// A TLS client configuration that accepts exactly one advertised key and
+/// nothing else: no system root, no other pin (ADR-0016).
+pub(crate) fn pinned_tls_config(pin: [u8; 32]) -> Result<rustls::ClientConfig, NetworkError> {
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let verifier = PinnedVerifier::for_pin(pin, Arc::clone(&provider));
+    Ok(rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|error| {
+            NetworkError::io("TLS protocol versions", io::Error::other(error.to_string()))
+        })?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth())
 }
 
 async fn serve_connection(

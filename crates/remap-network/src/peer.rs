@@ -38,6 +38,8 @@ const RESOLVE_SCHEMA: &str = "supgang.resolve/v5";
 /// Where a peer's service is right now, from its signed record.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ResolvedPeerService {
+    /// The peer's Supgang node identity, which its stream endpoint dials.
+    pub node_id: [u8; 32],
     /// The address Supgang prefers from this machine.
     pub host: IpAddr,
     /// The port the service advertises.
@@ -101,7 +103,15 @@ type ResolveFuture<'a> =
 pub trait PeerResolver: Send + Sync + fmt::Debug {
     /// Resolves one peer's advertised service.
     fn resolve<'a>(&'a self, peer: &'a str, service: &'a str) -> ResolveFuture<'a>;
+
+    /// Resolves only the peer's node identity, for a service carried in
+    /// plaintext inside the tunnel, which has no advertisement to read.
+    fn resolve_node<'a>(&'a self, _peer: &'a str) -> NodeFuture<'a> {
+        Box::pin(async { Err(PeerResolveError::Unavailable("no node resolution".into())) })
+    }
 }
+
+type NodeFuture<'a> = Pin<Box<dyn Future<Output = Result<[u8; 32], PeerResolveError>> + Send + 'a>>;
 
 /// The resolver that asks the `supgang` binary, remembering each answer
 /// until its record expires or [`PEER_CACHE_LIMIT`], whichever is sooner.
@@ -250,6 +260,13 @@ impl PeerResolver for SupgangResolver {
             Ok(resolved)
         })
     }
+
+    fn resolve_node<'a>(&'a self, peer: &'a str) -> NodeFuture<'a> {
+        Box::pin(async move {
+            let output = self.ask(peer).await?;
+            parse_node(&output, unix_now())
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -258,6 +275,8 @@ struct ResolveEnvelope {
     status: String,
     #[serde(default)]
     error: String,
+    #[serde(default)]
+    node_id: String,
     expires_at: Option<u64>,
     #[serde(default)]
     candidates: Vec<Candidate>,
@@ -295,6 +314,49 @@ pub fn parse_resolution(
     service: &str,
     now: u64,
 ) -> Result<ResolvedPeerService, PeerResolveError> {
+    let (envelope, node_id, expires_at) = current_record(output, now)?;
+    let host = envelope
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.route_compatible)
+        .max_by_key(|candidate| candidate.preferred)
+        .and_then(|candidate| host_of(&candidate.address))
+        .ok_or(PeerResolveError::NoAddress)?;
+    let row = envelope
+        .services
+        .iter()
+        .find(|row| row.name == service)
+        .ok_or(PeerResolveError::NoService)?;
+    if row.port == 0 {
+        return Err(PeerResolveError::Malformed("service port zero".into()));
+    }
+    let key_pin = decode_pin(&row.key_pin)
+        .ok_or_else(|| PeerResolveError::Malformed("the key pin is not 64 hex digits".into()))?;
+    Ok(ResolvedPeerService {
+        node_id,
+        host,
+        port: row.port,
+        key_pin,
+        expires_at,
+    })
+}
+
+/// Reads only the node identity from one `supgang resolve` answer, for a
+/// plaintext-in-tunnel service. The record must still be current: an expired
+/// one names no node.
+///
+/// # Errors
+///
+/// Returns why the answer names no current node.
+pub fn parse_node(output: &[u8], now: u64) -> Result<[u8; 32], PeerResolveError> {
+    current_record(output, now).map(|(_envelope, node_id, _expires_at)| node_id)
+}
+
+/// A current, well-formed record, its node identity, and its expiry.
+fn current_record(
+    output: &[u8],
+    now: u64,
+) -> Result<(ResolveEnvelope, [u8; 32], u64), PeerResolveError> {
     let envelope: ResolveEnvelope = serde_json::from_slice(output)
         .map_err(|error| PeerResolveError::Malformed(error.to_string()))?;
     if envelope.status == "error" {
@@ -315,29 +377,9 @@ pub fn parse_resolution(
     if expires_at <= now {
         return Err(PeerResolveError::Expired);
     }
-    let host = envelope
-        .candidates
-        .iter()
-        .filter(|candidate| candidate.route_compatible)
-        .max_by_key(|candidate| candidate.preferred)
-        .and_then(|candidate| host_of(&candidate.address))
-        .ok_or(PeerResolveError::NoAddress)?;
-    let row = envelope
-        .services
-        .iter()
-        .find(|row| row.name == service)
-        .ok_or(PeerResolveError::NoService)?;
-    if row.port == 0 {
-        return Err(PeerResolveError::Malformed("service port zero".into()));
-    }
-    let key_pin = decode_pin(&row.key_pin)
-        .ok_or_else(|| PeerResolveError::Malformed("the key pin is not 64 hex digits".into()))?;
-    Ok(ResolvedPeerService {
-        host,
-        port: row.port,
-        key_pin,
-        expires_at,
-    })
+    let node_id = decode_pin(&envelope.node_id)
+        .ok_or_else(|| PeerResolveError::Malformed("the node id is not 64 hex digits".into()))?;
+    Ok((envelope, node_id, expires_at))
 }
 
 /// The host of a Supgang candidate `host:port`; the port is Supgang's own.
@@ -532,6 +574,7 @@ mod tests {
 
     fn resolved(expires_at: u64) -> ResolvedPeerService {
         ResolvedPeerService {
+            node_id: [0x5a; 32],
             host: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 4777,
             key_pin: [0xab; 32],
