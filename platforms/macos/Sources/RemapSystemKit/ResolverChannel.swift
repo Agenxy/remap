@@ -49,10 +49,25 @@ public enum ResolverSystemCommand: Encodable, Sendable {
 public struct ResolverSystemResult: Decodable, Equatable, Sendable {
     public let activationID: UUID?
     public let activeGeneration: UInt64?
+    /// Highest generation the daemon has accepted since it started. A daemon
+    /// sends it only when it exceeds `activeGeneration`, and a daemon older
+    /// than ADR-0025 never sends it, so absence is decoded as nil.
+    public let highestAcceptedGeneration: UInt64?
+
+    public init(
+        activationID: UUID?,
+        activeGeneration: UInt64?,
+        highestAcceptedGeneration: UInt64? = nil
+    ) {
+        self.activationID = activationID
+        self.activeGeneration = activeGeneration
+        self.highestAcceptedGeneration = highestAcceptedGeneration
+    }
 
     enum CodingKeys: String, CodingKey {
         case activationID = "activation_id"
         case activeGeneration = "active_generation"
+        case highestAcceptedGeneration = "highest_accepted_generation"
     }
 }
 

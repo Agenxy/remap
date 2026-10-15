@@ -67,7 +67,7 @@ func supervisorKeepsMonitorFailureVisibleWhilePolling() async throws {
 }
 
 @Test
-func supervisorRestoresOrdinaryDNSAfterSustainedChannelFailure() async throws {
+func supervisorRestoresOrdinaryDNSPromptlyAfterAChannelFault() async throws {
     let record = try supervisorRecord()
     let monitor = TestResolverMonitor()
     let states = Mutex<[ResolverSupervisorState]>([])
@@ -87,7 +87,7 @@ func supervisorRestoresOrdinaryDNSAfterSustainedChannelFailure() async throws {
         monitor: monitor,
         interval: .seconds(60),
         retryInterval: .milliseconds(1),
-        maximumConsecutiveFailures: 3,
+        failureGrace: .seconds(3600),
         observe: { state in states.withLock { $0.append(state) } }
     )
 
@@ -107,7 +107,7 @@ func supervisorRestoresOrdinaryDNSAfterSustainedChannelFailure() async throws {
 }
 
 @Test
-func supervisorDefaultsToImmediatePublicDnsFallback() async throws {
+func supervisorDefaultGraceNeverDelaysAChannelFault() async throws {
     let record = try supervisorRecord()
     let monitor = TestResolverMonitor()
     let states = Mutex<[ResolverSupervisorState]>([])
@@ -181,7 +181,6 @@ func supervisorReenrolsOnlyAfterTheRecoveredDaemonAcceptsACompletePlan() async t
         monitor: monitor,
         interval: .seconds(60),
         retryInterval: .milliseconds(1),
-        maximumConsecutiveFailures: 3,
         observe: { state in states.withLock { $0.append(state) } }
     )
 
