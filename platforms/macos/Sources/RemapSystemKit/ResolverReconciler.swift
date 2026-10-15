@@ -8,6 +8,14 @@ public protocol ResolverSystemExchanging: Sendable {
 
 extension ResolverSystemChannel: ResolverSystemExchanging {}
 
+/// Follows a different single service that now carries DNS, publishing
+/// through `publish` before any service points at loopback, and returns the
+/// published plan; nil means the recorded service is the one to reconcile.
+typealias ResolverHandOff = @Sendable (
+    _ record: ActivationRecord,
+    _ publish: (DNSPlan) throws -> Void
+) throws -> DNSPlan?
+
 /// Serializes complete resolver generations into the per-user daemon.
 public actor ResolverReconciler {
     private let channel: any ResolverSystemExchanging
@@ -16,6 +24,8 @@ public actor ResolverReconciler {
     private let restoreSystemDNS: @Sendable () throws -> Void
     private let commitPreparedDNS: @Sendable (ActivationRecord) throws -> Void
     private let recordedOrphan: @Sendable () -> UUID?
+    /// ADR-0024 handoff, present only in the root supervisor.
+    private let handOff: ResolverHandOff?
     private var activationID: UUID?
     private var activeGeneration: UInt64?
     private var highestGeneration: UInt64 = 0
@@ -36,6 +46,14 @@ public actor ResolverReconciler {
         // memory of an earlier failed release, so the durable bypass record
         // carries that one identity across processes.
         recordedOrphan = { (try? bypassStore.read())?.payload.outstandingOrphan }
+        // Only the root supervisor changes SystemConfiguration after activation.
+        if reactivatePreparedDNS {
+            handOff = { (record: ActivationRecord, publish: (DNSPlan) throws -> Void) throws -> DNSPlan? in
+                try resolver.handOffIfNeeded(record: record, store: activationStore, publish: publish)
+            }
+        } else {
+            handOff = nil
+        }
         loadRecord = { try resolver.activeRecord(store: activationStore) }
         makePlan = { try resolver.reconciliationPlan(record: $0) }
         restoreSystemDNS = {
@@ -75,9 +93,11 @@ public actor ResolverReconciler {
         makePlan: @escaping @Sendable (ActivationRecord) throws -> DNSPlan,
         restoreSystemDNS: @escaping @Sendable () throws -> Void = {},
         commitPreparedDNS: @escaping @Sendable (ActivationRecord) throws -> Void = { _ in },
-        recordedOrphan: @escaping @Sendable () -> UUID? = { nil }
+        recordedOrphan: @escaping @Sendable () -> UUID? = { nil },
+        handOff: ResolverHandOff? = nil
     ) {
         self.channel = channel
+        self.handOff = handOff
         self.loadRecord = loadRecord
         self.makePlan = makePlan
         self.restoreSystemDNS = restoreSystemDNS
@@ -97,6 +117,17 @@ public actor ResolverReconciler {
         var orphan: (activationID: UUID, generation: UInt64)?
         if let bound = health.activationID, bound != identifier {
             orphan = try releasableOrphan(bound: bound, health: health)
+        }
+        if let handOff {
+            let handedOff = try handOff(record) { plan in
+                if let orphan {
+                    health = try release(orphan.activationID, generation: orphan.generation)
+                }
+                try publish(plan, identifier: identifier, after: health.activeGeneration)
+            }
+            if handedOff != nil {
+                return
+            }
         }
         let plan: DNSPlan
         do {
@@ -120,7 +151,14 @@ public actor ResolverReconciler {
             try commitPreparedDNS(record)
             return
         }
-        let generation = try nextGeneration(after: health.activeGeneration)
+        try publish(plan, identifier: identifier, after: health.activeGeneration)
+        try commitPreparedDNS(record)
+    }
+
+    /// Publishes one complete generation above every generation seen and
+    /// verifies the daemon bound it to this activation.
+    private func publish(_ plan: DNSPlan, identifier: UUID, after daemonGeneration: UInt64?) throws {
+        let generation = try nextGeneration(after: daemonGeneration)
         let result = try channel.exchange(
             .publish(
                 activationID: identifier,
@@ -136,7 +174,6 @@ public actor ResolverReconciler {
         highestGeneration = max(highestGeneration, generation)
         lastUpstreams = plan.upstreams
         orphanedActivationID = nil
-        try commitPreparedDNS(record)
     }
 
     /// Restores ordinary system DNS after a sustained reconciliation failure.
@@ -160,10 +197,25 @@ public actor ResolverReconciler {
             orphanedActivationID = nil
             return .released
         } catch {
-            let orphan = observed?.activationID ?? activationID ?? orphanedActivationID
+            let orphan = ownOrphan(observed: observed)
             orphanedActivationID = orphan
             return .pending(activationID: orphan)
         }
+    }
+
+    /// Only an activation this host bound can become its orphan. The daemon's
+    /// report corroborates one of those identities and never supplies its own:
+    /// a binding made by another controller is never adopted, so it can never
+    /// be released by a later reconciliation.
+    private func ownOrphan(observed: ResolverSystemResult?) -> UUID? {
+        let own = [activationID, orphanedActivationID, recordedOrphan()].compactMap(\.self)
+        guard let observed else {
+            return own.first
+        }
+        guard let bound = observed.activationID, own.contains(bound) else {
+            return nil
+        }
+        return bound
     }
 
     /// Accepts a foreign daemon binding only when it is the one this host's own

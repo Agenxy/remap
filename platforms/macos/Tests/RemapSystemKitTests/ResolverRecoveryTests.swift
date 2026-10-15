@@ -87,6 +87,49 @@ func anOrphanIsReleasedOnlyOnceACompleteReplacementPlanExists() async throws {
 }
 
 @Test
+func aBypassNeverAdoptsABindingThisReconcilerNeverMade() async throws {
+    let record = try healingRecord()
+    let foreign = UUID()
+    let daemon = ResolverTestDaemon(ResolverTestDaemon.State(
+        activationID: foreign,
+        activeGeneration: 4,
+        highestGeneration: 4,
+        refusesInvalidation: true
+    ))
+    let reconciler = ResolverReconciler(
+        channel: daemon,
+        loadRecord: { record },
+        makePlan: { _ in singleServicePlan() }
+    )
+    #expect(try await reconciler.enterSafeBypass() == .pending(activationID: nil))
+    daemon.update { $0.refusesInvalidation = false }
+
+    await #expect(throws: ResolverReconciliationError.activationMismatch) {
+        try await reconciler.reconcile()
+    }
+    #expect(daemon.snapshot().activationID == foreign)
+    #expect(daemon.snapshot().invalidations.isEmpty)
+}
+
+@Test
+func aBypassAdoptsAnObservedBindingOnlyWhenItIsAlreadyItsOwn() async throws {
+    let orphan = try healingRecord(createdAt: 1).activationIdentifier()
+    let daemon = ResolverTestDaemon(ResolverTestDaemon.State(
+        activationID: orphan,
+        activeGeneration: 4,
+        highestGeneration: 4,
+        refusesInvalidation: true
+    ))
+    let reconciler = ResolverReconciler(
+        channel: daemon,
+        loadRecord: { try healingRecord(createdAt: 2) },
+        makePlan: { _ in singleServicePlan() },
+        recordedOrphan: { orphan }
+    )
+    #expect(try await reconciler.enterSafeBypass() == .pending(activationID: orphan))
+}
+
+@Test
 func safeBypassReportsTheActivationItCouldNotRelease() async throws {
     let record = try healingRecord()
     let daemon = ResolverTestDaemon()

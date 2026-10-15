@@ -18,6 +18,7 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
         var refusesInvalidation = false
         var refusesPublication = false
         var publications: [UInt64] = []
+        var publishedUpstreams: [String] = []
         var invalidations: [UUID] = []
     }
 
@@ -43,8 +44,9 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
             switch command {
             case .health:
                 break
-            case let .publish(activationID, generation, _):
+            case let .publish(activationID, generation, upstreams):
                 try publish(&state, activationID: activationID, generation: generation)
+                state.publishedUpstreams = upstreams
             case let .invalidate(activationID, generation):
                 try invalidate(&state, activationID: activationID, generation: generation)
             }
