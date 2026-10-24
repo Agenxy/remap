@@ -16,6 +16,11 @@ const HOST_HEADER: &str = "host-header";
 const DNS_LISTEN: &str = "dns-listen";
 const DNS_UPSTREAM: &str = "dns-upstream";
 const HTTP_LISTEN: &str = "http-listen";
+#[path = "cli/ergonomics.rs"]
+mod ergonomics;
+#[cfg(test)]
+#[path = "cli/ergonomics_tests.rs"]
+mod ergonomics_tests;
 const DOCTOR_GUIDANCE: &str = concat!(
     "Checks:\n",
     "  authority identity and registry status\n",
@@ -80,11 +85,13 @@ pub(crate) enum Action {
     },
     Apply {
         file: PathBuf,
+        landing: Option<String>,
         expected_revision: u64,
         operation_id: String,
     },
     Set {
         pattern: String,
+        landing: Option<String>,
         target: String,
         host_header_policy: HostHeaderPolicy,
         enabled: Option<bool>,
@@ -105,6 +112,7 @@ pub(crate) enum Action {
     },
     Validate {
         pattern: String,
+        landing: Option<String>,
         target: String,
         host_header_policy: HostHeaderPolicy,
     },
@@ -348,7 +356,8 @@ pub(crate) fn command() -> Command {
                         .value_name("TARGET")
                         .help("IP address, DNS alias, http(s) upstream URL, or supgang://<peer>/<service>"),
                 )
-                .arg(host_policy_argument()),
+                .arg(host_policy_argument())
+                .arg(landing_argument()),
         )
         .after_help(TOP_LEVEL_EXAMPLES)
 }
@@ -563,11 +572,27 @@ fn set_command() -> Command {
         .arg(pattern_argument())
         .arg(
             Arg::new(TARGET)
-                .required(true)
+                .required_unless_present("moved-to")
+                .conflicts_with("moved-to")
                 .value_name("TARGET")
                 .help("IP address, DNS alias, http(s) upstream URL, or supgang://<peer>/<service>"),
         )
         .arg(host_policy_argument())
+        .arg(landing_argument())
+        .arg(
+            Arg::new("moved-to")
+                .long("moved-to")
+                .value_name("NAME")
+                .conflicts_with("landing")
+                .help("Permanently redirect this name to another Remap name"),
+        )
+        .arg(
+            Arg::new("until")
+                .long("until")
+                .value_name("RFC3339")
+                .requires("moved-to")
+                .help("Stop matching this moved name after this absolute timestamp"),
+        )
         .arg(
             Arg::new("disabled")
                 .long("disabled")
@@ -595,6 +620,7 @@ fn change_document_command(name: &'static str, about: &'static str, mutating: bo
     );
     if mutating {
         command
+            .arg(landing_argument())
             .arg(
                 Arg::new("expect")
                     .long("expect")
@@ -639,6 +665,11 @@ fn mutation_guards() -> [Arg; 2] {
     ]
 }
 
+fn landing_argument() -> Arg {
+    Arg::new("landing").long("landing").value_name("PATH")
+        .help("Redirect root GET/HEAD requests to this same-origin page; requires an origin-root HTTP target (apply: sets this on every set change)")
+}
+
 fn parse_list(matches: &clap::ArgMatches) -> Result<Action, Diagnostic> {
     let limit = matches
         .get_one::<u16>("limit")
@@ -653,8 +684,9 @@ fn parse_list(matches: &clap::ArgMatches) -> Result<Action, Diagnostic> {
 
 fn parse_set(matches: &clap::ArgMatches) -> Result<Action, Diagnostic> {
     Ok(Action::Set {
+        landing: matches.get_one::<String>("landing").cloned(),
         pattern: required_string(matches, PATTERN)?,
-        target: required_string(matches, TARGET)?,
+        target: ergonomics::set_target(matches)?,
         host_header_policy: parse_host_policy(matches)?,
         enabled: matches.get_flag("disabled").then_some(false),
         expected_revision: matches.get_one::<u64>("expect").copied(),
@@ -678,6 +710,7 @@ fn parse_preview(matches: &clap::ArgMatches) -> Result<Action, Diagnostic> {
 
 fn parse_apply(matches: &clap::ArgMatches) -> Result<Action, Diagnostic> {
     Ok(Action::Apply {
+        landing: matches.get_one::<String>("landing").cloned(),
         file: required_path(matches, "file")?,
         expected_revision: matches.get_one::<u64>("expect").copied().ok_or_else(|| {
             Diagnostic::internal("the parser did not provide apply's required revision")
@@ -699,6 +732,7 @@ fn parse_validate(matches: &clap::ArgMatches) -> Result<Action, Diagnostic> {
     let target = required_string(matches, TARGET)?;
     let host_header_policy = parse_host_policy(matches)?;
     Ok(Action::Validate {
+        landing: matches.get_one::<String>("landing").cloned(),
         pattern,
         target,
         host_header_policy,
@@ -749,6 +783,44 @@ mod tests {
     #[test]
     fn command_definition_is_consistent() {
         command().debug_assert();
+    }
+
+    #[test]
+    fn landing_cli_accepts_set_validate_and_apply() {
+        for arguments in [
+            vec![
+                "remap",
+                "set",
+                "landing.test",
+                "http://127.0.0.1/",
+                "--landing",
+                "/page",
+            ],
+            vec![
+                "remap",
+                "validate",
+                "landing.test",
+                "http://127.0.0.1/",
+                "--landing",
+                "/page",
+            ],
+            vec![
+                "remap",
+                "apply",
+                "changes.json",
+                "--expect",
+                "0",
+                "--operation-id",
+                "c4d1f8c7-bd38-4a5a-a8ee-bb1f36cd2851",
+                "--landing",
+                "/page",
+            ],
+        ] {
+            assert!(matches!(
+                parse(arguments.iter().map(OsString::from).collect()),
+                ParseOutcome::Run(_)
+            ));
+        }
     }
 
     #[test]

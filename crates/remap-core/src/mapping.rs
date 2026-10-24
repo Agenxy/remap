@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{MappingTarget, NamePattern, RemapName};
+use crate::{LandingPath, LandingPathError, MappingTarget, NamePattern, RemapName};
 
 /// One user-directed name mapping in an immutable registry revision.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -10,6 +11,7 @@ pub struct Mapping {
     pattern: NamePattern,
     target: MappingTarget,
     enabled: bool,
+    landing: Option<LandingPath>,
 }
 
 impl Mapping {
@@ -20,6 +22,7 @@ impl Mapping {
             pattern,
             target,
             enabled: true,
+            landing: None,
         }
     }
 
@@ -33,6 +36,25 @@ impl Mapping {
     #[must_use]
     pub const fn target(&self) -> &MappingTarget {
         &self.target
+    }
+
+    /// Returns the optional same-origin landing destination.
+    #[must_use]
+    pub const fn landing(&self) -> Option<&LandingPath> {
+        self.landing.as_ref()
+    }
+
+    /// Attaches an explicitly validated landing path to this mapping.
+    ///
+    /// # Errors
+    ///
+    /// Refuses landing paths on DNS or non-root HTTP targets.
+    pub fn with_landing(mut self, landing: Option<LandingPath>) -> Result<Self, LandingPathError> {
+        if let Some(path) = &landing {
+            path.validate_target(&self.target)?;
+        }
+        self.landing = landing;
+        Ok(self)
     }
 
     /// Returns whether the mapping participates in resolution.
@@ -52,6 +74,10 @@ impl Mapping {
 /// A validation failure while constructing an immutable registry snapshot.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum SnapshotError {
+    /// A moved mapping would resolve its destination to itself.
+    MovedSelf(NamePattern),
+    /// A moved mapping would resolve its destination to another moved mapping.
+    MovedChain(NamePattern),
     /// Two records claim the same exact pattern in one revision.
     DuplicatePattern(NamePattern),
 }
@@ -59,6 +85,14 @@ pub enum SnapshotError {
 impl Display for SnapshotError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MovedSelf(pattern) => write!(
+                formatter,
+                "moved mapping '{pattern}' cannot point at itself"
+            ),
+            Self::MovedChain(pattern) => write!(
+                formatter,
+                "moved mapping '{pattern}' cannot point at another moved mapping"
+            ),
             Self::DuplicatePattern(pattern) => {
                 write!(
                     formatter,
@@ -108,6 +142,7 @@ impl RegistrySnapshot {
                 .cmp(&right.pattern().resolution_rank())
                 .then_with(|| left.pattern().cmp(right.pattern()))
         });
+        validate_moves(&mappings)?;
         Ok(Self { revision, mappings })
     }
 
@@ -124,10 +159,86 @@ impl RegistrySnapshot {
     }
 
     /// Resolves with exact-first, most-specific-wildcard precedence.
+    /// Observes the native clock so expiring moved mappings participate correctly.
     #[must_use]
     pub fn resolve(&self, name: &RemapName) -> Option<&Mapping> {
-        self.mappings
-            .iter()
-            .find(|mapping| mapping.is_enabled() && mapping.pattern().matches(name))
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| i128::try_from(duration.as_nanos()).ok());
+        self.resolve_at(name, now)
     }
+
+    /// Resolves with observed Unix nanoseconds for expiring moved mappings.
+    /// An unavailable clock excludes expiring redirects rather than extending them.
+    #[must_use]
+    pub fn resolve_at(&self, name: &RemapName, unix_ns: Option<i128>) -> Option<&Mapping> {
+        self.mappings.iter().find(|mapping| {
+            mapping.is_enabled()
+                && mapping.pattern().matches(name)
+                && match mapping.target() {
+                    MappingTarget::Moved(target) => target.active_at(unix_ns),
+                    _ => true,
+                }
+        })
+    }
+}
+
+fn validate_moves(mappings: &[Mapping]) -> Result<(), SnapshotError> {
+    let mut exact = BTreeMap::new();
+    let mut wildcards = BTreeMap::new();
+    for mapping in mappings {
+        match mapping.pattern() {
+            NamePattern::Exact(name) => {
+                exact.insert(name.as_str(), mapping);
+            }
+            NamePattern::Wildcard(name) => {
+                wildcards.insert(name.as_str(), mapping);
+            }
+        }
+    }
+    for mapping in mappings {
+        if let MappingTarget::Moved(target) = mapping.target() {
+            for destination in [
+                moved_destination(target.name(), &exact, &wildcards, false),
+                moved_destination(target.name(), &exact, &wildcards, true),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if std::ptr::eq(mapping, destination) {
+                    return Err(SnapshotError::MovedSelf(mapping.pattern().clone()));
+                }
+                if matches!(destination.target(), MappingTarget::Moved(_)) {
+                    return Err(SnapshotError::MovedChain(mapping.pattern().clone()));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn moved_destination<'a>(
+    name: &RemapName,
+    exact: &BTreeMap<&str, &'a Mapping>,
+    wildcards: &BTreeMap<&str, &'a Mapping>,
+    enabled_only: bool,
+) -> Option<&'a Mapping> {
+    if let Some(mapping) = exact
+        .get(name.as_str())
+        .filter(|mapping| !enabled_only || mapping.is_enabled())
+    {
+        return Some(*mapping);
+    }
+    let mut suffix = name.as_str();
+    while let Some((_, rest)) = suffix.split_once('.') {
+        if let Some(mapping) = wildcards
+            .get(rest)
+            .filter(|mapping| !enabled_only || mapping.is_enabled())
+        {
+            return Some(*mapping);
+        }
+        suffix = rest;
+    }
+    None
 }

@@ -7,15 +7,15 @@ use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE, HOST, HeaderName};
+use hyper::header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE, HOST, HeaderName, LOCATION};
 use hyper::http::uri::{Authority, PathAndQuery};
 use hyper::upgrade::OnUpgrade;
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use remap_core::{
-    HostHeaderPolicy, HttpScheme, HttpUpstream, MappingTarget, PeerService, PeerTransport,
-    RemapName,
+    HostHeaderPolicy, HttpScheme, HttpUpstream, LandingPath, MappingTarget, MovedTarget,
+    PeerService, PeerTransport, RemapName,
 };
 use rustls::pki_types::ServerName;
 use tokio::sync::OwnedSemaphorePermit;
@@ -31,6 +31,17 @@ const HEALTH_PATH_PREFIX: &str = "/.well-known/remap/health/";
 
 pub(crate) type ProxyClient = Client<HttpsConnector<SelfRejectingConnector>, Incoming>;
 type ProxyBody = BoxBody<Bytes, hyper::Error>;
+
+enum SelectedRoute {
+    Forward(Box<ForwardRoute>),
+    Moved(MovedTarget),
+}
+
+struct ForwardRoute {
+    upstream: HttpUpstream,
+    client: Dialer,
+    landing: Option<LandingPath>,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct RouteError {
@@ -85,10 +96,24 @@ pub(crate) async fn route(
     if let Some(response) = health_response(&request, identity.as_ref()) {
         return Ok(response);
     }
-    let (upstream, client) = match select_upstream(&request, &snapshots, &routing, client).await {
-        Ok(selected) => selected,
+    let (upstream, client, landing) =
+        match select_upstream(&request, &snapshots, &routing, client).await {
+            Ok(SelectedRoute::Forward(route)) => {
+                let ForwardRoute {
+                    upstream,
+                    client,
+                    landing,
+                } = *route;
+                (upstream, client, landing)
+            }
+            Ok(SelectedRoute::Moved(target)) => return Ok(moved_response(&request, &target)),
+            Err(error) => return Ok(error.response()),
+        };
+    match landing_response(&request, landing.as_ref()) {
+        Ok(Some(response)) => return Ok(response),
+        Ok(None) => {}
         Err(error) => return Ok(error.response()),
-    };
+    }
     let upgrade = match admit_upgrade(&mut request, &tunnels) {
         Ok(upgrade) => upgrade,
         Err(error) => return Ok(error.response()),
@@ -148,7 +173,7 @@ async fn select_upstream(
     snapshots: &SnapshotStore,
     routing: &PeerRouting,
     client: ProxyClient,
-) -> Result<(HttpUpstream, Dialer), RouteError> {
+) -> Result<SelectedRoute, RouteError> {
     let name = client_name(request.headers())?;
     let snapshot = snapshots.load();
     let mapping = snapshot.resolve(&name).ok_or_else(|| {
@@ -158,18 +183,82 @@ async fn select_upstream(
             "This name is not mapped to a routed HTTP service.",
         )
     })?;
-    match mapping.target() {
+    if let MappingTarget::Moved(target) = mapping.target() {
+        return Ok(SelectedRoute::Moved(target.clone()));
+    }
+    let selected = match mapping.target() {
         MappingTarget::Http(upstream) => Ok((upstream.clone(), Dialer::Pooled(client))),
         MappingTarget::Peer(service) => match service.transport() {
             PeerTransport::PinnedTls => peer_upstream(service, routing).await,
             PeerTransport::PlaintextInTunnel => plaintext_peer_upstream(service, routing).await,
         },
-        MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => Err(RouteError::new(
-            StatusCode::MISDIRECTED_REQUEST,
-            "E_GATEWAY_DIRECT_TARGET",
-            "This name is a direct DNS mapping, not a routed HTTP service.",
-        )),
+        MappingTarget::Moved(_) | MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => {
+            Err(RouteError::new(
+                StatusCode::MISDIRECTED_REQUEST,
+                "E_GATEWAY_DIRECT_TARGET",
+                "This name is a direct DNS mapping, not a routed HTTP service.",
+            ))
+        }
+    }?;
+    Ok(SelectedRoute::Forward(Box::new(ForwardRoute {
+        upstream: selected.0,
+        client: selected.1,
+        landing: mapping.landing().cloned(),
+    })))
+}
+
+fn moved_response(request: &Request<Incoming>, target: &MovedTarget) -> Response<ProxyBody> {
+    let scheme = request
+        .uri()
+        .scheme_str()
+        .filter(|scheme| matches!(*scheme, "http" | "https"))
+        .unwrap_or("http");
+    let path = request
+        .uri()
+        .path_and_query()
+        .filter(|path| path.as_str() != "*")
+        .map_or("/", PathAndQuery::as_str);
+    Response::builder()
+        .status(StatusCode::MOVED_PERMANENTLY)
+        .header(LOCATION, format!("{scheme}://{}{path}", target.name()))
+        .header(CACHE_CONTROL, "no-store")
+        .body(full_body(String::new()))
+        .unwrap_or_else(|_| {
+            RouteError::new(
+                StatusCode::BAD_REQUEST,
+                "E_GATEWAY_MOVED",
+                "The moved-name redirect could not be encoded.",
+            )
+            .response()
+        })
+}
+
+fn landing_response(
+    request: &Request<Incoming>,
+    landing: Option<&LandingPath>,
+) -> Result<Option<Response<ProxyBody>>, RouteError> {
+    let Some(landing) = landing else {
+        return Ok(None);
+    };
+    if request.uri().path() != "/"
+        || !matches!(*request.method(), Method::GET | Method::HEAD)
+        || tunnel::requests_websocket(request.headers())
+    {
+        return Ok(None);
     }
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header(LOCATION, landing.location(request.uri().query()))
+        .header(CACHE_CONTROL, "no-store")
+        .body(full_body(String::new()))
+        .map(Some)
+        .map_err(|_| {
+            RouteError::new(
+                StatusCode::BAD_REQUEST,
+                "E_GATEWAY_LANDING",
+                "The landing redirect could not be encoded.",
+            )
+        })
 }
 
 /// Turns a peer mapping into the upstream to dial now and the client that

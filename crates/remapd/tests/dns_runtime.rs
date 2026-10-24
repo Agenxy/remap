@@ -51,6 +51,7 @@ async fn daemon_publishes_atomic_dns_updates_and_forwards_unmapped_names()
                 target: "10.0.0.8".to_owned(),
                 host_policy: HostPolicy::PreserveClient,
                 enabled: None,
+                landing: None,
             }],
         })
         .await?;
@@ -65,6 +66,7 @@ async fn daemon_publishes_atomic_dns_updates_and_forwards_unmapped_names()
                 target: "10.0.0.9".to_owned(),
                 host_policy: HostPolicy::PreserveClient,
                 enabled: None,
+                landing: None,
             }],
         })
         .await?;
@@ -135,6 +137,7 @@ async fn an_idle_tcp_client_cannot_starve_udp_dns_capacity()
                 target: "10.0.0.8".to_owned(),
                 host_policy: HostPolicy::PreserveClient,
                 enabled: None,
+                landing: None,
             }],
         })
         .await?;
@@ -194,6 +197,7 @@ async fn daemon_routes_a_mapped_http_name_to_its_upstream() -> Result<(), Box<dy
                 target: format!("http://{upstream_address}"),
                 host_policy: HostPolicy::UseUpstream,
                 enabled: None,
+                landing: None,
             }],
         })
         .await?;

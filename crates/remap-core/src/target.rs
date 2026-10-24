@@ -4,7 +4,7 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU16;
 use std::str::FromStr;
 
-use crate::{RemapName, RemapNameError};
+use crate::{MovedTarget, MovedTargetError, RemapName, RemapNameError};
 
 /// Supported upstream HTTP schemes.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
@@ -316,6 +316,8 @@ impl FromStr for HttpUpstream {
 /// A validation failure for an inferred mapping destination.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum MappingTargetError {
+    /// A moved destination or expiry is invalid.
+    InvalidMoved(MovedTargetError),
     /// A DNS alias is not a valid Remap hostname.
     InvalidName(RemapNameError),
     /// An HTTP upstream is invalid.
@@ -327,6 +329,7 @@ pub enum MappingTargetError {
 impl Display for MappingTargetError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidMoved(error) => Display::fmt(error, formatter),
             Self::InvalidName(error) => Display::fmt(error, formatter),
             Self::InvalidHttpUpstream(error) => Display::fmt(error, formatter),
             Self::InvalidPeerService(error) => Display::fmt(error, formatter),
@@ -337,6 +340,7 @@ impl Display for MappingTargetError {
 impl Error for MappingTargetError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::InvalidMoved(error) => Some(error),
             Self::InvalidName(error) => Some(error),
             Self::InvalidHttpUpstream(error) => Some(error),
             Self::InvalidPeerService(error) => Some(error),
@@ -519,6 +523,8 @@ impl Error for PeerServiceError {}
 /// a Supgang peer.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum MappingTarget {
+    /// A permanent redirect to another explicitly chosen Remap name.
+    Moved(MovedTarget),
     /// Return an IPv4 or IPv6 DNS answer directly.
     DnsAddress(IpAddr),
     /// Resolve or return a DNS alias under the finalized DNS policy.
@@ -533,6 +539,8 @@ pub enum MappingTarget {
 /// The stable category of a mapping destination.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub enum MappingTargetKind {
+    /// A permanent redirect to another explicitly chosen Remap name.
+    Moved,
     /// A direct IPv4 or IPv6 DNS answer.
     DnsAddress,
     /// A DNS alias destination.
@@ -548,6 +556,7 @@ impl MappingTargetKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Moved => "moved",
             Self::DnsAddress => "dns-address",
             Self::DnsAlias => "dns-alias",
             Self::Http => "http",
@@ -573,6 +582,11 @@ impl MappingTarget {
         input: &str,
         host_header_policy: HostHeaderPolicy,
     ) -> Result<Self, MappingTargetError> {
+        if input.starts_with("moved://") {
+            return MovedTarget::parse(input)
+                .map(Self::Moved)
+                .map_err(MappingTargetError::InvalidMoved);
+        }
         if input.starts_with("supgang://") || input.starts_with("supgang+http://") {
             return PeerService::parse_with_policy(input, host_header_policy)
                 .map(Self::Peer)
@@ -595,6 +609,7 @@ impl MappingTarget {
     #[must_use]
     pub const fn kind(&self) -> MappingTargetKind {
         match self {
+            Self::Moved(_) => MappingTargetKind::Moved,
             Self::DnsAddress(_) => MappingTargetKind::DnsAddress,
             Self::DnsAlias(_) => MappingTargetKind::DnsAlias,
             Self::Http(_) => MappingTargetKind::Http,
@@ -606,6 +621,7 @@ impl MappingTarget {
 impl Display for MappingTarget {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Moved(target) => Display::fmt(target, formatter),
             Self::DnsAddress(address) => Display::fmt(address, formatter),
             Self::DnsAlias(name) => Display::fmt(name, formatter),
             Self::Http(upstream) => Display::fmt(upstream, formatter),

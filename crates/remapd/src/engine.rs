@@ -335,7 +335,16 @@ fn mapping_from_view(view: &MappingView) -> Result<Mapping, Diagnostic> {
     };
     let target = MappingTarget::parse_with_http_policy(&view.target, policy)
         .map_err(|error| snapshot_error(&error.to_string()))?;
-    Ok(Mapping::new(pattern, target).with_enabled(view.enabled))
+    Mapping::new(pattern, target)
+        .with_enabled(view.enabled)
+        .with_landing(
+            view.landing
+                .as_deref()
+                .map(remap_core::LandingPath::parse)
+                .transpose()
+                .map_err(|error| snapshot_error(&error.to_string()))?,
+        )
+        .map_err(|error| snapshot_error(&error.to_string()))
 }
 
 fn snapshot_error(detail: &str) -> Diagnostic {
@@ -457,6 +466,7 @@ mod tests {
                     target: format!("10.0.0.{}", index % 254 + 1),
                     host_policy: HostPolicy::PreserveClient,
                     enabled: Some(*index != 128),
+                    landing: None,
                 })
                 .collect();
             let response = engine
@@ -511,6 +521,7 @@ mod tests {
                             target: "10.0.0.8".to_owned(),
                             host_policy: HostPolicy::PreserveClient,
                             enabled: None,
+                            landing: None,
                         }],
                     },
                 },

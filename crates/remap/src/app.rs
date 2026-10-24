@@ -40,6 +40,8 @@ pub(crate) struct DoctorReport {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct ValidationReport {
+    pub(crate) warnings: Vec<String>,
+    pub(crate) landing: Option<String>,
     pub(crate) pattern: String,
     pub(crate) target: String,
     pub(crate) target_kind: &'static str,
@@ -53,9 +55,11 @@ pub(crate) fn execute(action: Action) -> Result<Report, Diagnostic> {
         Action::Manpages { directory } => generate_manpages(&directory).map(Report::Document),
         Action::Validate {
             pattern,
+            landing,
             target,
             host_header_policy,
-        } => validate(&pattern, &target, host_header_policy).map(Report::Validation),
+        } => validate(&pattern, &target, host_header_policy, landing.as_deref())
+            .map(Report::Validation),
         Action::Doctor
         | Action::Mcp { .. }
         | Action::Daemon { .. }
@@ -186,17 +190,33 @@ fn validate(
     pattern: &str,
     target: &str,
     host_header_policy: HostHeaderPolicy,
+    landing: Option<&str>,
 ) -> Result<ValidationReport, Diagnostic> {
     let pattern = NamePattern::parse(pattern)
         .map_err(|error| Diagnostic::invalid_pattern(error.to_string()))?;
     let target = MappingTarget::parse_with_http_policy(target, host_header_policy)
         .map_err(|error| Diagnostic::invalid_target(error.to_string()))?;
+    if let MappingTarget::Moved(moved) = &target {
+        moved
+            .validate_source(&pattern)
+            .map_err(|error| Diagnostic::invalid_target(error.to_string()))?;
+    }
+    let landing = landing
+        .map(|value| {
+            let path = remap_core::LandingPath::parse(value)?;
+            path.validate_target(&target)?;
+            Ok::<_, remap_core::LandingPathError>(path.as_str().to_owned())
+        })
+        .transpose()
+        .map_err(|error| Diagnostic::invalid_target(error.to_string()))?;
     let policy = match &target {
         MappingTarget::Http(upstream) => Some(upstream.host_header_policy().as_str()),
         MappingTarget::Peer(service) => Some(service.host_header_policy().as_str()),
-        MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => None,
+        MappingTarget::Moved(_) | MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => None,
     };
     Ok(ValidationReport {
+        warnings: remap_core::target_advisories(&target),
+        landing,
         pattern: pattern.to_string(),
         target: target.to_string(),
         target_kind: target.kind().as_str(),

@@ -1,10 +1,16 @@
 //! Portable, side-effect-free Remap domain and policy primitives.
 
+mod advisory;
+mod landing;
 mod mapping;
+mod moved;
 mod name;
 mod target;
 
+pub use advisory::target_advisories;
+pub use landing::{LandingPath, LandingPathError, MAX_LANDING_BYTES};
 pub use mapping::{Mapping, RegistrySnapshot, SnapshotError};
+pub use moved::{MovedTarget, MovedTargetError};
 pub use name::{NamePattern, RemapName, RemapNameError};
 pub use target::{
     HostHeaderPolicy, HttpScheme, HttpUpstream, HttpUpstreamError, MAX_PEER_SELECTOR_BYTES,

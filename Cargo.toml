@@ -28,6 +28,7 @@ blake3 = "=1.8.7"
 clap = "=4.6.7"
 clap_complete = "=4.6.11"
 clap_mangen = "=0.3.3"
+chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 futures = "=0.3.34"
 getrandom = "=0.4.3"
 hmac = { version = "=0.13.0", features = ["zeroize"] }

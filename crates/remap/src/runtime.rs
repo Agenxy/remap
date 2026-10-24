@@ -121,14 +121,16 @@ pub(crate) async fn execute(
         }
         Action::Apply {
             file,
+            landing,
             expected_revision,
             operation_id,
         } => {
-            let changes = read_change_document(&file)?;
+            let changes = read_apply_changes(&file, landing)?;
             mutation_authority(data_dir, "apply", expected_revision, operation_id, changes).await
         }
         Action::Set {
             pattern,
+            landing,
             target,
             host_header_policy,
             enabled,
@@ -136,6 +138,7 @@ pub(crate) async fn execute(
             operation_id,
         } => {
             let change = Change::Set {
+                landing,
                 pattern,
                 target,
                 host_policy: wire_policy(host_header_policy),
@@ -463,6 +466,18 @@ fn control_paths(data_dir: Option<&Path>) -> Result<ControlPaths, Diagnostic> {
     )
 }
 
+fn read_apply_changes(path: &Path, landing: Option<String>) -> Result<Vec<Change>, Diagnostic> {
+    let mut changes = read_change_document(path)?;
+    if let Some(landing) = landing {
+        for change in &mut changes {
+            if let Change::Set { landing: path, .. } = change {
+                *path = Some(landing.clone());
+            }
+        }
+    }
+    Ok(changes)
+}
+
 fn read_change_document(path: &Path) -> Result<Vec<Change>, Diagnostic> {
     let bytes = if path == Path::new("-") {
         read_bounded(std::io::stdin().lock())?
@@ -507,9 +522,28 @@ mod tests {
     use remap_protocol::{CommandResult, ControlPaths};
     use remapd::DaemonConfig;
 
-    use super::execute;
+    use super::{execute, read_apply_changes};
     use crate::app::Report;
     use crate::cli::Action;
+
+    #[test]
+    fn apply_landing_override_changes_sets_and_preserves_other_changes()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("changes.json");
+        let original = serde_json::json!([
+            {"kind":"set", "pattern":"site.test", "target":"http://127.0.0.1/",
+             "host_policy":"use-upstream", "landing":"/old"},
+            {"kind":"disable", "pattern":"other.test"}
+        ]);
+        std::fs::write(&path, serde_json::to_vec(&original)?)?;
+        let unchanged = serde_json::to_value(read_apply_changes(&path, None)?)?;
+        assert_eq!(unchanged[0]["landing"], "/old");
+        let overridden = serde_json::to_value(read_apply_changes(&path, Some("/new".to_owned()))?)?;
+        assert_eq!(overridden[0]["landing"], "/new");
+        assert_eq!(overridden[1], original[1]);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn human_commands_share_the_authoritative_revision() -> Result<(), Box<dyn Error>> {
@@ -530,6 +564,7 @@ mod tests {
             target: "127.0.0.1".to_owned(),
             host_header_policy: HostHeaderPolicy::PreserveClient,
             enabled: None,
+            landing: None,
             expected_revision: None,
             operation_id: None,
         };
@@ -608,6 +643,7 @@ mod tests {
         let applied = execute(
             Action::Apply {
                 file: changes,
+                landing: None,
                 expected_revision: 0,
                 operation_id: "4df4bb55-93bb-4f99-9707-9761f6a69364".to_owned(),
             },

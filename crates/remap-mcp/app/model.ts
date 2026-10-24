@@ -7,6 +7,7 @@ export interface MappingView extends JsonRecord {
   host_policy: string;
   enabled: boolean;
   updated_revision?: number;
+  landing?: string | null;
 }
 
 export interface DashboardState {
@@ -45,7 +46,8 @@ export const isMapping = (value: unknown): value is MappingView => {
     typeof item.target === "string" &&
     typeof item.target_kind === "string" &&
     typeof item.host_policy === "string" &&
-    typeof item.enabled === "boolean"
+    typeof item.enabled === "boolean" &&
+    (item.landing === undefined || item.landing === null || typeof item.landing === "string")
   );
 };
 
@@ -68,7 +70,8 @@ export const mappingSummary = (value: unknown): string => {
   const mapping = isMapping(value) ? value : null;
   if (mapping === null) return "∅";
   const state = mapping.enabled ? "active" : "disabled";
-  return `${mapping.pattern} → ${mapping.target} · ${mapping.target_kind} · ${mapping.host_policy} · ${state}`;
+  const landing = asString(mapping.landing) ?? "none";
+  return `${mapping.pattern} → ${mapping.target} · ${mapping.target_kind} · ${mapping.host_policy} · ${state} · landing ${landing}`;
 };
 
 export const isErrorResult = (result: unknown, data: JsonRecord | null): boolean => {

@@ -77,6 +77,8 @@ button { font: inherit; }
 .effect { padding: 9px 0; border-top: 1px solid var(--line); font: 13px/1.45 var(--font-mono, ui-monospace, monospace); }
 .effect:first-of-type { margin-top: 12px; }
 .effect-change { display: block; color: var(--muted); overflow-wrap: anywhere; }
+.advisory { padding: 9px 0; color: var(--muted); overflow-wrap: anywhere; }
+.mapping-landing { overflow-wrap: anywhere; }
 .panel-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .panel-head h2 { font-size: 15px; margin: 0; }
 .count { color: var(--muted); font-size: 13px; }

@@ -13,6 +13,7 @@ fn set(pattern: &str, target: &str) -> Change {
         target: target.to_owned(),
         host_policy: HostPolicy::PreserveClient,
         enabled: None,
+        landing: None,
     }
 }
 

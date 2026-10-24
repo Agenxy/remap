@@ -4,7 +4,7 @@ use rusqlite::Connection;
 
 use remap_protocol::Diagnostic;
 
-pub(crate) const SCHEMA_VERSION: u32 = 1;
+pub(crate) const SCHEMA_VERSION: u32 = 2;
 pub(crate) const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn configure(connection: &Connection) -> Result<(), Diagnostic> {
@@ -114,6 +114,16 @@ fn migrate_without_wait(connection: &mut Connection) -> Result<(), Diagnostic> {
                  ) STRICT;
                  PRAGMA user_version = 1;
                  COMMIT;",
+            )
+            .map_err(database_error)?;
+    }
+    if found <= 1 {
+        connection
+            .execute_batch(
+                "BEGIN IMMEDIATE;
+             ALTER TABLE mappings ADD COLUMN landing TEXT;
+             PRAGMA user_version = 2;
+             COMMIT;",
             )
             .map_err(database_error)?;
     }
