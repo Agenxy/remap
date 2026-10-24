@@ -15,6 +15,7 @@ use crate::app::{self, Report};
 use crate::cli::{Action, MutationAction, SystemLifecycleCommand};
 use crate::diagnostic::Diagnostic;
 use crate::runtime_health::{RuntimeHealth, installation_ready, valid_challenge, verify};
+use remap_mcp::system_lookup::SystemLookup;
 
 const MAX_CHANGE_DOCUMENT_BYTES: u64 = 512 * 1024;
 
@@ -171,6 +172,7 @@ async fn doctor(data_dir: Option<&Path>) -> Result<Report, Diagnostic> {
     let (authority, revision, mapping_count, authority_ready, health) =
         inspect_runtime(data_dir).await;
     let native_install = installation_ready(authority_ready, &health);
+    let system_lookup = system_lookup(data_dir).await;
     Ok(Report::Doctor(app::DoctorReport {
         version: env!("CARGO_PKG_VERSION"),
         operating_system: std::env::consts::OS,
@@ -180,7 +182,30 @@ async fn doctor(data_dir: Option<&Path>) -> Result<Report, Diagnostic> {
         mapping_count,
         health,
         native_install,
+        system_lookup,
     }))
+}
+
+/// Resolves one mapped name the way a browser does and compares the answer
+/// with the registry, so a system that stopped asking Remap is visible.
+async fn system_lookup(data_dir: Option<&Path>) -> SystemLookup {
+    let Ok(client) = client(data_dir) else {
+        return SystemLookup::NotChecked;
+    };
+    let listed = client
+        .execute(Command::List {
+            after: None,
+            limit: 64,
+            include_disabled: false,
+        })
+        .await;
+    let Ok(CommandResult::List(list)) = listed else {
+        return SystemLookup::NotChecked;
+    };
+    let Some((name, expected)) = remap_mcp::system_lookup::candidate(&list.mappings) else {
+        return SystemLookup::NotChecked;
+    };
+    remap_mcp::system_lookup::probe(name, &expected).await
 }
 
 async fn inspect_runtime(

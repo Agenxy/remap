@@ -1,3 +1,4 @@
+use crate::health::{self, HealthReport};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -140,6 +141,21 @@ impl RemapMcp {
             CommandResult::Status(status) => Ok(success(status_summary(&status), status)),
             _ => Err(unexpected_result("registry status")),
         }
+    }
+
+    /// Check whether the operating system's resolver returns Remap's answer for a mapped name.
+    #[tool(
+        name = "remap_health",
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<HealthReport>>(),
+        annotations(title = "Remap resolver health", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
+        meta = ui::model_tool_meta()
+    )]
+    async fn health(
+        &self,
+        Parameters(_params): Parameters<EmptyParams>,
+    ) -> Result<ToolSuccess<HealthReport>, CallToolResult> {
+        let report = health::report(&self.client).await;
+        Ok(success(report.summary(), report))
     }
 
     /// List a bounded deterministic page of mappings from the authoritative registry.

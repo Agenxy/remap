@@ -84,6 +84,7 @@ A conflict is a request to reconsider, not an invitation to blind retry.
 | `remap_list` | Read a bounded deterministic page |
 | `remap_get` | Read one exact mapping key |
 | `remap_resolve` | Explain exact and wildcard selection without network I/O |
+| `remap_health` | Resolve one mapped name through the system resolver and report whether the answer is Remap's (`ready`, `bypassed`, `unresolved`, `not_checked`) |
 | `remap_validate` | Canonicalize one proposed mapping without state changes |
 | `remap_preview` | Project an ordered atomic batch |
 | `remap_set` | Create or retarget one mapping |

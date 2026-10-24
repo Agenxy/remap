@@ -28,6 +28,9 @@ ID only when retrying the exact same request. A stale revision fails instead of
 overwriting somebody else's work.
 
 Prefer `remap_set` for one create or retarget operation and `remap_apply` for a batch.
+`remap_health` asks the operating system's resolver for one mapped name: `bypassed` or
+`unresolved` means the system is not using Remap right now, even if Remap is healthy.
+
 The batch is atomic. `remap_resolve` explains exact and wildcard precedence without
 performing network I/O. Read `remap://privacy` for the data boundary.
 ";

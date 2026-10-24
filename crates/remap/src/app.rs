@@ -4,6 +4,7 @@ use remap_protocol::CommandResult;
 use crate::cli::Action;
 use crate::diagnostic::Diagnostic;
 use crate::runtime_health::RuntimeHealth;
+use remap_mcp::system_lookup::SystemLookup;
 
 const MANPAGE_DATE: &str = "2026-08-16";
 
@@ -34,6 +35,7 @@ pub(crate) struct DoctorReport {
     pub(crate) mapping_count: Option<u64>,
     pub(crate) health: RuntimeHealth,
     pub(crate) native_install: bool,
+    pub(crate) system_lookup: SystemLookup,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

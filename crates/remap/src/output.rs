@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::app::{DoctorReport, Report, ValidationReport};
 use crate::diagnostic::Diagnostic;
+use remap_mcp::system_lookup::SystemLookup;
 
 const SCHEMA: &str = "remap.cli/v1";
 
@@ -113,12 +114,26 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
         readiness(report.health.forwarding)
     )?;
     writeln!(writer, "  HTTP       {}", readiness(report.health.http))?;
+    writeln!(
+        writer,
+        "  Lookup     {}",
+        lookup_line(&report.system_lookup)
+    )?;
     writeln!(writer, "  Telemetry  none")?;
     writeln!(writer)?;
     writeln!(
         writer,
         "Doctor itself changed nothing. Telemetry remains absent."
     )?;
+    if matches!(
+        report.system_lookup,
+        SystemLookup::Bypassed { .. } | SystemLookup::Unresolved { .. }
+    ) {
+        writeln!(
+            writer,
+            "The system resolver is not returning Remap's answer. On macOS, `remap-system status` shows the recorded fallback reason."
+        )?;
+    }
     if report.revision.is_some()
         && report.health.dns
         && report.health.forwarding
@@ -133,6 +148,20 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
             writer,
             "Recovery: install or restart the native Remap service."
         )
+    }
+}
+
+fn lookup_line(lookup: &SystemLookup) -> String {
+    let name = lookup.name().map(terminal_text).unwrap_or_default();
+    match (lookup, lookup.answer()) {
+        (SystemLookup::Matched { .. }, Some(answer)) => format!("ready ({name} → {answer})"),
+        (SystemLookup::Bypassed { .. }, Some(answer)) => {
+            format!("bypassed ({name} → {answer}; the system is not asking Remap)")
+        }
+        (SystemLookup::Unresolved { .. }, _) => {
+            format!("unresolved ({name} did not resolve through the system)")
+        }
+        _ => "not checked (no enabled exact mapping to probe)".to_owned(),
     }
 }
 
@@ -379,6 +408,11 @@ fn report_json(report: &Report) -> Value {
                 "dns_listener": report.health.dns,
                 "dns_forwarding": report.health.forwarding,
                 "http_gateway": report.health.http,
+                "system_lookup": {
+                    "state": report.system_lookup.state(),
+                    "name": report.system_lookup.name(),
+                    "answer": report.system_lookup.answer().map(|answer| answer.to_string()),
+                },
                 "telemetry": "none",
             }
         }),
