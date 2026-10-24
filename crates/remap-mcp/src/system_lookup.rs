@@ -142,6 +142,7 @@ mod tests {
             host_policy: HostPolicy::UseUpstream,
             enabled,
             updated_revision: 1,
+            landing: None,
         }
     }
 
