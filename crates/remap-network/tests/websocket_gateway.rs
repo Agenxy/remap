@@ -31,6 +31,10 @@ const SWITCH: &[u8] = b"GET /hmr?token=t HTTP/1.1\r\nHost: ws.test\r\n\
 Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
 Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
 
+const OTHER_UPGRADE: &[u8] =
+    b"GET / HTTP/1.1\r\nHost: ws.test\r\nConnection: Upgrade, HTTP2-Settings\r\n\
+Upgrade: h2c\r\nHTTP2-Settings: AAMAAABkAAQAAP__\r\n\r\n";
+
 fn header(request: &Request<Incoming>, name: hyper::header::HeaderName) -> Option<String> {
     request
         .headers()
@@ -104,12 +108,21 @@ fn gateway(
     upstream: SocketAddr,
     configure: impl FnOnce(&mut GatewayRuntimeConfig),
 ) -> Result<Gateway, Box<dyn Error>> {
+    gateway_with_landing(upstream, None, configure)
+}
+
+fn gateway_with_landing(
+    upstream: SocketAddr,
+    landing: Option<&str>,
+    configure: impl FnOnce(&mut GatewayRuntimeConfig),
+) -> Result<Gateway, Box<dyn Error>> {
     let store = SnapshotStore::empty();
     let target = MappingTarget::parse_with_http_policy(
         &format!("http://{upstream}/"),
         HostHeaderPolicy::UseUpstream,
     )?;
-    let mapping = Mapping::new(NamePattern::parse("ws.test")?, target);
+    let mapping = Mapping::new(NamePattern::parse("ws.test")?, target)
+        .with_landing(landing.map(remap_core::LandingPath::parse).transpose()?)?;
     assert!(store.publish(RegistrySnapshot::new(1, vec![mapping])?));
     let mut config = GatewayRuntimeConfig::new((Ipv4Addr::LOCALHOST, 0).into());
     configure(&mut config);
@@ -145,6 +158,29 @@ async fn echo(stream: &mut TcpStream, payload: &[u8]) -> Result<Vec<u8>, Box<dyn
     let mut answer = vec![0_u8; payload.len()];
     timeout(Duration::from_secs(5), stream.read_exact(&mut answer)).await??;
     Ok(answer)
+}
+
+#[tokio::test]
+async fn landing_does_not_redirect_a_root_websocket_switch() -> TestResult {
+    let upstream = echo_upstream(Seen::default()).await?;
+    let gateway = gateway_with_landing(upstream, Some("/page"), |_| {})?;
+    let request = std::str::from_utf8(SWITCH)?.replacen("/hmr", "/", 1);
+    let (mut stream, head) = open(gateway.address, request.as_bytes()).await?;
+    assert!(head.starts_with("http/1.1 101"), "{head}");
+    assert_eq!(echo(&mut stream, b"root update").await?, b"root update");
+    gateway.stop().await
+}
+
+#[tokio::test]
+async fn review_landing_redirects_other_upgrades() -> TestResult {
+    let seen = Seen::default();
+    let upstream = echo_upstream(Arc::clone(&seen)).await?;
+    let gateway = gateway_with_landing(upstream, Some("/page"), |_| {})?;
+    let (_stream, head) = open(gateway.address, OTHER_UPGRADE).await?;
+    assert!(head.starts_with("http/1.1 302"), "{head}");
+    assert!(head.contains("location: /page\r\n"), "{head}");
+    assert!(seen.lock().map_err(|_| "poisoned")?.is_empty());
+    gateway.stop().await
 }
 
 #[tokio::test]
@@ -219,9 +255,7 @@ async fn another_upgrade_is_forwarded_as_an_ordinary_request() -> TestResult {
     let seen = Seen::default();
     let upstream = echo_upstream(Arc::clone(&seen)).await?;
     let gateway = gateway(upstream, |_| {})?;
-    let request = b"GET / HTTP/1.1\r\nHost: ws.test\r\nConnection: Upgrade, HTTP2-Settings\r\n\
-Upgrade: h2c\r\nHTTP2-Settings: AAMAAABkAAQAAP__\r\n\r\n";
-    let (_stream, head) = open(gateway.address, request).await?;
+    let (_stream, head) = open(gateway.address, OTHER_UPGRADE).await?;
     assert!(head.starts_with("http/1.1 200"), "{head}");
     assert_eq!(
         seen.lock().map_err(|_| "poisoned")?.first().cloned(),

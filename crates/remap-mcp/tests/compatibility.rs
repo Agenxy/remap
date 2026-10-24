@@ -594,6 +594,7 @@ async fn modern_subscription_recovers_after_a_daemon_restart() -> Result<(), Box
                 target: "127.0.0.1".to_owned(),
                 host_policy: HostPolicy::PreserveClient,
                 enabled: None,
+                landing: None,
             }],
         })
         .await
@@ -713,6 +714,7 @@ async fn apply_mapping(
                 target: target.to_owned(),
                 host_policy: HostPolicy::PreserveClient,
                 enabled: None,
+                landing: None,
             }],
         })
         .await?;

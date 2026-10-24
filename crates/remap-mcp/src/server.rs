@@ -247,6 +247,7 @@ impl RemapMcp {
         Parameters(params): Parameters<ValidateParams>,
     ) -> Result<ToolSuccess<ValidationResult>, CallToolResult> {
         let command = Command::Validate {
+            landing: params.landing,
             pattern: params.pattern,
             target: params.target,
             host_policy: params.host_policy,
@@ -303,6 +304,7 @@ impl RemapMcp {
         Parameters(params): Parameters<SetParams>,
     ) -> Result<ToolSuccess<ApplyResult>, CallToolResult> {
         let change = Change::Set {
+            landing: params.landing,
             pattern: params.pattern,
             target: params.target,
             host_policy: params.host_policy,

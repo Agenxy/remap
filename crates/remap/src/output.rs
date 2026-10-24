@@ -149,6 +149,8 @@ fn write_validation(writer: &mut dyn Write, report: &ValidationReport) -> io::Re
     if let Some(policy) = report.host_header_policy {
         writeln!(writer, "  Host       {policy}")?;
     }
+    write_landing(writer, report.landing.as_deref())?;
+    write_warnings(writer, &report.warnings)?;
     writeln!(writer)?;
     writeln!(writer, "No system state changed.")
 }
@@ -206,13 +208,16 @@ fn write_authority(writer: &mut dyn Write, result: &CommandResult) -> io::Result
                 "  Type       {}",
                 terminal_text(&validation.target_kind)
             )?;
-            writeln!(writer, "  Host       {}", validation.host_policy.as_str())
+            writeln!(writer, "  Host       {}", validation.host_policy.as_str())?;
+            write_landing(writer, validation.landing.as_deref())?;
+            write_warnings(writer, &validation.warnings)
         }
         CommandResult::Preview(preview) => {
             writeln!(writer, "Preview at revision {}", preview.base_revision)?;
             writeln!(writer, "  Would change  {}", preview.will_change)?;
             writeln!(writer, "  Effects       {}", preview.effects.len())?;
-            write_effects(writer, &preview.effects)
+            write_effects(writer, &preview.effects)?;
+            write_warnings(writer, &preview.warnings)
         }
         CommandResult::Apply(receipt) => {
             writeln!(writer, "Committed at revision {}", receipt.revision)?;
@@ -225,7 +230,8 @@ fn write_authority(writer: &mut dyn Write, result: &CommandResult) -> io::Result
                 "  Operation     {}",
                 terminal_text(&receipt.operation_id)
             )?;
-            write_effects(writer, &receipt.effects)
+            write_effects(writer, &receipt.effects)?;
+            write_warnings(writer, &receipt.warnings)
         }
         CommandResult::Revision(notice) => {
             writeln!(
@@ -288,7 +294,7 @@ fn mapping_effect(mapping: Option<&MappingView>) -> String {
         || "∅".to_owned(),
         |mapping| {
             format!(
-                "{} → {} · {} · {} · {}",
+                "{} → {} · {} · {} · {}{}",
                 terminal_text(&mapping.pattern),
                 terminal_text(&mapping.target),
                 terminal_text(&mapping.target_kind),
@@ -297,7 +303,14 @@ fn mapping_effect(mapping: Option<&MappingView>) -> String {
                     "active"
                 } else {
                     "disabled"
-                }
+                },
+                mapping
+                    .landing
+                    .as_ref()
+                    .map_or_else(String::new, |path| format!(
+                        " · landing {}",
+                        terminal_text(path)
+                    ))
             )
         },
     )
@@ -314,7 +327,22 @@ fn write_mapping(writer: &mut dyn Write, mapping: &MappingView) -> io::Result<()
         "  {}  →  {}  ({state})",
         terminal_text(&mapping.pattern),
         terminal_text(&mapping.target)
-    )
+    )?;
+    write_landing(writer, mapping.landing.as_deref())
+}
+
+fn write_landing(writer: &mut dyn Write, landing: Option<&str>) -> io::Result<()> {
+    if let Some(path) = landing {
+        writeln!(writer, "  Landing    {}", terminal_text(path))?;
+    }
+    Ok(())
+}
+
+fn write_warnings(writer: &mut dyn Write, warnings: &[String]) -> io::Result<()> {
+    for warning in warnings {
+        writeln!(writer, "  Advisory   {}", terminal_text(warning))?;
+    }
+    Ok(())
 }
 
 fn terminal_text(value: &str) -> Cow<'_, str> {
@@ -391,6 +419,8 @@ fn report_json(report: &Report) -> Value {
                 "target": report.target,
                 "target_kind": report.target_kind,
                 "host_header_policy": report.host_header_policy,
+                "landing": report.landing,
+                "warnings": report.warnings,
                 "system_state_changed": false,
             }
         }),
@@ -424,6 +454,8 @@ mod tests {
     #[test]
     fn validation_json_has_stable_envelope() -> Result<(), Box<dyn Error>> {
         let report = Report::Validation(ValidationReport {
+            warnings: Vec::new(),
+            landing: None,
             pattern: "atlas".to_owned(),
             target: "http://127.0.0.1:5173/".to_owned(),
             target_kind: "http",
@@ -496,6 +528,7 @@ mod tests {
         let report = Report::Authority {
             command: "preview",
             result: CommandResult::Preview(PreviewResult {
+                warnings: Vec::new(),
                 base_revision: 8,
                 will_change: true,
                 effects: vec![effect],
@@ -560,6 +593,7 @@ mod tests {
 
     fn mapping(target: &str, host_policy: HostPolicy) -> MappingView {
         MappingView {
+            landing: None,
             pattern: "atlas".to_owned(),
             target: target.to_owned(),
             target_kind: "socket".to_owned(),

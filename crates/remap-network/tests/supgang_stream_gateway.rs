@@ -253,11 +253,23 @@ fn gateway(
     key: [u8; 32],
     socket: Option<PathBuf>,
 ) -> Result<Gateway, Box<dyn Error>> {
+    gateway_with_landing(mappings, key, socket, None)
+}
+
+fn gateway_with_landing(
+    mappings: &[(&str, &str)],
+    key: [u8; 32],
+    socket: Option<PathBuf>,
+    landing: Option<&str>,
+) -> Result<Gateway, Box<dyn Error>> {
     let store = SnapshotStore::empty();
     let mut built = Vec::new();
     for (name, target) in mappings {
         let target = MappingTarget::parse_with_http_policy(target, HostHeaderPolicy::UseUpstream)?;
-        built.push(Mapping::new(NamePattern::parse(name)?, target));
+        built.push(
+            Mapping::new(NamePattern::parse(name)?, target)
+                .with_landing(landing.map(remap_core::LandingPath::parse).transpose()?)?,
+        );
     }
     assert!(store.publish(RegistrySnapshot::new(1, built)?));
     let mut runtime = GatewayRuntime::bind(
@@ -309,6 +321,27 @@ fn get(host: &str) -> Vec<u8> {
 
 fn endpoint_path(directory: &tempfile::TempDir) -> PathBuf {
     directory.path().join("control.sock")
+}
+
+#[tokio::test]
+async fn landing_peer_routes_redirect_root_and_preserve_other_paths() -> TestResult {
+    for target in ["supgang://solis/pinned", "supgang+http://solis/preview"] {
+        let directory = tempfile::tempdir()?;
+        let socket = endpoint_path(&directory);
+        endpoint(&socket, Vec::new())?;
+        let gateway = gateway_with_landing(
+            &[("preview.test", target)],
+            pin()?,
+            Some(socket),
+            Some("/page"),
+        )?;
+        let request = b"GET /?x=1 HTTP/1.1\r\nHost: preview.test\r\nConnection: close\r\n\r\n";
+        let (_stream, head) = exchange(gateway.address, request).await?;
+        assert!(head.starts_with("http/1.1 302"), "{head}");
+        assert!(head.contains("location: /page?x=1\r\n"), "{head}");
+        gateway.stop().await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]

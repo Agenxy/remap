@@ -17,6 +17,7 @@ struct MappingEditorView: View {
     private enum Field {
         case pattern
         case target
+        case landing
     }
 
     init(store: RemapStore, original: RemapMapping?) {
@@ -73,7 +74,17 @@ struct MappingEditorView: View {
                 )
                 .textContentType(.URL)
                 .focused($focusedField, equals: .target)
+                .onSubmit { focusedField = .landing }
                 .accessibilityHint(AppText.localized("Enter an IP address, hostname, or HTTP service URL"))
+                TextField(
+                    AppText.localized("Landing path (optional)"),
+                    text: $draft.landing,
+                    prompt: Text(verbatim: "/ops/scorecard/")
+                )
+                .focused($focusedField, equals: .landing)
+                .accessibilityHint(AppText.localized(
+                    "Optional same-origin page for root requests. Clear to remove the landing path."
+                ))
                 Picker(AppText.localized("Upstream Host"), selection: $draft.hostPolicy) {
                     Text(AppText.localized("Use upstream name")).tag(RemapHostPolicy.useUpstream)
                     Text(AppText.localized("Preserve client name")).tag(RemapHostPolicy.preserveClient)
@@ -108,6 +119,7 @@ struct MappingEditorView: View {
             Text(AppText.projectionRegistryRevision(preview.baseRevision))
                 .foregroundStyle(.secondary)
             EffectList(effects: preview.effects)
+            AdvisoryList(warnings: preview.warnings ?? [])
             if let diagnostic {
                 InlineDiagnostic(diagnostic: diagnostic)
             }

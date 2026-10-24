@@ -1870,6 +1870,9 @@ dependencies = [
 [[package]]
 name = "remap-core"
 version = "0.2.0"
+dependencies = [
+ "chrono",
+]
 
 [[package]]
 name = "remap-linux"

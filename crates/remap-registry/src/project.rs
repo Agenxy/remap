@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use remap_core::{HostHeaderPolicy, MappingTarget, NamePattern};
+use remap_core::{HostHeaderPolicy, LandingPath, MappingTarget, NamePattern};
 use remap_protocol::{
     Change, ChangeEffect, Diagnostic, HostPolicy, MAX_ATOMIC_CHANGE_COUNT, MAX_TARGET_BYTES,
     MappingView, PreviewResult,
@@ -8,6 +8,7 @@ use remap_protocol::{
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct StoredMapping {
+    pub(crate) landing: Option<String>,
     pub(crate) pattern: String,
     pub(crate) target: String,
     pub(crate) target_kind: String,
@@ -19,6 +20,7 @@ pub(crate) struct StoredMapping {
 impl StoredMapping {
     pub(crate) fn view(&self) -> MappingView {
         MappingView {
+            landing: self.landing.clone(),
             pattern: self.pattern.clone(),
             target: self.target.clone(),
             target_kind: self.target_kind.clone(),
@@ -34,6 +36,7 @@ impl StoredMapping {
         host_policy: HostPolicy,
         enabled: bool,
         updated_revision: u64,
+        landing: Option<&str>,
     ) -> Result<Self, Diagnostic> {
         if target.len() > MAX_TARGET_BYTES {
             return Err(Diagnostic::new(
@@ -67,7 +70,36 @@ impl StoredMapping {
                     false,
                 )
             })?;
+        if let MappingTarget::Moved(moved) = &target {
+            moved.validate_source(&pattern).map_err(|error| {
+                Diagnostic::new(
+                    "E_MOVED_CHAIN",
+                    error.to_string(),
+                    Some("choose a different destination name".to_owned()),
+                    false,
+                )
+            })?;
+        }
+        let landing = landing
+            .map(|value| {
+                let parsed = LandingPath::parse(value)?;
+                parsed.validate_target(&target)?;
+                Ok::<_, remap_core::LandingPathError>(parsed.as_str().to_owned())
+            })
+            .transpose()
+            .map_err(|error| {
+                Diagnostic::new(
+                    "E_INVALID_LANDING",
+                    error.to_string(),
+                    Some(
+                        "use an origin-root HTTP target and a safe same-origin page path"
+                            .to_owned(),
+                    ),
+                    false,
+                )
+            })?;
         Ok(Self {
+            landing,
             pattern: pattern.to_string(),
             target_kind: target.kind().to_string(),
             target: target.to_string(),
@@ -105,9 +137,12 @@ pub(crate) fn project(
         has_effect |= effect.action != "unchanged";
         effects.push(effect);
     }
+    crate::registry::build_snapshot(revision, &mappings)?;
+    let warnings = crate::advisory::warnings(&effects, &mappings);
     Ok(Projection {
         mappings,
         result: PreviewResult {
+            warnings,
             base_revision: revision,
             will_change: has_effect,
             effects,
@@ -149,6 +184,7 @@ fn apply_one(
             target,
             host_policy,
             enabled,
+            landing,
         } => apply_set(
             mappings,
             pattern,
@@ -156,6 +192,7 @@ fn apply_one(
             *host_policy,
             *enabled,
             next_revision,
+            landing.as_deref(),
         ),
         Change::Enable { pattern } => apply_enabled(mappings, pattern, true, next_revision),
         Change::Disable { pattern } => apply_enabled(mappings, pattern, false, next_revision),
@@ -170,8 +207,10 @@ fn apply_set(
     host_policy: HostPolicy,
     enabled: Option<bool>,
     next_revision: u64,
+    landing: Option<&str>,
 ) -> Result<ChangeEffect, Diagnostic> {
-    let parsed = StoredMapping::validate(pattern, target, host_policy, true, next_revision)?;
+    let parsed =
+        StoredMapping::validate(pattern, target, host_policy, true, next_revision, landing)?;
     let canonical = parsed.pattern.clone();
     let before = mappings.get(&canonical).cloned();
     let resolved_enabled = enabled.or_else(|| before.as_ref().map(|record| record.enabled));
@@ -253,6 +292,7 @@ fn effect(
 
 fn same_value(left: &StoredMapping, right: &StoredMapping) -> bool {
     left.pattern == right.pattern
+        && left.landing == right.landing
         && left.target == right.target
         && left.target_kind == right.target_kind
         && left.host_policy == right.host_policy

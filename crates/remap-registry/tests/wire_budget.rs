@@ -52,6 +52,7 @@ fn changes(start: usize, end: usize, fill: char) -> Vec<Change> {
             target: maximum_target(fill),
             host_policy: HostPolicy::PreserveClient,
             enabled: None,
+            landing: None,
         })
         .collect()
 }

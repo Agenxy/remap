@@ -158,7 +158,8 @@ private func testMapping(pattern: String, revision: UInt64) -> RemapMapping {
         targetKind: "http",
         hostPolicy: .useUpstream,
         enabled: true,
-        updatedRevision: revision
+        updatedRevision: revision,
+        landing: nil
     )
 }
 

@@ -4,6 +4,22 @@ Remap is agent-native: MCP and the human CLI are peer adapters over one
 authoritative per-user daemon. The MCP process owns no registry, performs no
 privileged installation, and cannot grant authority the daemon denied.
 
+Set, validate and set changes in preview/apply accept optional `landing` paths
+for HTTP and Supgang targets. Mapping and validation results include the value
+when present. Root GET/HEAD requests redirect on the same origin; other requests
+keep their original path. The authority rejects unsafe paths and non-root HTTP
+targets rather than changing response bodies.
+
+Moved mappings use a `moved://NEW-NAME` target with optional
+`?until=RFC3339`. They redirect every HTTP request with 301, preserve path and
+query, and stop matching at expiry while remaining listed. Self redirects and
+chains are refused across the complete projected registry. Set, validate and
+preview results may include advisory `warnings` about HTTP base paths; set and
+preview also hint about shared origins under use-upstream. Warnings never change
+the target or the default host policy.
+The dashboard shows landing paths and advisory warnings, including landing-only
+differences and removals in its before/after review.
+
 ## Start and connect
 
 An installed Remap service starts the authority automatically. For an isolated

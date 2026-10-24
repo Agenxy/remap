@@ -65,6 +65,7 @@ async fn two_surfaces_observe_one_live_authority() -> Result<(), Box<dyn std::er
             target: "10.0.0.8".to_owned(),
             host_policy: HostPolicy::PreserveClient,
             enabled: None,
+            landing: None,
         }],
     })
     .await?;

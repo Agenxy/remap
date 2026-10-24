@@ -6,7 +6,8 @@ public enum RemapChange: Equatable, Sendable {
         pattern: String,
         target: String,
         hostPolicy: RemapHostPolicy,
-        enabled: Bool?
+        enabled: Bool?,
+        landing: String? = nil
     )
     case enable(pattern: String)
     case disable(pattern: String)
@@ -20,17 +21,19 @@ extension RemapChange: Encodable {
         case target
         case hostPolicy = "host_policy"
         case enabled
+        case landing
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .set(pattern, target, hostPolicy, enabled):
+        case let .set(pattern, target, hostPolicy, enabled, landing):
             try container.encode("set", forKey: .kind)
             try container.encode(pattern, forKey: .pattern)
             try container.encode(target, forKey: .target)
             try container.encode(hostPolicy, forKey: .hostPolicy)
             try container.encodeIfPresent(enabled, forKey: .enabled)
+            try container.encodeIfPresent(landing, forKey: .landing)
         case let .enable(pattern):
             try encodeNamed("enable", pattern: pattern, into: &container)
         case let .disable(pattern):
@@ -57,7 +60,7 @@ public enum RemapControlCommand: Equatable, Sendable {
     case list(after: String?, limit: UInt16, includeDisabled: Bool)
     case get(pattern: String)
     case resolve(name: String)
-    case validate(pattern: String, target: String, hostPolicy: RemapHostPolicy)
+    case validate(pattern: String, target: String, hostPolicy: RemapHostPolicy, landing: String? = nil)
     case preview(changes: [RemapChange])
     case apply(expectedRevision: UInt64, operationID: String, changes: [RemapChange])
     case waitForRevision(after: UInt64, timeoutMilliseconds: UInt32)
@@ -73,6 +76,7 @@ extension RemapControlCommand: Encodable {
         case name
         case target
         case hostPolicy = "host_policy"
+        case landing
         case changes
         case expectedRevision = "expected_revision"
         case operationID = "operation_id"
@@ -96,11 +100,12 @@ extension RemapControlCommand: Encodable {
             try encodeSingle("get", key: .pattern, value: pattern, into: &container)
         case let .resolve(name):
             try encodeSingle("resolve", key: .name, value: name, into: &container)
-        case let .validate(pattern, target, hostPolicy):
+        case let .validate(pattern, target, hostPolicy, landing):
             try container.encode("validate", forKey: .kind)
             try container.encode(pattern, forKey: .pattern)
             try container.encode(target, forKey: .target)
             try container.encode(hostPolicy, forKey: .hostPolicy)
+            try container.encodeIfPresent(landing, forKey: .landing)
         case let .preview(changes):
             try container.encode("preview", forKey: .kind)
             try container.encode(changes, forKey: .changes)

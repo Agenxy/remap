@@ -204,7 +204,7 @@ fn add_mapping_answers(
                 RData::CNAME(CNAME(target)),
             ));
         }
-        MappingTarget::Http(_) | MappingTarget::Peer(_) => {
+        MappingTarget::Http(_) | MappingTarget::Peer(_) | MappingTarget::Moved(_) => {
             if let Some(address) = policy.routed_ipv4 {
                 add_address(
                     response,
@@ -310,6 +310,28 @@ mod tests {
                 return Err("mapped query was forwarded".into());
             };
             assert_eq!(Message::from_vec(&bytes)?.answers.len(), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn moved_dns_uses_the_gateway_until_expiry() -> Result<(), Box<dyn std::error::Error>> {
+        for target in [
+            "moved://new.test",
+            "moved://new.test?until=2000-01-01T00:00:00Z",
+        ] {
+            let engine = engine("old.test", target.parse()?)?;
+            let decision = engine.decide(&query("old.test.", RecordType::A)?)?;
+            assert_eq!(
+                matches!(decision, DnsDecision::Forward),
+                target.contains("until=")
+            );
+            if let DnsDecision::Respond(bytes) = decision {
+                let response = Message::from_vec(&bytes)?;
+                assert!(
+                    matches!(response.answers[0].data, RData::A(address) if address.0 == Ipv4Addr::LOCALHOST)
+                );
+            }
         }
         Ok(())
     }
