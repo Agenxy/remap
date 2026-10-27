@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// How eagerly the supervisor returns to Remap DNS after a bypass (ADR-0030).
