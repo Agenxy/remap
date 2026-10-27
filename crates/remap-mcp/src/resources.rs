@@ -33,6 +33,35 @@ Prefer `remap_set` for one create or retarget operation and `remap_apply` for a 
 
 The batch is atomic. `remap_resolve` explains exact and wildcard precedence without
 performing network I/O. Read `remap://privacy` for the data boundary.
+
+## Reachability advice
+
+`remap_preview`, `remap_set`, `remap_enable` and `remap_apply` try one TCP connection, for
+at most a second, to each loopback HTTP target they leave enabled. A warning such as
+`target refused connection` means nothing listens there yet. It is advice: the change is
+still previewed or committed. Peer targets and targets on other machines are never
+probed, and the probe sends no bytes.
+
+When a routed request fails, the gateway answers `502 E_GATEWAY_UPSTREAM` or
+`504 E_GATEWAY_TIMEOUT` with the matched mapping and a cause: `refused`, `timeout`,
+`tls`, `reset`, `unreachable` or `other`. It never shows the target's address; read the
+target with `remap_get`.
+
+## Choosing names
+
+Remap reserves no namespace, and any name the owner chooses is valid. The trade-offs:
+
+- A single-label name such as `api` is the shortest to type. Browsers may treat a bare
+  word as a search, so type `http://api/`. Resolvers and tools may append a search
+  domain, and the name can collide with a host of the same name on a local network.
+- A suffix you choose groups your names, keeps them visibly yours, and lets one wildcard
+  such as `*.example.test` cover a project. `.test` and `.internal` are reserved and
+  never resolve publicly; a suffix of your own works just as well.
+- `.local` belongs to multicast DNS, so a mapping there competes with Bonjour and
+  Avahi. Names under a public suffix whose HTTPS is preloaded in browsers, such as
+  `.dev` or `.app`, make browsers upgrade every request to `https://`.
+- Shadowing a public name is allowed when you mean it; that name's public site is out of
+  reach from this machine while the mapping is enabled.
 ";
 
 /// Lists the fixed, bounded resource catalog.
@@ -208,4 +237,28 @@ fn size_of(text: &str) -> u64 {
 /// Creates the MCP-surface daemon client for the native default path.
 pub(crate) fn discover_client() -> Result<ControlClient, Diagnostic> {
     ControlClient::discover(Surface::Mcp, env!("CARGO_PKG_VERSION"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HELP;
+
+    #[test]
+    fn help_explains_naming_trade_offs_without_prescribing_a_suffix() {
+        assert!(HELP.contains("## Choosing names"));
+        assert!(HELP.contains("Remap reserves no namespace"));
+        for trade_off in ["single-label", "search", "wildcard", ".local", "Shadowing"] {
+            assert!(HELP.contains(trade_off), "help omits {trade_off}");
+        }
+        assert!(!HELP.contains("should use"), "help prescribes a suffix");
+    }
+
+    #[test]
+    fn help_explains_reachability_advice_and_gateway_causes() {
+        assert!(HELP.contains("target refused connection"));
+        for cause in ["`refused`", "`timeout`", "`tls`", "`reset`"] {
+            assert!(HELP.contains(cause), "help omits {cause}");
+        }
+        assert!(HELP.contains("the probe sends no bytes"));
+    }
 }

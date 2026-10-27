@@ -147,6 +147,20 @@ provide explicit mutation guards. The connector still rejects the gateway's
 exact active listener after resolution so a valid private target cannot recurse
 through Remap itself.
 
+A failed upstream exchange is reported to the client with the canonical pattern
+of the mapping that matched and a stable cause (`refused`, `timeout`, `tls`,
+`reset`, `unreachable`, `other`). The response never contains the upstream's
+address, port, peer candidate, certificate subject, or native error text
+(ADR-0028).
+
+Preview and apply add advisory reachability for loopback HTTP targets. The
+daemon connects only to a loopback address literal, or to `localhost` at
+`127.0.0.1` and `::1`, after the registry has validated the target. It resolves
+no name, sends no bytes, waits at most one second, and makes at most two
+connections per change, outside the registry writer. A change set therefore
+cannot use the authority to reach another machine or to hold the writer. The
+advice never changes the decision and is not stored in the idempotent receipt.
+
 A peer target (`supgang://<peer>/<service>`, ADR-0016) is resolved at route
 time from the peer's device-signed Supgang record, and the upstream TLS session
 is verified against the key that record advertises rather than the system

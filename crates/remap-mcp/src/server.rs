@@ -277,7 +277,7 @@ impl RemapMcp {
         }
     }
 
-    /// Project an ordered atomic change set. Always preview unfamiliar or multi-change work.
+    /// Project an ordered atomic change set. Always preview unfamiliar or multi-change work. Warns, without refusing, when a loopback HTTP target refuses a TCP connection; no other target is probed and no bytes are sent.
     #[tool(
         name = "remap_preview",
         output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<PreviewResult>>(),
@@ -308,7 +308,7 @@ impl RemapMcp {
         }
     }
 
-    /// Create or retarget one mapping using optimistic concurrency and idempotent retry.
+    /// Create or retarget one mapping using optimistic concurrency and idempotent retry. Warns, without refusing, when a loopback HTTP target refuses a TCP connection; no other target is probed and no bytes are sent.
     #[tool(
         name = "remap_set",
         output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<ApplyResult>>(),
@@ -330,7 +330,7 @@ impl RemapMcp {
             .await
     }
 
-    /// Enable one existing mapping using optimistic concurrency and idempotent retry.
+    /// Enable one existing mapping using optimistic concurrency and idempotent retry. Warns, without refusing, when a loopback HTTP target refuses a TCP connection; no other target is probed and no bytes are sent.
     #[tool(
         name = "remap_enable",
         output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<ApplyResult>>(),
@@ -384,7 +384,7 @@ impl RemapMcp {
             .await
     }
 
-    /// Commit an ordered change set atomically using revision and idempotency guards.
+    /// Commit an ordered change set atomically using revision and idempotency guards. Warns, without refusing, when a loopback HTTP target refuses a TCP connection; no other target is probed and no bytes are sent.
     #[tool(
         name = "remap_apply",
         output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<ApplyResult>>(),

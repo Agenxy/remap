@@ -20,6 +20,18 @@ the target or the default host policy.
 The dashboard shows landing paths and advisory warnings, including landing-only
 differences and removals in its before/after review.
 
+`remap_preview`, `remap_set`, `remap_enable` and `remap_apply` also probe each
+loopback HTTP target they leave enabled with one TCP connection of at most a
+second, and add a warning such as `api.test: target refused connection; ...`
+when nothing accepts it. The change still succeeds. Peer targets, other names
+and addresses off loopback are never probed, and the probe sends no bytes, so
+these tools keep `openWorldHint: false` and preview stays read-only
+(ADR-0028). A failed routed request answers `502 E_GATEWAY_UPSTREAM` or
+`504 E_GATEWAY_TIMEOUT` with `Mapping:` and `Cause:` lines (`refused`,
+`timeout`, `tls`, `reset`, `unreachable`, `other`) and never the target's
+address; read the target with `remap_get`. `remap://help` also covers choosing
+names.
+
 ## Start and connect
 
 An installed Remap service starts the authority automatically. For an isolated
@@ -102,7 +114,7 @@ A conflict is a request to reconsider, not an invitation to blind retry.
 | `remap_resolve` | Explain exact and wildcard selection without network I/O |
 | `remap_health` | Resolve one mapped name through the system resolver and report whether the answer is Remap's (`ready`, `bypassed`, `unresolved`, `not_checked`) |
 | `remap_validate` | Canonicalize one proposed mapping without state changes |
-| `remap_preview` | Project an ordered atomic batch |
+| `remap_preview` | Project an ordered atomic batch, with loopback reachability advice |
 | `remap_set` | Create or retarget one mapping |
 | `remap_enable` | Enable one existing mapping |
 | `remap_disable` | Disable without deleting |

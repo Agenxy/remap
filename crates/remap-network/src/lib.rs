@@ -2,11 +2,13 @@
 
 mod dns;
 mod error;
+mod failure;
 mod forward;
 mod gateway;
 mod health;
 mod peer;
 mod proxy;
+mod reachability;
 mod resolver;
 mod server;
 mod snapshot;
@@ -25,6 +27,7 @@ pub use peer::{
     PEER_CACHE_LIMIT, PeerResolveError, PeerResolver, PinnedVerifier, RESOLVE_TIMEOUT,
     ResolvedPeerService, SupgangResolver, parse_node, parse_resolution, subject_public_key_info,
 };
+pub use reachability::{PROBE_DEADLINE, Reachability, loopback_addresses, probe};
 pub use resolver::ResolverPlanStore;
 pub use server::{DnsBindings, DnsRuntime, DnsRuntimeConfig};
 pub use snapshot::SnapshotStore;

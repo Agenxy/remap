@@ -95,6 +95,12 @@ impl Engine {
                 .wait_for_revision(request.request_id.clone(), *after, *timeout_ms)
                 .await;
         }
+        // A preview or receipt gains advisory reachability once the writer
+        // has answered; the writer is never held for it (ADR-0028).
+        let advisable = matches!(
+            request.command,
+            Command::Preview { .. } | Command::Apply { .. }
+        );
         let (response_sender, response_receiver) = oneshot::channel();
         self.sender()?
             .send(Job::Request {
@@ -103,7 +109,11 @@ impl Engine {
             })
             .await
             .map_err(|_| writer_unavailable())?;
-        response_receiver.await.map_err(|_| writer_unavailable())
+        let mut response = response_receiver.await.map_err(|_| writer_unavailable())?;
+        if advisable && let Some(result) = response.result.as_mut() {
+            crate::reachability::advise(result).await;
+        }
+        Ok(response)
     }
 
     /// Runs retention maintenance on the registry writer.

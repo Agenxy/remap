@@ -159,22 +159,30 @@ async fn daemon_routes_a_mapped_http_name_to_its_upstream() -> Result<(), Box<dy
     let paths = ControlPaths::under(directory.path().join("data"));
     let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let upstream_address = upstream.local_addr()?;
+    // Apply probes the loopback target first (ADR-0028): that connection
+    // closes without a request, so wait for the one that carries the route.
     let upstream_task = tokio::spawn(async move {
-        let Ok((mut stream, _peer)) = upstream.accept().await else {
-            return;
-        };
-        let mut request = vec![0_u8; 4_096];
-        let Ok(size) = stream.read(&mut request).await else {
-            return;
-        };
-        if !String::from_utf8_lossy(&request[..size]).starts_with("GET /status HTTP/1.1") {
+        loop {
+            let Ok((mut stream, _peer)) = upstream.accept().await else {
+                return;
+            };
+            let mut request = vec![0_u8; 4_096];
+            let Ok(size) = stream.read(&mut request).await else {
+                continue;
+            };
+            if size == 0 {
+                continue;
+            }
+            if !String::from_utf8_lossy(&request[..size]).starts_with("GET /status HTTP/1.1") {
+                return;
+            }
+            let _written = stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\nConnection: close\r\n\r\nRemap is live",
+                )
+                .await;
             return;
         }
-        let _written = stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\nConnection: close\r\n\r\nRemap is live",
-            )
-            .await;
     });
     let gateway_address = unused_tcp_address().await?;
     let mut config = DaemonConfig::new(paths.clone());

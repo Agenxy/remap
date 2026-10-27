@@ -67,12 +67,16 @@ fn assert_tool_contract(tool: &rmcp::model::Tool) -> Result<(), Box<dyn Error>> 
     assert_eq!(annotations.read_only_hint, Some(read_only));
     assert_eq!(annotations.destructive_hint, Some(!read_only));
     assert_eq!(annotations.idempotent_hint, Some(true));
-    // Only the health probe leaves Remap: it asks the system resolver, which
-    // reaches whatever DNS the network supplies when Remap is bypassed.
+    // Only the health probe can leave this machine: it asks the system
+    // resolver, which reaches whatever DNS the network supplies when Remap
+    // is bypassed. The reachability probe of preview and the committing
+    // tools (ADR-0028) stays on loopback and sends no bytes, so it keeps
+    // their domain closed; preview stays read-only.
     assert_eq!(
         annotations.open_world_hint,
         Some(tool.name.as_ref() == "remap_health")
     );
+    assert_probe_disclosure(tool);
     let expected_visibility = if matches!(tool.name.as_ref(), "remap_status" | "remap_list") {
         json!(["model", "app"])
     } else {
@@ -81,6 +85,23 @@ fn assert_tool_contract(tool: &rmcp::model::Tool) -> Result<(), Box<dyn Error>> 
     assert_eq!(ui_property(tool, "visibility"), Some(&expected_visibility));
     assert_output_schema_contract(tool)?;
     Ok(())
+}
+
+/// The tools whose results may carry reachability advice say so, and say
+/// how far the probe reaches; no other tool claims to probe.
+fn assert_probe_disclosure(tool: &rmcp::model::Tool) {
+    let probes = matches!(
+        tool.name.as_ref(),
+        "remap_apply" | "remap_enable" | "remap_preview" | "remap_set"
+    );
+    let description = tool.description.as_deref().unwrap_or_default();
+    assert_eq!(
+        description.contains("loopback HTTP target refuses a TCP connection")
+            && description.contains("no other target is probed and no bytes are sent"),
+        probes,
+        "{}: {description}",
+        tool.name
+    );
 }
 
 fn assert_output_schema_contract(tool: &rmcp::model::Tool) -> Result<(), Box<dyn Error>> {

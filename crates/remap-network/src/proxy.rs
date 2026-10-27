@@ -3,9 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
-use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Full};
+use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE, HOST, HeaderName, LOCATION};
 use hyper::http::uri::{Authority, PathAndQuery};
@@ -20,6 +18,7 @@ use remap_core::{
 use rustls::pki_types::ServerName;
 use tokio::sync::OwnedSemaphorePermit;
 
+use crate::failure::{ProxyBody, RouteError, full_body};
 use crate::gateway::{PeerRouting, SelfRejectingConnector, pinned_tls_config};
 use crate::peer::{PeerResolveError, PeerResolver};
 use crate::stream_route::{Dialer, PinnedTls, SendError, StreamDial};
@@ -30,38 +29,13 @@ const HEALTH_HOST: &[u8] = b"_health.remap.invalid";
 const HEALTH_PATH_PREFIX: &str = "/.well-known/remap/health/";
 
 pub(crate) type ProxyClient = Client<HttpsConnector<SelfRejectingConnector>, Incoming>;
-type ProxyBody = BoxBody<Bytes, hyper::Error>;
 
-enum SelectedRoute {
-    Forward(Box<ForwardRoute>),
-    Moved(MovedTarget),
-}
-
-struct ForwardRoute {
-    upstream: HttpUpstream,
-    client: Dialer,
+/// The mapping a request's Host selected, copied out of the snapshot.
+struct Matched {
+    /// The mapping's canonical pattern, which every later error names.
+    pattern: String,
+    target: MappingTarget,
     landing: Option<LandingPath>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RouteError {
-    status: StatusCode,
-    code: &'static str,
-    message: &'static str,
-}
-
-impl RouteError {
-    const fn new(status: StatusCode, code: &'static str, message: &'static str) -> Self {
-        Self {
-            status,
-            code,
-            message,
-        }
-    }
-
-    fn response(self) -> Response<ProxyBody> {
-        gateway_error(self.status, self.code, self.message)
-    }
 }
 
 /// A client's WebSocket switch, admitted and waiting for the upstream's answer.
@@ -82,63 +56,59 @@ pub(crate) struct Router {
 }
 
 pub(crate) async fn route(
-    mut request: Request<Incoming>,
+    request: Request<Incoming>,
     router: Router,
 ) -> Result<Response<ProxyBody>, Infallible> {
-    let Router {
-        client,
-        snapshots,
-        upstream_timeout,
-        identity,
-        routing,
-        tunnels,
-    } = router;
-    if let Some(response) = health_response(&request, identity.as_ref()) {
+    if let Some(response) = health_response(&request, router.identity.as_ref()) {
         return Ok(response);
     }
-    let (upstream, client, landing) =
-        match select_upstream(&request, &snapshots, &routing, client).await {
-            Ok(SelectedRoute::Forward(route)) => {
-                let ForwardRoute {
-                    upstream,
-                    client,
-                    landing,
-                } = *route;
-                (upstream, client, landing)
+    let matched = match matched_mapping(&request, &router.snapshots) {
+        Ok(matched) => matched,
+        Err(error) => return Ok(error.response()),
+    };
+    let pattern = matched.pattern.clone();
+    Ok(forward(request, matched, &router)
+        .await
+        .unwrap_or_else(|error| error.response_for(&pattern)))
+}
+
+/// Routes a request that matched a mapping. Every failure from here on is
+/// reported with that mapping's pattern (ADR-0028).
+async fn forward(
+    mut request: Request<Incoming>,
+    matched: Matched,
+    router: &Router,
+) -> Result<Response<ProxyBody>, RouteError> {
+    let (upstream, dialer) = match matched.target {
+        MappingTarget::Moved(target) => return Ok(moved_response(&request, &target)),
+        MappingTarget::Http(upstream) => (upstream, Dialer::Pooled(router.client.clone())),
+        MappingTarget::Peer(service) => match service.transport() {
+            PeerTransport::PinnedTls => peer_upstream(&service, &router.routing).await?,
+            PeerTransport::PlaintextInTunnel => {
+                plaintext_peer_upstream(&service, &router.routing).await?
             }
-            Ok(SelectedRoute::Moved(target)) => return Ok(moved_response(&request, &target)),
-            Err(error) => return Ok(error.response()),
-        };
-    match landing_response(&request, landing.as_ref()) {
-        Ok(Some(response)) => return Ok(response),
-        Ok(None) => {}
-        Err(error) => return Ok(error.response()),
+        },
+        MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => {
+            return Err(RouteError::new(
+                StatusCode::MISDIRECTED_REQUEST,
+                "E_GATEWAY_DIRECT_TARGET",
+                "This name is a direct DNS mapping, not a routed HTTP service.",
+            ));
+        }
+    };
+    if let Some(response) = landing_response(&request, matched.landing.as_ref())? {
+        return Ok(response);
     }
-    let upgrade = match admit_upgrade(&mut request, &tunnels) {
-        Ok(upgrade) => upgrade,
-        Err(error) => return Ok(error.response()),
-    };
-    let request = match upstream_request(request, &upstream, upgrade.is_some()) {
-        Ok(request) => request,
-        Err(error) => return Ok(error.response()),
-    };
-    let response = match client.send(request, upstream_timeout).await {
+    let upgrade = admit_upgrade(&mut request, &router.tunnels)?;
+    let request = upstream_request(request, &upstream, upgrade.is_some())?;
+    match dialer.send(request, router.upstream_timeout).await {
         Ok(response) => match upgrade {
-            Some(pending) => switch_response(response, pending, &tunnels),
+            Some(pending) => switch_response(response, pending, &router.tunnels),
             None => sanitize_response(response),
         },
-        Err(SendError::Upstream) => gateway_error(
-            StatusCode::BAD_GATEWAY,
-            "E_GATEWAY_UPSTREAM",
-            "The selected service did not accept the routed request.",
-        ),
-        Err(SendError::Timeout) => gateway_error(
-            StatusCode::GATEWAY_TIMEOUT,
-            "E_GATEWAY_TIMEOUT",
-            "The selected service did not answer before the routing deadline.",
-        ),
-    };
-    Ok(response)
+        Err(SendError::Upstream(cause)) => Err(RouteError::upstream(cause)),
+        Err(SendError::Timeout) => Err(RouteError::timeout()),
+    }
 }
 
 fn health_response(
@@ -166,14 +136,11 @@ fn health_response(
         .ok()
 }
 
-/// The upstream for this request and how to reach it: the shared client for
-/// an HTTP mapping, a Supgang stream or the advertised key's client for a peer.
-async fn select_upstream(
+/// The mapping this request's Host selects, or why there is none.
+fn matched_mapping(
     request: &Request<Incoming>,
     snapshots: &SnapshotStore,
-    routing: &PeerRouting,
-    client: ProxyClient,
-) -> Result<SelectedRoute, RouteError> {
+) -> Result<Matched, RouteError> {
     let name = client_name(request.headers())?;
     let snapshot = snapshots.load();
     let mapping = snapshot.resolve(&name).ok_or_else(|| {
@@ -183,28 +150,11 @@ async fn select_upstream(
             "This name is not mapped to a routed HTTP service.",
         )
     })?;
-    if let MappingTarget::Moved(target) = mapping.target() {
-        return Ok(SelectedRoute::Moved(target.clone()));
-    }
-    let selected = match mapping.target() {
-        MappingTarget::Http(upstream) => Ok((upstream.clone(), Dialer::Pooled(client))),
-        MappingTarget::Peer(service) => match service.transport() {
-            PeerTransport::PinnedTls => peer_upstream(service, routing).await,
-            PeerTransport::PlaintextInTunnel => plaintext_peer_upstream(service, routing).await,
-        },
-        MappingTarget::Moved(_) | MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => {
-            Err(RouteError::new(
-                StatusCode::MISDIRECTED_REQUEST,
-                "E_GATEWAY_DIRECT_TARGET",
-                "This name is a direct DNS mapping, not a routed HTTP service.",
-            ))
-        }
-    }?;
-    Ok(SelectedRoute::Forward(Box::new(ForwardRoute {
-        upstream: selected.0,
-        client: selected.1,
+    Ok(Matched {
+        pattern: mapping.pattern().to_string(),
+        target: mapping.target().clone(),
         landing: mapping.landing().cloned(),
-    })))
+    })
 }
 
 fn moved_response(request: &Request<Incoming>, target: &MovedTarget) -> Response<ProxyBody> {
@@ -443,24 +393,23 @@ fn switch_response(
     mut response: Response<Incoming>,
     pending: PendingUpgrade,
     tunnels: &Tunnels,
-) -> Response<ProxyBody> {
+) -> Result<Response<ProxyBody>, RouteError> {
     if response.status() != StatusCode::SWITCHING_PROTOCOLS {
         return sanitize_response(response);
     }
     if !tunnel::upgrades_to_websocket(response.headers()) {
-        return RouteError::new(
+        return Err(RouteError::new(
             StatusCode::BAD_GATEWAY,
             "E_GATEWAY_UPGRADE",
             "The selected service switched to a protocol other than the WebSocket requested.",
-        )
-        .response();
+        ));
     }
     let upstream = hyper::upgrade::on(&mut response);
     tunnels.spawn(pending.permit, pending.client, upstream);
     let (mut parts, body) = response.into_parts();
     remove_hop_by_hop(&mut parts.headers);
     tunnel::mark_websocket(&mut parts.headers);
-    Response::from_parts(parts, body.boxed())
+    Ok(Response::from_parts(parts, body.boxed()))
 }
 
 fn upstream_request(
@@ -534,20 +483,19 @@ fn upstream_path(base_path: &str, incoming: &Uri) -> Result<PathAndQuery, RouteE
     })
 }
 
-fn sanitize_response(response: Response<Incoming>) -> Response<ProxyBody> {
+fn sanitize_response(response: Response<Incoming>) -> Result<Response<ProxyBody>, RouteError> {
     let (mut parts, body) = response.into_parts();
     if parts.status == StatusCode::SWITCHING_PROTOCOLS {
         // Only `switch_response` relays a switch, and only one the client
         // asked for; any other would leave the client on a dead protocol.
-        return RouteError::new(
+        return Err(RouteError::new(
             StatusCode::BAD_GATEWAY,
             "E_GATEWAY_UPGRADE",
             "The selected service switched protocols without being asked to.",
-        )
-        .response();
+        ));
     }
     remove_hop_by_hop(&mut parts.headers);
-    Response::from_parts(parts, body.boxed())
+    Ok(Response::from_parts(parts, body.boxed()))
 }
 
 fn remove_hop_by_hop(headers: &mut HeaderMap) {
@@ -574,23 +522,4 @@ fn remove_hop_by_hop(headers: &mut HeaderMap) {
     ] {
         headers.remove(name);
     }
-}
-
-fn gateway_error(
-    status: StatusCode,
-    code: &'static str,
-    message: &'static str,
-) -> Response<ProxyBody> {
-    let body = format!("Remap could not route this request.\n\n{code}: {message}\n");
-    Response::builder()
-        .status(status)
-        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(full_body(body))
-        .unwrap_or_else(|_error| Response::new(full_body("Remap routing error.\n")))
-}
-
-fn full_body(value: impl Into<Bytes>) -> ProxyBody {
-    Full::new(value.into())
-        .map_err(|never| match never {})
-        .boxed()
 }
