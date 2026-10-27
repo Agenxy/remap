@@ -138,9 +138,10 @@ struct PortableReleaseVerifier: Sendable {
         """
     #else
         static let releasePublicKey = """
-        ssh-ed25519 \
-        AAAAC3NzaC1lZDI1NTE5AAAAIDz/2DGz1HxwE5JHhxzabvtiXAKvV5W8tsBzGV3R15xg \
-        remap-release-development-only
+        ecdsa-sha2-nistp256 \
+        AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBDT3ePLJbiA9xE1OHa\
+        sjbK1YJnRIhIiRmS7U0kUi615JcsNjDN82qNATyro57NtdaIZYeBbF1dTk+xa7sHEybeA= \
+        remap-release-v2
         """
     #endif
 

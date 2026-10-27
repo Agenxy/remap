@@ -54,11 +54,11 @@ Download these four files from the same Remap release:
 - `remap-release-installer.pem`
 
 Verify the public-key fingerprint is
-`SHA256:GoJridmNxBJxsXWfCvP1SxQyMpWl8cWX0dGOSB1WjSc`, then verify the detached
-package signature under the `remap-package-v1` namespace. That fingerprint is
-still the development key's: a public release pins a P-256 key held in the
-building Mac's Secure Enclave, and no release is built until it is pinned. The
-complete commands are in [the macOS tutorial](docs/tutorials/first-map-macos.md).
+`SHA256:UNkUo9rEtVK+N92onnYn1C9d6U2cCkuTOYFvZIW/dgQ`, then verify the detached
+package signature under the `remap-package-v1` namespace. That key is a P-256
+key held in the release-building Mac's Secure Enclave, and every signature it
+made needed the owner's Touch ID or login password. The complete commands are
+in [the macOS tutorial](docs/tutorials/first-map-macos.md).
 This signature authenticates the downloaded package without relying on Apple or
 another paid certificate authority. The complete XAR also carries the pinned self-signed
 `Remap Release Installer` certificate so Apple Installer validates every

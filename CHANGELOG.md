@@ -48,8 +48,9 @@ platform claims separate.
   `docs/release/remap-development-signing-key.pub`; each package's installer compiles in
   only its own kind's key, and `make install-package-macos` checks each kind against its
   own pin. The `Remap Release Installer` identity stays RSA in the login keychain, because
-  the Enclave cannot hold RSA. The release pin is unchanged until the owner pins the new
-  key, so no release can be built before then. The README and release evidence also
+  the Enclave cannot hold RSA. The release pin is now that Enclave key,
+  `remap-release-v2`, fingerprint `SHA256:UNkUo9rEtVK+N92onnYn1C9d6U2cCkuTOYFvZIW/dgQ`,
+  created on the owner's release-building Mac. The README and release evidence also
   quoted the lost August key's fingerprint; they now quote the release pin's.
 - Fixed the macOS resolver supervisor falling back to ordinary DNS and never
   re-arming until `remapd` restarted (ADR-0025). The daemon reports the

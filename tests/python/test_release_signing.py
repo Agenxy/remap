@@ -122,11 +122,14 @@ class ReleaseSigningTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "remap-release-development-only"):
             preflight(self.directory, ReleaseSigning(self._blob(b"\x30enclave blob")))
 
-    def test_the_repository_release_pin_cannot_sign_a_release_yet(self) -> None:
-        """Until the owner pins the Secure Enclave key, no release can be built."""
-        blob = self._blob(b"\x30enclave blob")
-        with self.assertRaisesRegex(RuntimeError, "remap-release-development-only"):
-            preflight(REPOSITORY, ReleaseSigning(blob))
+    def test_the_repository_release_pin_is_the_enclave_key(self) -> None:
+        """The pinned release key is the P-256 Enclave key, not the development key."""
+        release = (REPOSITORY / "docs/release/remap-release-signing-key.pub").read_text(
+            encoding="utf-8"
+        )
+        self.assertTrue(release.startswith("ecdsa-sha2-nistp256 "))
+        self.assertTrue(release.rstrip("\n").endswith(" remap-release-v2"))
+        preflight(REPOSITORY, ReleaseSigning(self._blob(b"\x30enclave blob")))
 
     def test_a_release_pin_must_be_p256_and_distinct_from_development(self) -> None:
         _, development = self._real_pins()

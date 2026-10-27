@@ -72,10 +72,10 @@ and it refuses an exportable private-key file outright. The same signer produces
 the inner `release-manifest.json.sig` under namespace `remap-release`.
 
 The corresponding public key is committed at
-`docs/release/remap-release-signing-key.pub`. Until the owner pins the Secure
-Enclave key there, that file still holds the development key, whose SHA-256
-fingerprint is `SHA256:GoJridmNxBJxsXWfCvP1SxQyMpWl8cWX0dGOSB1WjSc`, and a release
-build refuses it because it is marked `remap-release-development-only`.
+`docs/release/remap-release-signing-key.pub`. It is the Secure Enclave key
+`remap-release-v2`, pinned on 2026-10-27, and its SHA-256 fingerprint is
+`SHA256:UNkUo9rEtVK+N92onnYn1C9d6U2cCkuTOYFvZIW/dgQ`. A release build refuses any
+pin marked `remap-release-development-only`.
 
 A development package, `dist/Remap-0.2.0-arm64-development.pkg`, is built with
 `REMAP_DEVELOPMENT_PACKAGE=1` and signed by the passphrase-less file key named by

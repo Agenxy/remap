@@ -30,14 +30,13 @@ Mac's Secure Enclave and cannot leave it; every signature it makes needed its ow
 Touch ID or login password. Its public key is an `ecdsa-sha2-nistp256` line, and
 `ssh-keygen` lists it as `(ECDSA)`. The name in the line says which key it is: a key
 marked `remap-release-development-only` signs packages built for the machine that
-built them, and is not the key a public release carries. Until the Secure Enclave key
-is pinned, the release pin is still that development key, and no release can be built
-or verified against it.
+built them, and is not the key a public release carries. The release key is named
+`remap-release-v2`.
 
 The public-key fingerprint must be exactly:
 
 ```text
-256 SHA256:GoJridmNxBJxsXWfCvP1SxQyMpWl8cWX0dGOSB1WjSc remap-release-development-only (ED25519)
+256 SHA256:UNkUo9rEtVK+N92onnYn1C9d6U2cCkuTOYFvZIW/dgQ remap-release-v2 (ECDSA)
 ```
 
 From that download directory, check it:
