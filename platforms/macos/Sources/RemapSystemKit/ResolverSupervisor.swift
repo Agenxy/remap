@@ -17,40 +17,67 @@ public enum ResolverSupervisorState: Equatable, Sendable {
 /// re-observes. Every other failure, such as a channel refusal, an activation
 /// mismatch, or a configuration conflict, is a fault and restores ordinary DNS
 /// at once. Every bypass records its reason durably.
+///
+/// ADR-0030: returning is damped. After a bypass the daemon must answer
+/// continuously for the period `rearmDamping` sets before Remap re-arms, so
+/// one lucky exchange on a loaded Mac cannot flip DNS back and forth.
 public final class ResolverSupervisor: Sendable {
     private let reconciler: ResolverReconciler
     private let monitor: any ResolverChangeMonitoring
-    private let interval: Duration
-    private let retryInterval: Duration
-    private let failureGrace: Duration
+    private let timing: ResolverSupervisorTiming
     private let bypassLog: any ResolverBypassRecording
     private let observe: @Sendable (ResolverSupervisorState) -> Void
-    /// Measures awake time, so hours of system sleep never exhaust the window.
-    private let clock = SuspendingClock()
 
-    public init(
+    private var clock: any ResolverSupervisorClock {
+        timing.clock
+    }
+
+    public convenience init(
         reconciler: ResolverReconciler,
         monitor: any ResolverChangeMonitoring = ResolverChangeMonitor(),
         interval: Duration = .seconds(5),
         retryInterval: Duration = .milliseconds(250),
         failureGrace: Duration = .seconds(20),
+        rearmDamping: ResolverRearmDamping = .standard,
         bypassLog: any ResolverBypassRecording = DiscardedResolverBypassLog(),
         observe: @escaping @Sendable (ResolverSupervisorState) -> Void = { _ in }
     ) {
-        precondition(failureGrace >= .zero)
-        precondition(retryInterval > .zero)
+        self.init(
+            reconciler: reconciler,
+            monitor: monitor,
+            timing: ResolverSupervisorTiming(
+                interval: interval,
+                retryInterval: retryInterval,
+                failureGrace: failureGrace,
+                rearmDamping: rearmDamping
+            ),
+            bypassLog: bypassLog,
+            observe: observe
+        )
+    }
+
+    init(
+        reconciler: ResolverReconciler,
+        monitor: any ResolverChangeMonitoring,
+        timing: ResolverSupervisorTiming,
+        bypassLog: any ResolverBypassRecording = DiscardedResolverBypassLog(),
+        observe: @escaping @Sendable (ResolverSupervisorState) -> Void = { _ in }
+    ) {
+        precondition(timing.failureGrace >= .zero)
+        precondition(timing.retryInterval > .zero)
         self.reconciler = reconciler
         self.monitor = monitor
-        self.interval = interval
-        self.retryInterval = retryInterval
-        self.failureGrace = failureGrace
+        self.timing = timing
         self.bypassLog = bypassLog
         self.observe = observe
     }
 
     /// Runs until its task is cancelled, coalescing native events with periodic health checks.
     public func run() async {
-        var progress = SupervisorProgress(bypass: bypassLog.lastBypass())
+        var progress = SupervisorProgress(
+            bypass: bypassLog.lastBypass(),
+            backoff: ResolverRearmBackoff(timing.rearmDamping)
+        )
         let monitorAvailable: Bool
         do {
             try monitor.start()
@@ -59,7 +86,7 @@ public final class ResolverSupervisor: Sendable {
             monitorAvailable = false
         }
         guard await cycle(monitorAvailable: monitorAvailable, progress: &progress) else { return }
-        for await _ in triggerStream(changes: monitor.events, interval: interval) {
+        for await _ in triggerStream(changes: monitor.events, interval: timing.interval) {
             guard !Task.isCancelled else { return }
             guard await cycle(monitorAvailable: monitorAvailable, progress: &progress) else { return }
         }
@@ -98,7 +125,7 @@ public final class ResolverSupervisor: Sendable {
             guard code == networkUnobservedCode else {
                 break
             }
-            let remaining = failureGrace - failure.start.duration(to: clock.now)
+            let remaining = timing.failureGrace - (clock.now - failure.start)
             if remaining <= .zero {
                 break
             }
@@ -106,7 +133,7 @@ public final class ResolverSupervisor: Sendable {
                 return false
             }
             do {
-                try await Task.sleep(for: min(retryInterval, remaining))
+                try await clock.sleep(for: min(timing.retryInterval, remaining))
             } catch {
                 return false
             }
@@ -133,13 +160,15 @@ public final class ResolverSupervisor: Sendable {
         } else {
             nil
         }
+        progress.backoff.noteBypass(at: clock.now, policy: timing.rearmDamping)
         let payload = ResolverBypassPayload(
             reasonCode: failure.code,
             outcomeCode: code,
             failingSinceMilliseconds: unixMilliseconds(failure.startDate),
             bypassedAtMilliseconds: unixMilliseconds(Date()),
             releasePending: release != .released,
-            unreleasedActivationID: unreleased
+            unreleasedActivationID: unreleased,
+            rearmAfterHealthyMilliseconds: awakeMilliseconds(progress.backoff.required)
         )
         bypassLog.record(payload)
         progress.bypass = payload
@@ -153,27 +182,52 @@ public final class ResolverSupervisor: Sendable {
         return true
     }
 
-    /// Keeps ordinary DNS active while probing for a healthy daemon. The
-    /// reconciler publishes and verifies a complete generation before it
-    /// commits the retained prepared activation back to SystemConfiguration.
+    /// Keeps ordinary DNS active while probing for a healthy daemon. Only
+    /// once the daemon has answered every probe for the period the backoff
+    /// requires does the reconciler publish and verify a complete generation
+    /// and commit the retained prepared activation back to SystemConfiguration.
+    /// Any failed probe, or a failed reconciliation at the end of the period,
+    /// starts the period again; neither counts as a further bypass.
     private func recoverFromBypass(
         monitorAvailable: Bool,
         progress: inout SupervisorProgress
     ) async -> Bool {
+        var healthySince: Duration?
         while !Task.isCancelled {
             do {
-                try await Task.sleep(for: retryInterval)
+                try await clock.sleep(for: timing.retryInterval)
             } catch {
                 return false
             }
-            let state = await reconcile(monitorAvailable: monitorAvailable)
-            if state == .ready || state == .degraded(code: monitorDegradedCode) {
-                report(state, progress: &progress)
-                noteRearmed(progress: &progress)
-                return true
+            guard await daemonAnswers() else {
+                healthySince = nil
+                continue
             }
+            let since = healthySince ?? clock.now
+            healthySince = since
+            guard clock.now - since >= progress.backoff.required else {
+                continue
+            }
+            let state = await reconcile(monitorAvailable: monitorAvailable)
+            guard state == .ready || state == .degraded(code: monitorDegradedCode) else {
+                healthySince = nil
+                continue
+            }
+            report(state, progress: &progress)
+            noteRearmed(progress: &progress)
+            return true
         }
         return false
+    }
+
+    /// Whether the daemon answered a health probe that changes nothing.
+    private func daemonAnswers() async -> Bool {
+        do {
+            try await reconciler.probe()
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func reconcile(monitorAvailable: Bool) async -> ResolverSupervisorState {
@@ -186,6 +240,7 @@ public final class ResolverSupervisor: Sendable {
     }
 
     private func noteRearmed(progress: inout SupervisorProgress) {
+        progress.backoff.noteArmed(at: clock.now)
         guard let bypass = progress.bypass, bypass.rearmedAtMilliseconds == nil else { return }
         let rearmed = bypass.rearmed(atMilliseconds: unixMilliseconds(Date()))
         bypassLog.record(rearmed)
@@ -210,11 +265,12 @@ private struct SupervisorProgress {
     var previous: ResolverSupervisorState?
     var failure: FailureWindow?
     var bypass: ResolverBypassPayload?
+    var backoff: ResolverRearmBackoff
 }
 
-/// The first failure of an unbroken run, measured on the suspending clock.
+/// The first failure of an unbroken run, in the supervisor clock's awake time.
 private struct FailureWindow {
-    let start: SuspendingClock.Instant
+    let start: Duration
     let startDate: Date
     let code: String
 

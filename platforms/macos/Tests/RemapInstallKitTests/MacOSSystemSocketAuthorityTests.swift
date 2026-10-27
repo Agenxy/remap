@@ -84,13 +84,16 @@ func onlyInstalledImagesMayUseTheCompleteLegacySystemSocketContract() throws {
         program: resolverProgram.value
     )
 
+    // Images of that age also declare the legacy Background class, which
+    // only an installed generation may carry (ADR-0030).
     #expect(throws: InstallError.self) {
         try MacOSLaunchdPropertyList.validate(
             legacyDaemon,
             kind: .daemon,
             configuration: configuration,
             account: account,
-            programPath: daemonProgram
+            programPath: daemonProgram,
+            scheduling: .installed
         )
     }
     #expect(throws: InstallError.self) {
@@ -99,7 +102,8 @@ func onlyInstalledImagesMayUseTheCompleteLegacySystemSocketContract() throws {
             kind: .resolver,
             configuration: configuration,
             account: account,
-            programPath: resolverProgram
+            programPath: resolverProgram,
+            scheduling: .installed
         )
     }
     try MacOSLaunchdPropertyList.validate(
@@ -108,7 +112,8 @@ func onlyInstalledImagesMayUseTheCompleteLegacySystemSocketContract() throws {
         configuration: configuration,
         account: account,
         programPath: daemonProgram,
-        contract: .legacyDataDirectorySystemSocket
+        contract: .legacyDataDirectorySystemSocket,
+        scheduling: .installed
     )
     try MacOSLaunchdPropertyList.validate(
         legacyResolver,
@@ -116,7 +121,8 @@ func onlyInstalledImagesMayUseTheCompleteLegacySystemSocketContract() throws {
         configuration: configuration,
         account: account,
         programPath: resolverProgram,
-        contract: .legacyDataDirectorySystemSocket
+        contract: .legacyDataDirectorySystemSocket,
+        scheduling: .installed
     )
 }
 
@@ -124,7 +130,7 @@ private func legacyDaemonPlist(
     configuration: MacOSInstallConfiguration,
     program: String
 ) throws -> Data {
-    let data = try daemonPlist(configuration: configuration, program: program)
+    let data = try daemonPlist(configuration: configuration, program: program, processType: "Background")
     var document = try #require(
         PropertyListSerialization.propertyList(from: data, options: [], format: nil)
             as? [String: Any]
@@ -146,7 +152,7 @@ private func legacyResolverPlist(
     configuration: MacOSInstallConfiguration,
     program: String
 ) throws -> Data {
-    let data = try resolverPlist(configuration: configuration, program: program)
+    let data = try resolverPlist(configuration: configuration, program: program, processType: "Background")
     var document = try #require(
         PropertyListSerialization.propertyList(from: data, options: [], format: nil)
             as? [String: Any]

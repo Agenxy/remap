@@ -121,6 +121,10 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
         account: MacOSAccount,
         allowInstalledCompatibility: Bool
     ) throws -> ([MacOSLaunchdServiceImage], MacOSLaunchdAuthorityContract) {
+        // ADR-0030: generations installed before the Interactive scheduling
+        // class still declare Background, and rollback must still load them.
+        // Package inputs are always validated as generated definitions.
+        let scheduling: MacOSLaunchdSchedulingAdmission = allowInstalledCompatibility ? .installed : .generated
         do {
             return try (loadServices(
                 authority: authority,
@@ -128,7 +132,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
                 root: root,
                 configuration: configuration,
                 account: account,
-                contract: .launchdOwnedSystemSocket
+                contract: .launchdOwnedSystemSocket,
+                scheduling: scheduling
             ), .launchdOwnedSystemSocket)
         } catch where allowInstalledCompatibility {
             return try (loadServices(
@@ -137,7 +142,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
                 root: root,
                 configuration: configuration,
                 account: account,
-                contract: .legacyDataDirectorySystemSocket
+                contract: .legacyDataDirectorySystemSocket,
+                scheduling: scheduling
             ), .legacyDataDirectorySystemSocket)
         }
     }
@@ -148,7 +154,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
         root: InstallAbsolutePath,
         configuration: MacOSInstallConfiguration,
         account: MacOSAccount,
-        contract: MacOSLaunchdAuthorityContract
+        contract: MacOSLaunchdAuthorityContract,
+        scheduling: MacOSLaunchdSchedulingAdmission
     ) throws -> [MacOSLaunchdServiceImage] {
         try MacOSLaunchdServiceKind.allCases.map { kind in
             try loadService(
@@ -158,7 +165,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
                 root: root,
                 configuration: configuration,
                 account: account,
-                contract: contract
+                contract: contract,
+                scheduling: scheduling
             )
         }
     }
@@ -281,7 +289,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
         root: InstallAbsolutePath,
         configuration: MacOSInstallConfiguration,
         account: MacOSAccount,
-        contract: MacOSLaunchdAuthorityContract
+        contract: MacOSLaunchdAuthorityContract,
+        scheduling: MacOSLaunchdSchedulingAdmission
     ) throws -> MacOSLaunchdServiceImage {
         let plistEntry = try InstallRelativePath(kind.plistEntry)
         let programEntry = try InstallRelativePath(kind.programEntry)
@@ -297,7 +306,8 @@ struct MacOSGenerationImageStore: MacOSGenerationImageLoading, Sendable {
             configuration: configuration,
             account: account,
             programPath: programPath,
-            contract: contract
+            contract: contract,
+            scheduling: scheduling
         )
         return MacOSLaunchdServiceImage(kind: kind, plistPath: plistPath, programPath: programPath)
     }

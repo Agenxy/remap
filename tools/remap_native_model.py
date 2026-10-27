@@ -55,7 +55,8 @@ def launchd_document(
         "GroupName": group_name,
         "RunAtLoad": True,
         "KeepAlive": True,
-        "ProcessType": "Background",
+        # ADR-0030: the system DNS path never runs in the Background band.
+        "ProcessType": "Interactive",
         "ThrottleInterval": 5,
         "Umask": 0o077,
         "WorkingDirectory": str(data_dir),

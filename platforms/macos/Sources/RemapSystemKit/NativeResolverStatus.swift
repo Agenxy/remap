@@ -66,6 +66,11 @@ public struct NativeResolverStatus: Encodable, Sendable {
             lines.append("    Re-armed    \(statusTimestamp(rearmed))")
         } else {
             lines.append("    Re-armed    not yet; the Mac uses ordinary DNS")
+            if let required = bypass.rearmAfterHealthyMilliseconds {
+                lines.append(
+                    "    Next try    after \(statusDuration(required)) of continuous daemon health"
+                )
+            }
         }
         if bypass.releasePending, bypass.rearmedAtMilliseconds == nil {
             lines.append("    Release     pending; the next reconciliation retries it")
@@ -76,4 +81,13 @@ public struct NativeResolverStatus: Encodable, Sendable {
 
 private func statusTimestamp(_ milliseconds: UInt64) -> String {
     Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1000).formatted(.iso8601)
+}
+
+/// Whole seconds, or milliseconds below one second.
+private func statusDuration(_ milliseconds: UInt64) -> String {
+    if milliseconds < 1000 {
+        return "\(milliseconds) ms"
+    }
+    let seconds = (milliseconds + 500) / 1000
+    return seconds == 1 ? "1 second" : "\(seconds) seconds"
 }

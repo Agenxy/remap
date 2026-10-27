@@ -105,10 +105,12 @@ private struct LoggedResolverBypassLog: ResolverBypassRecording {
         let reason = payload.reasonCode
         let outcome = payload.outcomeCode
         let pending = payload.releasePending
+        let healthy = payload.rearmAfterHealthyMilliseconds ?? 0
         if payload.rearmedAtMilliseconds == nil {
             logger.fault(
                 "resolver bypass \(reason, privacy: .public) \(outcome, privacy: .public) release pending \(pending)"
             )
+            logger.notice("resolver re-arms after \(healthy) ms of continuous daemon health")
         } else {
             logger.notice("resolver re-armed after a bypass caused by \(reason, privacy: .public)")
         }
