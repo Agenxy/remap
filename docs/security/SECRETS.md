@@ -1,13 +1,16 @@
 # Where Remap's secrets live
 
 Every private key Remap uses or creates, what actually protects it, and how far that is
-from where it should be. Measured on macOS 27 on 2026-09-24, not inferred from design.
+from where it should be. Measured on macOS 27 on 2026-09-24, not inferred from design;
+the release key row was changed on 2026-10-27 (ADR-0029), and what of it was measured is
+said below.
 
 ## The inventory
 
 | Secret | Where it lives | What protects it | Used for |
 | --- | --- | --- | --- |
-| Release package signing key (Ed25519) | `~/.ssh/remap_release_dev_ed25519`, an ordinary file, mode 0600 | File permissions and whole-disk encryption. **No passphrase.** | The detached `.pkg.sig` that proves the package bytes are the ones that were built |
+| Release package signing key (P-256) | The release-building Mac's **Secure Enclave**. The owner keeps a blob file, mode 0600, that only that Enclave can use | The Enclave, which will not export it, and **user presence on every signature**: Touch ID or the login password | The detached `.pkg.sig` of a release package and its inner `release-manifest.json.sig` |
+| Development package signing key (Ed25519) | `~/.ssh/remap_release_dev_ed25519`, an ordinary file, mode 0600 | File permissions and whole-disk encryption. **No passphrase.** | The same two signatures on a development package, and nothing else |
 | `Remap Release Installer` (RSA and certificate) | The building Mac's **login keychain** | The login keychain, plus a per-key access list naming which programs may use it | `productsign`, which is what lets another Mac's Installer accept the package |
 | `Remap Build Signing` | The building Mac's **login keychain** | The login keychain | Signing products on a release build |
 | `Remap Local Codesign` | The installing Mac's **System keychain** | Root ownership | Signing the shipped products on the machine that receives them |
@@ -15,15 +18,20 @@ from where it should be. Measured on macOS 27 on 2026-09-24, not inferred from d
 
 Two things in the package are not secrets and deserve saying so. The products inside a
 portable package are **ad hoc signed**, which involves no key at all; the installing Mac
-gives them a real identity. And the public half of the release key is pinned in three
-places that must move together: `docs/release/remap-release-signing-key.pub`, the Swift
-verifier in `PortableReleaseManifest.swift`, and the fingerprint in the macOS tutorial.
+gives them a real identity. And the public half of each signing key is pinned, and the
+two pins are never mixed. The release key is pinned in
+`docs/release/remap-release-signing-key.pub`, in the release branch of the Swift verifier
+in `PortableReleaseManifest.swift`, and by fingerprint in the macOS tutorial, the README,
+and `docs/release/EVIDENCE.md`. The development key is pinned in
+`docs/release/remap-development-signing-key.pub` and in the verifier's development branch.
 
-One of those three ships **inside** every package, because the portable installer that
-runs on the target verifies the release manifest with its own embedded copy. So rotating
-the release key invalidates every package built before the rotation, and the symptom is
-a refusal from the package's own postinstall rather than anything a signature check on the
-outside would catch:
+The verifier copy ships **inside** every package, because the portable installer that
+runs on the target verifies the release manifest with its own embedded copy, and exactly
+one copy is compiled in: a development package's installer knows only the development
+key, and a release package's only the release key. So rotating the release key
+invalidates every package built before the rotation, and the symptom is a refusal from
+the package's own postinstall rather than anything a signature check on the outside would
+catch:
 
 ```text
 Installation stopped safely: Installer integrity validation failed:
@@ -37,7 +45,8 @@ nothing can keep an artifact that has already been built in step with them.
 
 A development package touches **no keychain on the machine that builds it**. It skips the
 Apple installer signature, because it is installed on the machine that built it, and the
-products are ad hoc signed. The only secret it uses is the Ed25519 file above.
+products are ad hoc signed. The only secret it uses is the development Ed25519 file
+above, and a release build refuses that file, or any other exportable private key, outright.
 
 That is worth stating precisely, because it is easy to misread as an improvement. The
 keychain was not removed by protecting the key better. It was removed by using a key that
@@ -50,16 +59,36 @@ result is for local use, and why the artifact is named `-development`.
 
 ## Where this should be
 
-None of the rows above meet the standard. A file is readable by anything running as the
-owner. A login keychain is better, and it still holds exportable key material and asks a
-human at exactly the moment a human cannot evaluate the question.
-
 The standard is that a signing key is generated inside hardware that will not surrender
 it: the Secure Enclave on Apple silicon, a TPM elsewhere, behind one boundary with a
 per-platform implementation. Remap mints and holds its own identity, in that hardware
 where the machine has it, and that path must work on a machine that has never heard of
-any other Agenxy tool. Until it does, no Remap release may describe its signing as
-hardware backed, and this page is the statement of what it is instead.
+any other Agenxy tool.
+
+The release package signing key now meets it on the Mac that builds releases.
+`remap-release-key create` asks that Mac's Secure Enclave for a P-256 key whose every use
+needs the owner present, and writes only the Enclave's device-bound blob, refusing to
+overwrite one. The private key never exists outside the Enclave, so there is nothing to
+copy, back up, or lose a passphrase for. On 2026-10-27 a key was created this way on
+macOS 27 and its public key read back from the blob; a signature from it, which needs a
+person to answer Touch ID, was not exercised in that change, and is the first thing the
+owner's first release build proves.
+
+That is the only row that meets it, and only the detached signatures may be described as
+hardware backed. The rest of the table does not:
+
+- `Remap Release Installer` stays an RSA identity in the login keychain. The Secure
+  Enclave holds only P-256 keys, and Apple's installer signature requires RSA, so this
+  key cannot move there. A login keychain still holds exportable key material and asks a
+  human at exactly the moment a human cannot evaluate the question.
+- The development key is a file, on purpose, and is accepted only by a development
+  package's installer.
+- The other keychain identities are where they were.
+- Nothing yet covers a machine without a Secure Enclave. A TPM path is still owed.
+
+The device-bound blob has a cost the owner accepts: if the release-building Mac is lost or
+its Enclave is reset, the release key is gone. The recovery is rotation, a new key on
+another Mac and a new pin, and every package built before it keeps needing the old pin.
 
 ## What Supgang is, and is not
 

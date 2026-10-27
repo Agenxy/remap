@@ -25,9 +25,14 @@ Download these files from the same Remap release into one directory:
 - `remap-release-signing-key.pub`
 - `remap-release-installer.pem`
 
-The public-key fingerprint must be exactly this. The name in it says which key
-signed the download: a key marked `remap-release-development-only` signs packages
-built for the machine that built them, and is not the key a public release carries.
+A public release is signed by a P-256 key that was generated inside the building
+Mac's Secure Enclave and cannot leave it; every signature it makes needed its owner's
+Touch ID or login password. Its public key is an `ecdsa-sha2-nistp256` line, and
+`ssh-keygen` lists it as `(ECDSA)`. The name in the line says which key it is: a key
+marked `remap-release-development-only` signs packages built for the machine that
+built them, and is not the key a public release carries. Until the Secure Enclave key
+is pinned, the release pin is still that development key, and no release can be built
+or verified against it.
 
 The public-key fingerprint must be exactly:
 
@@ -67,7 +72,7 @@ pkgutil --check-signature Remap-0.2.0-arm64.pkg
 The signer must be `Remap Release Installer` with SHA-256 fingerprint
 `44C5C1BFEE4479F03AFF134F1A8E7971EA55C981698CFC6E0E7A100CE4239618`.
 The certificate is self-signed and is therefore not publicly Apple-trusted;
-the exact fingerprint and detached Ed25519 signature provide the release
+the exact fingerprint and detached release-key signature provide the release
 identity without a paid Apple account.
 
 ## Trust the release installer certificate, once per Mac

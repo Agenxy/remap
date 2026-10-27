@@ -9,12 +9,15 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from tools.remap_macos_portable_package import (
-    DEVELOPMENT_PACKAGE_VARIABLE,
-    pinned_release_key_is_development,
-    verify_detached_package_signature,
-)
+from tools.remap_macos_portable_package import verify_detached_package_signature
 from tools.remap_macos_release_installer_signing import verify_package_signature
+from tools.remap_release_signing import (
+    DEVELOPMENT_PACKAGE_VARIABLE,
+    RELEASE_PIN,
+    PackageKind,
+    is_development_marked,
+    pinned_public_key,
+)
 
 STAGING_PARENT = Path("/private/var/tmp")
 STAGING_PREFIX = "org.agenxy.Remap.install-"
@@ -22,23 +25,15 @@ STAGING_PREFIX = "org.agenxy.Remap.install-"
 
 def install_verified_package(root: Path, package: Path, signature: Path) -> None:
     """Reverify exact root-owned bytes before invoking Apple's installer."""
-    public_key = (root / "docs/release/remap-release-signing-key.pub").read_text(
-        encoding="utf-8"
-    )
+    kind = selected_package_kind(root, package)
+    public_key = pinned_public_key(root, kind)
+    development = kind is PackageKind.DEVELOPMENT
     installer_certificate = root / "docs/release/remap-release-installer.pem"
     # A development package carries no Apple installer signature, because producing one
     # needs a key in a keychain and a person to release it. Apple's installer accepts an
     # unsigned package, unlike one signed by a certificate the machine does not trust,
     # which it refuses in preflight. What still has to hold is the detached signature over
-    # the exact root-owned bytes, which is checked below either way.
-    development = pinned_release_key_is_development(root)
-    if development and not os.environ.get(DEVELOPMENT_PACKAGE_VARIABLE):
-        raise RuntimeError(
-            "this package is pinned to a development key, so it carries no installer "
-            + "signature and its detached signature proves only that the bytes came "
-            + f"from the machine that built them. Set {DEVELOPMENT_PACKAGE_VARIABLE}=1 "
-            + "to install one deliberately."
-        )
+    # the exact root-owned bytes, checked below against its own kind's pin either way.
     verify_detached_package_signature(package, signature, public_key=public_key)
     if development:
         print(
@@ -87,6 +82,30 @@ def install_verified_package(root: Path, package: Path, signature: Path) -> None
         )
     finally:
         _cleanup(staging, staged_package)
+
+
+def selected_package_kind(root: Path, package: Path) -> PackageKind:
+    """A development package only on request; otherwise the release pin, which must be real.
+
+    Each kind verifies against its own pin. The release pin is refused while it still
+    carries the development marker, because a key held in a file would then pass as the
+    release key.
+    """
+    if os.environ.get(DEVELOPMENT_PACKAGE_VARIABLE):
+        return PackageKind.DEVELOPMENT
+    if package.name.endswith("-development.pkg"):
+        raise RuntimeError(
+            f"{package.name} is a development package, which proves only that its bytes "
+            + "came from the machine that built it. Set "
+            + f"{DEVELOPMENT_PACKAGE_VARIABLE}=1 to install one deliberately."
+        )
+    if is_development_marked(pinned_public_key(root, PackageKind.RELEASE)):
+        raise RuntimeError(
+            f"the release pin {RELEASE_PIN} is still the development key, so no package "
+            + "can be verified as a release. Set "
+            + f"{DEVELOPMENT_PACKAGE_VARIABLE}=1 to install a development package."
+        )
+    return PackageKind.RELEASE
 
 
 def verify_staging(directory: Path, package: Path) -> None:
