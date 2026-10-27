@@ -34,6 +34,13 @@ platform claims separate.
   succeeds. Peer targets, other names and addresses off loopback are never
   probed, and the probe sends no bytes, so the MCP tools keep their read-only
   and closed-world annotations; their descriptions now say they probe.
+- Fixed a source build that stopped at macOS's trust dialog for the
+  `Remap Build Signing` identity refusing every later build, saying the
+  identity had no private key. Trust is creation's last step, so the key and
+  certificate were already imported. The build now finishes that exact
+  identity's trust setting when it is refused only as untrusted, after
+  checking the exported certificate is the one in the keychain, and still
+  refuses any other damaged state.
 - `remap://help` explains the trade-offs between single-label names and a
   suffix of the owner's choosing, without recommending one.
 - The release signing key lives in the Secure Enclave (ADR-0029). The new build-only

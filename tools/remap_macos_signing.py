@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import ssl
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,6 +27,9 @@ SYSTEM_KEYCHAIN = Path("/Library/Keychains/System.keychain")
 SHA1_PATTERN = re.compile(r"[0-9A-F]{40}\Z")
 SHA256_PATTERN = re.compile(r"[0-9A-F]{64}\Z")
 IDENTITY_PATTERN = re.compile(r'^\s*\d+\)\s+([0-9A-F]{40})\s+"([^"]+)"\s*$')
+UNTRUSTED_IDENTITY_PATTERN = re.compile(
+    r'^\s*\d+\)\s+([0-9A-F]{40})\s+"([^"]+)"\s+\(CSSMERR_TP_NOT_TRUSTED\)\s*$'
+)
 CERTIFICATE_SHA1_PATTERN = re.compile(
     r"^SHA-1 hash:\s*([0-9A-F]{40})\s*$", re.MULTILINE
 )
@@ -105,10 +110,17 @@ def ensure_local_codesigning_identity() -> LocalCodeSigningIdentity:
     if existing is not None:
         return existing
     if _certificate_hashes(keychain):
-        raise RuntimeError(
-            f"{IDENTITY_NAME!r} exists without one usable private signing key. "
-            + "Repair that exact Keychain item before building Remap."
-        )
+        if not record_pending_trust(keychain):
+            raise RuntimeError(
+                f"{IDENTITY_NAME!r} exists without one usable private signing key. "
+                + "Repair that exact Keychain item before building Remap."
+            )
+        resumed = resolve_identity(keychain)
+        if resumed is None:
+            raise RuntimeError(
+                "macOS did not recognize the Remap identity once it was trusted"
+            )
+        return resumed
     create_identity(keychain)
     created = resolve_identity(keychain)
     if created is None:
@@ -347,6 +359,50 @@ def create_identity(keychain: Path) -> None:
     )
     allow_apple_tools(keychain, _run_binary)
     _ = _run_binary(trust_arguments(keychain, "codeSign"), certificate)
+
+
+def record_pending_trust(keychain: Path) -> bool:
+    """Finish a creation that stopped before its trust setting was recorded.
+
+    Trust is creation's last step and the one macOS asks the user about, so an
+    unanswered dialog leaves the certificate and its key imported but untrusted.
+    That exact state, and no other, is completed here: one certificate of this
+    name, whose identity holds its private key and is refused only as untrusted.
+    Returns False, changing nothing, for anything else.
+    """
+    output = _capture(
+        ("/usr/bin/security", "find-identity", "-p", "codesigning", str(keychain))
+    )
+    pending = {
+        match.group(1)
+        for line in output.splitlines()
+        if (match := UNTRUSTED_IDENTITY_PATTERN.fullmatch(line)) is not None
+        and match.group(2) == IDENTITY_NAME
+    }
+    hashes = _certificate_hashes(keychain)
+    if len(pending) != 1 or len(hashes) != 1 or hashes[0][0] not in pending:
+        return False
+    certificate = _capture(
+        (
+            "/usr/bin/security",
+            "find-certificate",
+            "-c",
+            IDENTITY_NAME,
+            "-p",
+            str(keychain),
+        )
+    ).encode("ascii")
+    der = ssl.PEM_cert_to_DER_cert(certificate.decode("ascii"))
+    exported = (
+        hashlib.sha1(der).hexdigest().upper(),
+        hashlib.sha256(der).hexdigest().upper(),
+    )
+    if exported != hashes[0]:
+        raise RuntimeError(
+            "the exported Remap certificate is not the one in the keychain"
+        )
+    _ = _run_binary(trust_arguments(keychain, "codeSign"), certificate)
+    return True
 
 
 def headless_trust() -> bool:

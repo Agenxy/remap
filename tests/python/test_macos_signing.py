@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -317,6 +319,112 @@ class MacOSSigningTests(unittest.TestCase):
             _ = remap_macos_signing.verify_local_signature(
                 Path("/tmp/remap"), identity, "org.agenxy.Remap.cli"
             )
+
+
+class PendingTrustTests(unittest.TestCase):
+    """A creation stopped at its trust dialog resumes; nothing else does."""
+
+    keychain: Path = Path("/tmp/login.keychain-db")
+    der: bytes = b"exact certificate bytes"
+
+    @override
+    def setUp(self) -> None:
+        variable = remap_macos_signing.HEADLESS_TRUST_VARIABLE
+        saved = os.environ.pop(variable, None)
+
+        def restore() -> None:
+            if saved is not None:
+                os.environ[variable] = saved
+
+        self.addCleanup(restore)
+
+    def _hashes(self) -> list[tuple[str, str]]:
+        return [
+            (
+                hashlib.sha1(self.der).hexdigest().upper(),
+                hashlib.sha256(self.der).hexdigest().upper(),
+            )
+        ]
+
+    def _record(
+        self, reason: str, exported: bytes
+    ) -> tuple[bool, list[tuple[tuple[str, ...], bytes]]]:
+        sha1 = self._hashes()[0][0]
+        listing = (
+            "Policy: Code Signing\n  Matching identities\n"
+            + f'  1) {sha1} "Remap Build Signing" ({reason})\n'
+            + "     1 identities found\n"
+        )
+        certificate = _pem("CERTIFICATE", base64.b64encode(exported))
+        calls: list[tuple[tuple[str, ...], bytes]] = []
+
+        def capture(arguments: tuple[str, ...]) -> str:
+            return listing if "find-identity" in arguments else certificate.decode()
+
+        def run_binary(arguments: tuple[str, ...], input_bytes: bytes) -> bytes:
+            calls.append((arguments, input_bytes))
+            return b""
+
+        with (
+            mock.patch("tools.remap_macos_signing._capture", side_effect=capture),
+            mock.patch(
+                "tools.remap_macos_signing._certificate_hashes",
+                return_value=self._hashes(),
+            ),
+            mock.patch("tools.remap_macos_signing._run_binary", side_effect=run_binary),
+        ):
+            recorded = remap_macos_signing.record_pending_trust(self.keychain)
+        return recorded, calls
+
+    def test_an_untrusted_exact_identity_is_trusted_once(self) -> None:
+        recorded, calls = self._record("CSSMERR_TP_NOT_TRUSTED", self.der)
+
+        self.assertTrue(recorded)
+        self.assertEqual(len(calls), 1)
+        arguments, certificate = calls[0]
+        self.assertEqual(arguments[:2], ("/usr/bin/security", "add-trusted-cert"))
+        self.assertIn("codeSign", arguments)
+        self.assertEqual(certificate, _pem("CERTIFICATE", base64.b64encode(self.der)))
+
+    def test_an_identity_refused_for_another_reason_is_left_alone(self) -> None:
+        recorded, calls = self._record("CSSMERR_TP_CERT_EXPIRED", self.der)
+
+        self.assertFalse(recorded)
+        self.assertEqual(calls, [])
+
+    def test_a_certificate_that_changes_on_export_is_refused(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "not the one in the keychain"):
+            _ = self._record("CSSMERR_TP_NOT_TRUSTED", b"a different certificate")
+
+    def test_ensure_resumes_instead_of_creating_a_second_identity(self) -> None:
+        identity = LocalCodeSigningIdentity(
+            name="Remap Build Signing",
+            sha1=self._hashes()[0][0],
+            sha256=self._hashes()[0][1],
+            keychain=self.keychain,
+        )
+        with (
+            mock.patch("tools.remap_macos_signing.require_one_visible_identity"),
+            mock.patch(
+                "tools.remap_macos_signing.login_keychain", return_value=self.keychain
+            ),
+            mock.patch(
+                "tools.remap_macos_signing.resolve_identity",
+                side_effect=[None, identity],
+            ),
+            mock.patch(
+                "tools.remap_macos_signing._certificate_hashes",
+                return_value=self._hashes(),
+            ),
+            mock.patch(
+                "tools.remap_macos_signing.record_pending_trust", return_value=True
+            ),
+            mock.patch("tools.remap_macos_signing.create_identity") as create,
+        ):
+            resumed = remap_macos_signing.ensure_local_codesigning_identity()
+
+        self.assertEqual(resumed, identity)
+        create.assert_not_called()
 
 
 def _creation_arguments() -> str:
