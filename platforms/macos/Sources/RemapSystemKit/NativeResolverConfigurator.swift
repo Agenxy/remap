@@ -127,7 +127,15 @@ struct NativeResolverConfigurator: Sendable {
     }
 
     /// Applies a prepared activation after the daemon has accepted the
-    /// matching forwarding plan, then records it as active.
+    /// matching forwarding plan.
+    ///
+    /// The record is rewritten active before any service is pointed at
+    /// loopback, so at every moment it lists each service that may hold
+    /// Remap's configuration, as a handoff record does. A failure after that
+    /// restores those services and returns the record to prepared. When the
+    /// restore fails too, its error is thrown and the record stays active,
+    /// which deactivation, safe bypass, and reconciliation all restore by
+    /// compare-and-restore; it is never left prepared over loopback.
     func commitPrepared() throws -> ActivationRecord {
         let prepared = try store.read()
         try prepared.verify()
@@ -136,17 +144,17 @@ struct NativeResolverConfigurator: Sendable {
         }
         try network.preflightLoopback(ownerUID: prepared.payload.ownerUID)
         let services = prepared.payload.services
+        let changes = try installation(services: services, snapshot: network.snapshot())
+        let active = try ActivationRecord(payload: prepared.payload.withPhase(.active))
+        try store.replace(active)
         do {
-            let snapshot = try network.snapshot()
-            try network.commit(installation(services: services, snapshot: snapshot))
+            try network.commit(changes)
             try awaitConfiguration { current in
                 try installationApplied(services: services, snapshot: current)
             }
-            let active = try ActivationRecord(payload: prepared.payload.withPhase(.active))
-            try store.replace(active)
             return active
         } catch {
-            try? restoreInstalledServices(services)
+            try rollBackFailedCommit(to: prepared)
             throw error
         }
     }
@@ -162,29 +170,29 @@ struct NativeResolverConfigurator: Sendable {
             }
             return
         }
-        let services = record.payload.services
-        let snapshot = try network.snapshot()
-        let conflicts = try conflictingServices(services, snapshot: snapshot)
-        guard conflicts.isEmpty else {
-            throw ResolverError.configurationConflict(conflicts.sorted())
-        }
-        let changes = try services.compactMap { service -> ServiceConfigurationChange? in
-            guard let current = snapshot.service(service.serviceID),
-                  try holdsInstalledConfiguration(current, record: service)
-            else {
-                return nil
-            }
-            return restoration(service, from: current)
-        }
-        try network.commit(changes)
-        try awaitConfiguration { current in
-            try restorationApplied(services: services, snapshot: current)
-        }
+        try restoreOwnedServices(record.payload.services)
         if retainPreparedRecord {
             try store.replace(ActivationRecord(payload: record.payload.withPhase(.prepared)))
         } else {
             try store.remove()
         }
+    }
+
+    /// Undoes a commit that failed after its record was written active. A
+    /// prepared record must describe ordinary DNS, so it is written back only
+    /// once no owned service can still hold Remap's configuration: either the
+    /// commit never reached one, or the restore has been verified.
+    private func rollBackFailedCommit(to prepared: ActivationRecord) throws {
+        let services = prepared.payload.services
+        let snapshot = try network.snapshot()
+        let mayHoldRemap = try services.contains { service in
+            guard let current = snapshot.service(service.serviceID) else { return true }
+            return try holdsInstalledConfiguration(current, record: service)
+        }
+        if mayHoldRemap {
+            try restoreOwnedServices(services)
+        }
+        try store.replace(prepared)
     }
 
     /// One compare-and-set change pointing every owned service at Remap. Every
@@ -225,9 +233,10 @@ struct NativeResolverConfigurator: Sendable {
         }
     }
 
-    /// Restores the owned services that hold Remap's configuration, refusing
-    /// all of them when any owned service was changed by the user.
-    private func restoreInstalledServices(_ services: [DNSServiceRecord]) throws {
+    /// Restores every owned service that holds Remap's configuration and
+    /// waits until each holds its captured prior state, refusing all of them
+    /// when any owned service was changed by the user.
+    private func restoreOwnedServices(_ services: [DNSServiceRecord]) throws {
         let snapshot = try network.snapshot()
         let conflicts = try conflictingServices(services, snapshot: snapshot)
         guard conflicts.isEmpty else {
@@ -242,6 +251,9 @@ struct NativeResolverConfigurator: Sendable {
             return restoration(service, from: current)
         }
         try network.commit(changes)
+        try awaitConfiguration { current in
+            try restorationApplied(services: services, snapshot: current)
+        }
     }
 
     private func usableServices(

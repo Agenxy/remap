@@ -122,8 +122,9 @@ public struct SystemResolver: Sendable {
     }
 
     /// Applies a previously prepared activation after the daemon has accepted
-    /// the matching forwarding plan. A failure restores ordinary DNS whenever
-    /// the installed configuration may have reached SystemConfiguration.
+    /// the matching forwarding plan. A failure restores ordinary DNS and
+    /// returns the record to prepared; a restore that also fails is thrown and
+    /// leaves the record active, so deactivation still restores it.
     public func commitPreparedActivation(
         store: ActivationStore = .standard
     ) throws -> ActivationRecord {

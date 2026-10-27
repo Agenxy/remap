@@ -6,6 +6,13 @@ platform claims separate.
 
 ## Unreleased
 
+- Fixed a failed macOS DNS activation that could leave the Mac pointed at
+  Remap under a record marked prepared, which deactivation then removed
+  without restoring anything. The activation record is now written active
+  before any service is pointed at loopback; a failed commit restores every
+  service and returns the record to prepared, and a restore that also fails
+  is reported instead of ignored, leaving the record active so deactivation,
+  safe bypass, and the supervisor still restore it (ADR-0025).
 - Fixed a macOS safe bypass taken with no network connected reporting
   `E_RESOLVER_SAFE_BYPASS_FAILED` until the network returned, although
   ordinary DNS had been restored. With nothing connected macOS publishes no

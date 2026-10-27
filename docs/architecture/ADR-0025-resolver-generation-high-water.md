@@ -125,3 +125,39 @@ fresh reconciler, and an unobserved network shorter than the default window.
 bypassing at once under a one-hour window, the pending release and its
 durable record, the store's integrity and permission checks, and the status
 output.
+
+## Amendment, 2026-10-27: a prepared record never covers loopback
+
+Re-arming after a bypass, like activation, commits a prepared record: it
+points the recorded services at loopback, verifies the result, and rewrites
+the record active. The record was rewritten only after verification, and a
+failure restored the services with `try?`. A restore that failed was
+discarded and the record stayed prepared over a service that still pointed
+at loopback. Deactivation removes a prepared record without restoring
+anything, because prepared means ordinary DNS, so that service was left on
+Remap with no record of what to restore.
+
+The record is now rewritten active before any service is pointed at
+loopback, the order an ADR-0024 handoff already uses, so it lists every
+service that may hold Remap's configuration whenever one can. The format and
+the activation identity are unchanged: `activationIdentifier()` binds both
+phases to the same identity. A failed commit is restored by the same
+compare-and-restore deactivation uses, and the record returns to prepared
+only when no owned service can still hold Remap's configuration, because the
+commit never reached one or the restore has been verified. When the restore
+fails, its error is thrown and the record stays active, which deactivation,
+safe bypass, and reconciliation all restore. A crash between the write and
+the commit leaves an active record over prior configurations: deactivation
+and safe bypass find nothing to restore, and the supervisor's reconciliation
+sees Remap is not the effective resolver and commits again.
+
+This keeps the integrity-covered record a description of what may be
+installed rather than of what was intended, which is the property
+ADR-0006's compare-and-restore depends on. Rolling the record back to
+prepared after a failed restore instead would hide the installed
+configuration from deactivation, which is the defect itself.
+
+Acceptance: `ResolverCommitRollbackTests.swift` fails against the sources
+before this amendment and passes after it: a restore that fails after a
+failed commit is reported and leaves the record active, deactivation then
+restores the service, and the record is active before any commit is made.
