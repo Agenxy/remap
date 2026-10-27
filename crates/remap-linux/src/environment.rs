@@ -91,21 +91,26 @@ const fn detect_platform() -> ResolverEnvironment {
 
 #[cfg(target_os = "linux")]
 fn bus_owners() -> Option<(bool, bool)> {
-    let connection = zbus::blocking::Connection::system().ok()?;
-    let proxy = zbus::blocking::Proxy::new(
-        &connection,
-        "org.freedesktop.DBus",
-        "/org/freedesktop/DBus",
-        "org.freedesktop.DBus",
-    )
-    .ok()?;
-    let resolved = proxy
-        .call::<_, _, bool>("NameHasOwner", &("org.freedesktop.resolve1",))
+    zbus::block_on(async {
+        let connection = zbus::Connection::system().await.ok()?;
+        let proxy = zbus::Proxy::new(
+            &connection,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .await
         .ok()?;
-    let network_manager = proxy
-        .call::<_, _, bool>("NameHasOwner", &("org.freedesktop.NetworkManager",))
-        .ok()?;
-    Some((resolved, network_manager))
+        let resolved = proxy
+            .call::<_, _, bool>("NameHasOwner", &("org.freedesktop.resolve1",))
+            .await
+            .ok()?;
+        let network_manager = proxy
+            .call::<_, _, bool>("NameHasOwner", &("org.freedesktop.NetworkManager",))
+            .await
+            .ok()?;
+        Some((resolved, network_manager))
+    })
 }
 
 #[cfg(target_os = "linux")]

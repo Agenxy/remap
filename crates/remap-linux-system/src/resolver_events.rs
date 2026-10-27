@@ -1,4 +1,5 @@
 use std::io;
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use futures::{FutureExt, Stream, StreamExt};
@@ -11,7 +12,7 @@ use zbus::{MatchRule, MessageStream};
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(10);
 const EVENT_MIN_INTERVAL: Duration = Duration::from_millis(250);
 const EVENT_METHOD_TIMEOUT: Duration = Duration::from_millis(100);
-const SIGNAL_QUEUE: usize = 1;
+const SIGNAL_QUEUE: NonZeroUsize = NonZeroUsize::MIN;
 const MAX_COALESCED_SIGNALS: usize = 64;
 const PROPERTIES_INTERFACE: &str = "org.freedesktop.DBus.Properties";
 const PROPERTIES_MEMBER: &str = "PropertiesChanged";
@@ -56,9 +57,7 @@ impl ResolverEventMonitor {
         link: LinkIndex,
         manager: Option<ResolverLinkManager>,
     ) -> io::Result<Self> {
-        let connection =
-            zbus::connection::Builder::system().map_err(|_error| monitor_unavailable())?;
-        let connection = connection
+        let connection = zbus::connection::Builder::system()
             .method_timeout(EVENT_METHOD_TIMEOUT)
             .build()
             .await
@@ -72,7 +71,7 @@ impl ResolverEventMonitor {
                     .map_err(|_error| monitor_unavailable())?;
             subscriptions.push(stream);
         }
-        let (sender, receiver) = mpsc::channel(SIGNAL_QUEUE);
+        let (sender, receiver) = mpsc::channel(SIGNAL_QUEUE.get());
         let tasks = subscriptions
             .into_iter()
             .map(|stream| tokio::spawn(supervise_stream(stream, sender.clone())))
@@ -181,20 +180,18 @@ fn event_rules(
     link: LinkIndex,
     manager: Option<ResolverLinkManager>,
 ) -> io::Result<Vec<MatchRule<'static>>> {
-    let link_path = zbus::zvariant::OwnedObjectPath::try_from(format!(
-        "/org/freedesktop/resolve1/link/_{}",
-        link.get()
-    ))
-    .map_err(|_error| invalid_rule())?;
+    let link_path =
+        zbus::OwnedObjectPath::try_from(format!("/org/freedesktop/resolve1/link/_{}", link.get()))
+            .map_err(|_error| invalid_rule())?;
     let mut rules = vec![
         MatchRule::builder()
             .msg_type(Type::Signal)
             .sender(RESOLVED_SERVICE)
-            .and_then(|builder| builder.interface(PROPERTIES_INTERFACE))
-            .and_then(|builder| builder.member(PROPERTIES_MEMBER))
-            .and_then(|builder| builder.path(link_path))
-            .map_err(|_error| invalid_rule())?
-            .build(),
+            .interface(PROPERTIES_INTERFACE)
+            .member(PROPERTIES_MEMBER)
+            .path(link_path)
+            .build()
+            .map_err(|_error| invalid_rule())?,
         owner_rule(RESOLVED_SERVICE)?,
     ];
     if let Some(service) = manager_service(manager)
@@ -206,14 +203,14 @@ fn event_rules(
 }
 
 fn owner_rule(service: &'static str) -> io::Result<MatchRule<'static>> {
-    let builder = MatchRule::builder()
+    MatchRule::builder()
         .msg_type(Type::Signal)
         .sender(DBUS_SERVICE)
-        .and_then(|builder| builder.interface(DBUS_INTERFACE))
-        .and_then(|builder| builder.member(OWNER_MEMBER))
-        .and_then(|builder| builder.add_arg(service))
-        .map_err(|_error| invalid_rule())?;
-    Ok(builder.build())
+        .interface(DBUS_INTERFACE)
+        .member(OWNER_MEMBER)
+        .add_arg(service)
+        .build()
+        .map_err(|_error| invalid_rule())
 }
 
 const fn manager_service(manager: Option<ResolverLinkManager>) -> Option<&'static str> {

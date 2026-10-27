@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use rmcp::model::{
-    ClientNotification, ClientRequest, ErrorData, ProtocolVersion, RequestId, ServerInfo,
+    ClientNotification, ClientRequest, ErrorData, ProtocolVersion, RequestId, ServerConfig,
     ServerResult,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, Service};
@@ -75,7 +75,7 @@ impl Service<RoleServer> for RemapService {
         Service::<RoleServer>::handle_notification(&self.inner, notification, context)
     }
 
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         Service::<RoleServer>::get_info(&self.inner)
     }
 

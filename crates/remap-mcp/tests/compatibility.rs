@@ -2,10 +2,11 @@
 
 #[path = "compatibility/catalog.rs"]
 mod catalog;
+#[path = "compatibility/session.rs"]
+mod session;
 
 use std::error::Error;
 use std::io;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -17,18 +18,19 @@ use remap_protocol::{
 };
 use remapd::DaemonConfig;
 use rmcp::model::{
-    CallToolRequestParams, ClientCapabilities, ClientInfo, ClientJsonRpcMessage, ContentBlock,
+    CallToolRequestParams, ClientCapabilities, ClientConfig, ClientJsonRpcMessage, ContentBlock,
     ErrorCode, ExtensionCapabilities, Implementation, ProtocolVersion, ReadResourceRequestParams,
     ResourceContents, ResourceUpdatedNotificationParam, ServerJsonRpcMessage, ServerNotification,
     SubscribeRequestParams, SubscriptionFilter, UnsubscribeRequestParams,
 };
-use rmcp::service::{NotificationContext, RoleClient, RoleServer, Service};
+use rmcp::service::{NotificationContext, RoleClient, RoleServer, ServerInitializeError, Service};
 use rmcp::transport::{IntoTransport, Transport};
 use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt, ServiceExt};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
 use catalog::assert_modern_tool_catalog;
+use session::{mcp_for, modern_meta, opened, wait_for_socket};
 
 #[derive(Debug, Clone, Default)]
 struct TestClient {
@@ -53,7 +55,7 @@ impl TestClient {
 }
 
 impl ClientHandler for TestClient {
-    fn get_info(&self) -> ClientInfo {
+    fn get_info(&self) -> ClientConfig {
         let mut extensions = ExtensionCapabilities::new();
         if let Some(settings) = &self.app_settings {
             extensions.insert(
@@ -68,10 +70,13 @@ impl ClientHandler for TestClient {
                 .enable_extensions_with(extensions)
                 .build()
         };
-        ClientInfo::new(
+        // rmcp's default is its latest revision, which has no `initialize`;
+        // the legacy handshake must name the revision it negotiates.
+        ClientConfig::new(
             capabilities,
             Implementation::new("remap-compatibility-test", "1"),
         )
+        .with_protocol_version(ProtocolVersion::V_2025_11_25)
     }
 
     async fn on_resource_updated(
@@ -164,8 +169,13 @@ async fn stateless_discover_cannot_select_the_legacy_revision() -> Result<(), Bo
     };
     assert_eq!(error.error.code, ErrorCode::UNSUPPORTED_PROTOCOL_VERSION);
     drop(client);
-    let service = server_task.await??;
-    service.cancel().await?;
+    // Discovery is answered during the SDK's bootstrap and opens no lifecycle,
+    // so closing the connection ends the server without a running service.
+    let result = server_task.await?;
+    assert!(matches!(
+        result,
+        Err(ServerInitializeError::ConnectionClosed(_))
+    ));
     Ok(())
 }
 
@@ -265,6 +275,19 @@ async fn modern_discovery_pins_stdio_against_a_late_legacy_initialize() -> Resul
         .await?
         .ok_or_else(|| io::Error::other("modern discovery returned no response"))?;
     assert!(matches!(discovered, ServerJsonRpcMessage::Response(_)));
+    // The SDK answers discovery during bootstrap; the first modern request
+    // after it is what opens the stdio session.
+    let list_tools: ClientJsonRpcMessage = serde_json::from_value(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/list",
+        "params": modern_meta()
+    }))?;
+    client.send(list_tools).await?;
+    let listed = tokio::time::timeout(Duration::from_secs(1), client.receive())
+        .await?
+        .ok_or_else(|| io::Error::other("modern tools/list returned no response"))?;
+    assert!(matches!(listed, ServerJsonRpcMessage::Response(_)));
     let running = tokio::time::timeout(Duration::from_secs(1), server_task).await???;
 
     let initialize: ClientJsonRpcMessage = serde_json::from_value(json!({
@@ -314,7 +337,6 @@ async fn modern_discover_exposes_bounded_agent_contract() -> Result<(), Box<dyn 
             },
         )
         .await?;
-    let server_service = server_task.await??;
 
     let peer = client
         .peer_info()
@@ -360,6 +382,7 @@ async fn modern_discover_exposes_bounded_agent_contract() -> Result<(), Box<dyn 
     );
 
     client.cancel().await?;
+    let server_service = opened(server_task).await?;
     server_service.cancel().await?;
     Ok(())
 }
@@ -417,7 +440,6 @@ async fn assert_modern_apps_case(
             },
         )
         .await?;
-    let server_service = server_task.await??;
     let peer = client
         .peer_info()
         .ok_or_else(|| io::Error::other("modern client retained no peer information"))?;
@@ -434,6 +456,7 @@ async fn assert_modern_apps_case(
     let resources = client.list_resources(None).await?;
     assert_eq!(resources.resources.len(), if expected { 5 } else { 4 });
     client.cancel().await?;
+    let server_service = opened(server_task).await?;
     server_service.cancel().await?;
     Ok(())
 }
@@ -516,7 +539,6 @@ async fn modern_subscription_capacity_rejects_a_flood() -> Result<(), Box<dyn Er
             },
         )
         .await?;
-    let server_service = server_task.await??;
     let filter = || {
         SubscriptionFilter::builder()
             .resource_subscription("remap://status")
@@ -533,6 +555,7 @@ async fn modern_subscription_capacity_rejects_a_flood() -> Result<(), Box<dyn Er
         subscription.cancel().await?;
     }
     client.cancel().await?;
+    let server_service = opened(server_task).await?;
     server_service.cancel().await?;
     let _sent = stop_sender.send(());
     daemon.await??;
@@ -563,7 +586,6 @@ async fn modern_subscription_recovers_after_a_daemon_restart() -> Result<(), Box
             },
         )
         .await?;
-    let server_service = server_task.await??;
     let mut subscription = client
         .listen(
             SubscriptionFilter::builder()
@@ -606,6 +628,7 @@ async fn modern_subscription_recovers_after_a_daemon_restart() -> Result<(), Box
 
     subscription.cancel().await?;
     client.cancel().await?;
+    let server_service = opened(server_task).await?;
     server_service.cancel().await?;
     let _sent = second_stop_sender.send(());
     second_daemon.await??;
@@ -643,7 +666,6 @@ async fn both_subscription_eras_observe_maintenance_recovery_without_a_new_revis
             },
         )
         .await?;
-    let modern_service = modern_task.await??;
     let mut modern_updates = modern
         .listen(
             SubscriptionFilter::builder()
@@ -692,6 +714,7 @@ async fn both_subscription_eras_observe_maintenance_recovery_without_a_new_revis
         .await?;
     modern.cancel().await?;
     legacy.cancel().await?;
+    let modern_service = opened(modern_task).await?;
     modern_service.cancel().await?;
     legacy_service.cancel().await?;
     let _sent = stop_sender.send(());
@@ -757,7 +780,6 @@ async fn exercise_modern(paths: &ControlPaths) -> Result<(), Box<dyn Error>> {
             },
         )
         .await?;
-    let server_service = server_task.await??;
 
     let status = call(&client, "remap_status", json!({})).await?;
     assert_eq!(structured(&status)?["data"]["revision"], 0);
@@ -833,6 +855,7 @@ async fn exercise_modern(paths: &ControlPaths) -> Result<(), Box<dyn Error>> {
     subscription.cancel().await?;
 
     client.cancel().await?;
+    let server_service = opened(server_task).await?;
     server_service.cancel().await?;
     Ok(())
 }
@@ -945,27 +968,6 @@ async fn exercise_previous(paths: &ControlPaths) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn mcp_for(paths: &ControlPaths) -> RemapService {
-    RemapService::new(ControlClient::new(
-        paths.socket(),
-        Surface::Mcp,
-        env!("CARGO_PKG_VERSION"),
-    ))
-}
-
-fn modern_meta() -> Value {
-    json!({
-        "_meta": {
-            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-            "io.modelcontextprotocol/clientInfo": {
-                "name": "modern-compatibility-test",
-                "version": "1"
-            },
-            "io.modelcontextprotocol/clientCapabilities": {}
-        }
-    })
-}
-
 async fn call(
     client: &rmcp::service::RunningService<rmcp::RoleClient, TestClient>,
     name: &'static str,
@@ -984,14 +986,4 @@ fn structured(result: &rmcp::model::CallToolResult) -> Result<&Value, Box<dyn Er
         .structured_content
         .as_ref()
         .ok_or_else(|| io::Error::other("tool returned no structured content").into())
-}
-
-async fn wait_for_socket(path: &Path) -> Result<(), Box<dyn Error>> {
-    for _attempt in 0..100 {
-        if path.exists() {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    Err(io::Error::other("daemon socket did not appear within one second").into())
 }
