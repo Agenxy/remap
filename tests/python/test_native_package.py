@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import pwd
 import sys
 import tempfile
 import unittest
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import cast
 from unittest import mock
 
-from tools import remap_native_package
+from tools import remap_native_model, remap_native_package
 from tools.remap_native_package import (
     CURRENT_ROOT,
     DAEMON_LABEL,
@@ -305,6 +306,49 @@ class NativePackageTests(unittest.TestCase):
             cast("dict[str, object]", daemon["HardResourceLimits"])["Core"],
             0,
         )
+
+    def test_launchd_documents_keep_the_dns_path_out_of_the_background_band(
+        self,
+    ) -> None:
+        # ADR-0030: under heavy load a Background job missed the supervisor's
+        # 250 ms channel deadline and Remap DNS flapped. mDNSResponder, the
+        # system resolver, declares Interactive.
+        daemon = daemon_launchd_document(
+            generation_id="0.1.0-a1b2c3d4",
+            account_name="the maintainer",
+            group_name="staff",
+            data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
+            upstreams=["192.0.2.53:53"],
+        )
+        resolver = resolver_launchd_document(
+            generation_id="0.1.0-a1b2c3d4",
+            owner_uid=501,
+            data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
+        )
+        self.assertEqual(daemon["ProcessType"], "Interactive")
+        self.assertEqual(resolver["ProcessType"], "Interactive")
+
+    def test_assembled_package_publishes_interactive_launchd_definitions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="remap-native-package-") as directory:
+            base = Path(directory)
+            files = _fixture_files(base / "inputs")
+            package = _assemble(_private_directory(base / "package"), files)
+            for label in (DAEMON_LABEL, RESOLVER_LABEL):
+                with self.subTest(label=label):
+                    document = plist_document(
+                        package.payload / f"launchd/{label}.plist"
+                    )
+                    self.assertEqual(document["ProcessType"], "Interactive")
+
+    def test_legacy_system_launchd_document_is_interactive(self) -> None:
+        document = remap_native_model.launchd_document(
+            pwd.getpwuid(os.getuid()),
+            Path("~/Library/Application Support/org.Agenxy.Remap"),
+            ["192.0.2.53:53"],
+        )
+        self.assertEqual(document["ProcessType"], "Interactive")
 
     def test_launchd_document_rejects_noncanonical_or_unsafe_upstreams(self) -> None:
         for upstream in (

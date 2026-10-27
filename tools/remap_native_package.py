@@ -172,7 +172,8 @@ def daemon_launchd_document(
         "HardResourceLimits": {"Core": 0, "NumberOfFiles": 4096},
         "KeepAlive": True,
         "Label": DAEMON_LABEL,
-        "ProcessType": "Background",
+        # ADR-0030: the system DNS path never runs in the Background band.
+        "ProcessType": "Interactive",
         "ProgramArguments": arguments,
         "RunAtLoad": True,
         "Sockets": {
@@ -246,7 +247,8 @@ def resolver_launchd_document(
         "HardResourceLimits": {"Core": 0, "NumberOfFiles": 128},
         "KeepAlive": True,
         "Label": RESOLVER_LABEL,
-        "ProcessType": "Background",
+        # ADR-0030: the system DNS path never runs in the Background band.
+        "ProcessType": "Interactive",
         "ProgramArguments": [
             str(GENERATIONS_ROOT / generation_id / "libexec/remap-resolver"),
             "run",

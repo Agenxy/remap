@@ -123,6 +123,10 @@ func healingRecord(createdAt: UInt64 = 1, phase: ActivationPhase = .active) thro
     ))
 }
 
+/// Re-arms on the first healthy probe, as supervisors did before ADR-0030,
+/// for tests whose subject is something other than re-arm damping.
+let promptRearm = ResolverRearmDamping(base: .zero, cap: .zero, resetAfter: .seconds(1))
+
 func singleServicePlan(_ upstream: String = "192.0.2.53") -> DNSPlan {
     DNSPlan(services: [DNSServicePlan(serviceID: "service-a", upstreams: [upstream])])
 }

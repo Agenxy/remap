@@ -22,6 +22,10 @@ public struct ResolverBypassPayload: Codable, Equatable, Sendable {
     public let unreleasedActivationID: UUID?
     /// Wall-clock time a later complete generation re-armed Remap DNS.
     public let rearmedAtMilliseconds: UInt64?
+    /// Awake milliseconds of continuous daemon health the supervisor requires
+    /// before it re-arms after this bypass (ADR-0030). Absent in records
+    /// written before damping, whose supervisors re-armed on the first success.
+    public let rearmAfterHealthyMilliseconds: UInt64?
 
     public init(
         reasonCode: String,
@@ -30,7 +34,8 @@ public struct ResolverBypassPayload: Codable, Equatable, Sendable {
         bypassedAtMilliseconds: UInt64,
         releasePending: Bool,
         unreleasedActivationID: UUID?,
-        rearmedAtMilliseconds: UInt64? = nil
+        rearmedAtMilliseconds: UInt64? = nil,
+        rearmAfterHealthyMilliseconds: UInt64? = nil
     ) {
         schemaVersion = 1
         self.reasonCode = reasonCode
@@ -40,6 +45,7 @@ public struct ResolverBypassPayload: Codable, Equatable, Sendable {
         self.releasePending = releasePending
         self.unreleasedActivationID = unreleasedActivationID
         self.rearmedAtMilliseconds = rearmedAtMilliseconds
+        self.rearmAfterHealthyMilliseconds = rearmAfterHealthyMilliseconds
     }
 
     public func rearmed(atMilliseconds time: UInt64) -> ResolverBypassPayload {
@@ -50,7 +56,8 @@ public struct ResolverBypassPayload: Codable, Equatable, Sendable {
             bypassedAtMilliseconds: bypassedAtMilliseconds,
             releasePending: releasePending,
             unreleasedActivationID: unreleasedActivationID,
-            rearmedAtMilliseconds: time
+            rearmedAtMilliseconds: time,
+            rearmAfterHealthyMilliseconds: rearmAfterHealthyMilliseconds
         )
     }
 

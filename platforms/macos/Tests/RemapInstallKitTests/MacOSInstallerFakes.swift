@@ -1,9 +1,12 @@
 import Foundation
 @testable import RemapInstallKit
 
+/// A daemon definition as this build generates it. `processType` is
+/// `Background` only to model a generation installed before ADR-0030.
 func daemonPlist(
     configuration: MacOSInstallConfiguration,
-    program: String
+    program: String,
+    processType: String = "Interactive"
 ) throws -> Data {
     let stream: [String: Any] = [
         "SockFamily": "IPv4",
@@ -18,7 +21,7 @@ func daemonPlist(
         "HardResourceLimits": ["Core": 0, "NumberOfFiles": 4096],
         "KeepAlive": true,
         "Label": MacOSLaunchdServiceKind.daemon.label,
-        "ProcessType": "Background",
+        "ProcessType": processType,
         "ProgramArguments": [
             program,
             "--data-dir",
@@ -60,13 +63,14 @@ func daemonPlist(
 
 func resolverPlist(
     configuration: MacOSInstallConfiguration,
-    program: String
+    program: String,
+    processType: String = "Interactive"
 ) throws -> Data {
     try propertyListData([
         "HardResourceLimits": ["Core": 0, "NumberOfFiles": 128],
         "KeepAlive": true,
         "Label": MacOSLaunchdServiceKind.resolver.label,
-        "ProcessType": "Background",
+        "ProcessType": processType,
         "ProgramArguments": [
             program,
             "run",

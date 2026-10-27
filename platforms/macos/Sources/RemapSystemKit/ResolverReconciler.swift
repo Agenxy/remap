@@ -155,6 +155,14 @@ public actor ResolverReconciler {
         try commitPreparedDNS(record)
     }
 
+    /// Asks the daemon for its health and changes nothing: no publication,
+    /// no invalidation, and no SystemConfiguration change. While bypassed, the
+    /// supervisor uses it to measure continuous daemon health before it
+    /// re-arms (ADR-0030); only the generations the daemon reports are kept.
+    public func probe() throws {
+        try observeGenerations(channel.exchange(.health))
+    }
+
     /// Publishes one complete generation above every generation seen and
     /// verifies the daemon bound it to this activation.
     private func publish(_ plan: DNSPlan, identifier: UUID, after daemonGeneration: UInt64?) throws {

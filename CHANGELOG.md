@@ -6,6 +6,18 @@ platform claims separate.
 
 ## Unreleased
 
+- Fixed Remap DNS flipping on and off every few seconds on a heavily loaded
+  Mac (ADR-0030). `remapd` and the resolver supervisor ran in launchd's
+  Background band, so under contention the supervisor's 250 ms exchange with
+  the daemon failed, ordinary DNS was restored, and one lucky exchange put
+  Remap back moments later. Both jobs are now `Interactive`, as macOS's own
+  resolver is; a new generation must declare it, while an installed one may
+  still carry the old value so rollback keeps working. A fault still restores
+  ordinary DNS at once, but Remap returns only after the daemon has answered
+  continuously for 5 seconds, doubling with each further fallback up to 5
+  minutes and resetting after 5 minutes armed; `remap-system status` says how
+  long the next return waits. Linux units set no lower priority and are
+  unchanged.
 - Fixed the macOS resolver supervisor falling back to ordinary DNS and never
   re-arming until `remapd` restarted (ADR-0025). The daemon reports the
   highest generation it has accepted, so a fresh reconciler publishes above

@@ -181,6 +181,7 @@ func supervisorReenrolsOnlyAfterTheRecoveredDaemonAcceptsACompletePlan() async t
         monitor: monitor,
         interval: .seconds(60),
         retryInterval: .milliseconds(1),
+        rearmDamping: promptRearm,
         observe: { state in states.withLock { $0.append(state) } }
     )
 

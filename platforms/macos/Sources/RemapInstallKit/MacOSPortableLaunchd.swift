@@ -35,7 +35,7 @@ enum MacOSPortableLaunchd {
             "HardResourceLimits": ["Core": 0, "NumberOfFiles": 4096],
             "KeepAlive": true,
             "Label": MacOSLaunchdServiceKind.daemon.label,
-            "ProcessType": "Background",
+            "ProcessType": MacOSLaunchdSchedulingAdmission.generatedProcessType,
             "ProgramArguments": [
                 program,
                 "--data-dir",
@@ -83,7 +83,7 @@ enum MacOSPortableLaunchd {
             "HardResourceLimits": ["Core": 0, "NumberOfFiles": 128],
             "KeepAlive": true,
             "Label": MacOSLaunchdServiceKind.resolver.label,
-            "ProcessType": "Background",
+            "ProcessType": MacOSLaunchdSchedulingAdmission.generatedProcessType,
             "ProgramArguments": [
                 generationRoot(generationID) + "/libexec/remap-resolver",
                 "run",

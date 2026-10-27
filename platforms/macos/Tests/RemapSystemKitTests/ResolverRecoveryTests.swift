@@ -434,6 +434,7 @@ private final class SupervisorFixture: Sendable {
             interval: .milliseconds(5),
             retryInterval: .milliseconds(1),
             failureGrace: failureGrace,
+            rearmDamping: promptRearm,
             bypassLog: log,
             observe: { state in self.observed.withLock { $0.append(state) } }
         )
