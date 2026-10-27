@@ -122,49 +122,14 @@ public struct SystemResolver: Sendable {
     }
 
     /// Applies a previously prepared activation after the daemon has accepted
-    /// the matching forwarding plan. A failure leaves a recoverable prepared
-    /// record and restores ordinary DNS whenever the installed configuration
-    /// may have reached SystemConfiguration.
+    /// the matching forwarding plan. A failure restores ordinary DNS whenever
+    /// the installed configuration may have reached SystemConfiguration.
     public func commitPreparedActivation(
         store: ActivationStore = .standard
     ) throws -> ActivationRecord {
         try requireRoot()
-        let prepared = try store.read()
-        guard prepared.payload.phase == .prepared else {
-            throw ResolverError.invalidActivationRecord
-        }
-        try requireActiveConsoleUser(prepared.payload.ownerUID)
-        try DNSListenerProbe.run()
-        let preferencesSession = try makeAuthorizedPreferences()
-        let preferences = preferencesSession.preferences
-        let records = prepared.payload.services
-        do {
-            let handles = try allServiceHandles(preferences: preferences)
-            let indexed = Dictionary(uniqueKeysWithValues: handles.map { ($0.serviceID, $0) })
-            guard records.allSatisfy({ indexed[$0.serviceID] != nil }) else {
-                throw ResolverError.invalidActivationRecord
-            }
-            let conflicts = try conflictingServices(records, handles: indexed)
-            guard conflicts.isEmpty else {
-                throw ResolverError.configurationConflict(conflicts.sorted())
-            }
-            let selected = records.compactMap { indexed[$0.serviceID] }
-            try applyInstalledConfigurations(
-                preferences: preferences,
-                handles: selected,
-                records: records
-            )
-            // CommitChanges obtains the SystemConfiguration lock itself and
-            // rejects a stale preferences snapshot instead of overwriting it.
-            try commitPreferences(preferences)
-            try verifyEffectiveConfigurations(records)
-            let active = try ActivationRecord(payload: prepared.payload.withPhase(.active))
-            try store.replace(active)
-            return active
-        } catch {
-            try? restoreFailedActivation(records)
-            throw error
-        }
+        return try NativeResolverConfigurator(network: SystemNetworkConfiguration(), store: store)
+            .commitPrepared()
     }
 
     public func deactivate(store: ActivationStore = .standard) throws {
@@ -564,48 +529,6 @@ func installedConfiguration(from prior: [String: Any]?) -> [String: Any] {
     return configuration
 }
 
-private func applyInstalledConfigurations(
-    preferences: SCPreferences,
-    handles: [ServiceHandle],
-    records: [DNSServiceRecord]
-) throws {
-    let indexed = Dictionary(uniqueKeysWithValues: records.map { ($0.serviceID, $0) })
-    for handle in handles {
-        guard let record = indexed[handle.serviceID] else {
-            throw ResolverError.invalidActivationRecord
-        }
-        let configuration = try PropertyLists.decode(record.installedConfiguration)
-        try setProtocolPreference(
-            preferences: preferences,
-            serviceID: handle.serviceID,
-            configuration: configuration,
-            enabled: true,
-            operation: "stage the Remap DNS configuration"
-        )
-    }
-}
-
-private func restoreConfigurations(
-    preferences: SCPreferences,
-    handles: [ServiceHandle],
-    records: [DNSServiceRecord]
-) throws {
-    let indexed = Dictionary(uniqueKeysWithValues: records.map { ($0.serviceID, $0) })
-    for handle in handles {
-        guard let record = indexed[handle.serviceID] else {
-            throw ResolverError.invalidActivationRecord
-        }
-        let restored = try record.priorConfiguration.map(PropertyLists.decode)
-        try setProtocolPreference(
-            preferences: preferences,
-            serviceID: handle.serviceID,
-            configuration: restored,
-            enabled: record.priorEnabled ?? true,
-            operation: "stage the prior DNS configuration"
-        )
-    }
-}
-
 func protocolPreferenceValue(
     configuration: [String: Any]?,
     enabled: Bool
@@ -641,102 +564,10 @@ func setProtocolPreference(
     }
 }
 
-private func conflictingServices(
-    _ records: [DNSServiceRecord],
-    handles: [String: ServiceHandle]
-) throws -> [String] {
-    try records.compactMap { record in
-        guard let handle = handles[record.serviceID] else {
-            return nil
-        }
-        let installedConfigurationMatches = try PropertyLists.equal(
-            handle.configuration,
-            encoded: record.installedConfiguration
-        )
-        let priorConfigurationMatches = try configurationsEqual(
-            handle.configuration,
-            prior: record.priorConfiguration
-        )
-        let installed = handle.enabled && installedConfigurationMatches
-        let prior = handle.enabled == (record.priorEnabled ?? true)
-            && priorConfigurationMatches
-        return installed || prior ? nil : record.serviceID
-    }
-}
-
-private func configurationsEqual(_ current: [String: Any]?, prior: Data?) throws -> Bool {
-    switch (current, prior) {
-    case (nil, nil):
-        true
-    case let (current?, prior?):
-        try PropertyLists.equal(current, encoded: prior)
-    case (.some, nil), (nil, .some):
-        false
-    }
-}
-
 func commitPreferences(_ preferences: SCPreferences) throws {
     guard SCPreferencesCommitChanges(preferences), SCPreferencesApplyChanges(preferences) else {
         throw ResolverError.preferences("commit and apply DNS preferences")
     }
-}
-
-private func restoreFailedActivation(_ records: [DNSServiceRecord]) throws {
-    let preferencesSession = try makeAuthorizedPreferences()
-    let preferences = preferencesSession.preferences
-    let handles = try allServiceHandles(preferences: preferences)
-    let indexed = Dictionary(uniqueKeysWithValues: handles.map { ($0.serviceID, $0) })
-    let conflicts = try conflictingServices(records, handles: indexed)
-    guard conflicts.isEmpty else {
-        throw ResolverError.configurationConflict(conflicts.sorted())
-    }
-    let restorable = records.compactMap { record -> ServiceHandle? in
-        guard let handle = indexed[record.serviceID],
-              handle.enabled,
-              (try? PropertyLists.equal(
-                  handle.configuration,
-                  encoded: record.installedConfiguration
-              )) == true
-        else {
-            return nil
-        }
-        return handle
-    }
-    let restorableRecords = restorable.compactMap { handle in
-        records.first { $0.serviceID == handle.serviceID }
-    }
-    try restoreConfigurations(
-        preferences: preferences,
-        handles: restorable,
-        records: restorableRecords
-    )
-    try commitPreferences(preferences)
-}
-
-private func verifyEffectiveConfigurations(
-    _ records: [DNSServiceRecord],
-    restoring: Bool = false
-) throws {
-    let deadline = Date().addingTimeInterval(3)
-    repeat {
-        let preferences = try makePreferences()
-        let store = try makeDynamicStore()
-        let effective = effectiveGlobalServerAddresses(dynamicStore: store)
-        let effectiveMatches = if restoring {
-            try restoredEffectiveServersMatch(records, effective: effective)
-        } else {
-            effective == ["127.0.0.1"]
-        }
-        if try persistedConfigurationsMatch(
-            records,
-            preferences: preferences,
-            restoring: restoring
-        ), effectiveMatches {
-            return
-        }
-        usleep(50000)
-    } while Date() < deadline
-    throw ResolverError.preferences("verify the effective DNS configuration")
 }
 
 func restoredEffectiveServersMatch(
@@ -757,32 +588,6 @@ func effectiveGlobalServerAddresses(dynamicStore: SCDynamicStore) -> [String] {
     let key = "State:/Network/Global/DNS" as CFString
     let value = SCDynamicStoreCopyValue(dynamicStore, key) as? [String: Any]
     return serverAddresses(from: value ?? [:])
-}
-
-private func persistedConfigurationsMatch(
-    _ records: [DNSServiceRecord],
-    preferences: SCPreferences,
-    restoring: Bool
-) throws -> Bool {
-    let handles = try allServiceHandles(preferences: preferences)
-    let indexed = Dictionary(uniqueKeysWithValues: handles.map { ($0.serviceID, $0) })
-    return try records.allSatisfy { record in
-        guard let handle = indexed[record.serviceID] else {
-            return false
-        }
-        if restoring {
-            return try handle.enabled == (record.priorEnabled ?? true)
-                && configurationsEqual(
-                    handle.configuration,
-                    prior: record.priorConfiguration
-                )
-        }
-        return try handle.enabled
-            && (PropertyLists.equal(
-                handle.configuration,
-                encoded: record.installedConfiguration
-            ))
-    }
 }
 
 func requireActiveConsoleUser(_ expectedUID: UInt32) throws {

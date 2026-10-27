@@ -126,6 +126,31 @@ struct NativeResolverConfigurator: Sendable {
         return DNSPlan(services: [DNSServicePlan(serviceID: target, upstreams: upstreams)])
     }
 
+    /// Applies a prepared activation after the daemon has accepted the
+    /// matching forwarding plan, then records it as active.
+    func commitPrepared() throws -> ActivationRecord {
+        let prepared = try store.read()
+        try prepared.verify()
+        guard prepared.payload.phase == .prepared else {
+            throw ResolverError.invalidActivationRecord
+        }
+        try network.preflightLoopback(ownerUID: prepared.payload.ownerUID)
+        let services = prepared.payload.services
+        do {
+            let snapshot = try network.snapshot()
+            try network.commit(installation(services: services, snapshot: snapshot))
+            try awaitConfiguration { current in
+                try installationApplied(services: services, snapshot: current)
+            }
+            let active = try ActivationRecord(payload: prepared.payload.withPhase(.active))
+            try store.replace(active)
+            return active
+        } catch {
+            try? restoreInstalledServices(services)
+            throw error
+        }
+    }
+
     /// Restores every owned service that still holds Remap's configuration,
     /// refusing all restoration when any owned service was changed by the
     /// user, then retains the activation as prepared or removes it.
@@ -160,6 +185,63 @@ struct NativeResolverConfigurator: Sendable {
         } else {
             try store.remove()
         }
+    }
+
+    /// One compare-and-set change pointing every owned service at Remap. Every
+    /// owned service must be present and hold either Remap's configuration or
+    /// its captured prior state; any other state is a user change.
+    private func installation(
+        services: [DNSServiceRecord],
+        snapshot: NetworkSnapshot
+    ) throws -> [ServiceConfigurationChange] {
+        guard services.allSatisfy({ snapshot.service($0.serviceID) != nil }) else {
+            throw ResolverError.invalidActivationRecord
+        }
+        let conflicts = try conflictingServices(services, snapshot: snapshot)
+        guard conflicts.isEmpty else {
+            throw ResolverError.configurationConflict(conflicts.sorted())
+        }
+        return services.compactMap { service in
+            snapshot.service(service.serviceID).map { current in
+                ServiceConfigurationChange(
+                    serviceID: service.serviceID,
+                    expectedConfiguration: current.configuration,
+                    expectedEnabled: current.enabled,
+                    configuration: service.installedConfiguration,
+                    enabled: true
+                )
+            }
+        }
+    }
+
+    private func installationApplied(
+        services: [DNSServiceRecord],
+        snapshot: NetworkSnapshot
+    ) throws -> Bool {
+        guard snapshot.globalServers == [loopbackResolver] else { return false }
+        return try services.allSatisfy { service in
+            guard let current = snapshot.service(service.serviceID) else { return false }
+            return try holdsInstalledConfiguration(current, record: service)
+        }
+    }
+
+    /// Restores the owned services that hold Remap's configuration, refusing
+    /// all of them when any owned service was changed by the user.
+    private func restoreInstalledServices(_ services: [DNSServiceRecord]) throws {
+        let snapshot = try network.snapshot()
+        let conflicts = try conflictingServices(services, snapshot: snapshot)
+        guard conflicts.isEmpty else {
+            throw ResolverError.configurationConflict(conflicts.sorted())
+        }
+        let changes = try services.compactMap { service -> ServiceConfigurationChange? in
+            guard let current = snapshot.service(service.serviceID),
+                  try holdsInstalledConfiguration(current, record: service)
+            else {
+                return nil
+            }
+            return restoration(service, from: current)
+        }
+        try network.commit(changes)
     }
 
     private func usableServices(
@@ -264,11 +346,7 @@ struct NativeResolverConfigurator: Sendable {
             return try holdsPriorConfiguration(current, record: service)
         }
         guard restored else { return false }
-        // Only a service that is up can be expected in the global resolver.
-        let liveRecords = services.filter {
-            snapshot.service($0.serviceID)?.effectiveServers != nil
-        }
-        return try restoredEffectiveServersMatch(liveRecords, effective: snapshot.globalServers)
+        return try restoredGlobalResolverMatches(services, snapshot: snapshot)
     }
 
     private func conflictingServices(
@@ -329,6 +407,18 @@ func capturedService(
         upstreams: upstreams,
         networkSignature: service.networkSignature
     )
+}
+
+/// Whether the global resolver is the one restoring `services` leaves.
+func restoredGlobalResolverMatches(
+    _ services: [DNSServiceRecord],
+    snapshot: NetworkSnapshot
+) throws -> Bool {
+    // Only a service that is up can be expected in the global resolver.
+    let liveRecords = services.filter {
+        snapshot.service($0.serviceID)?.effectiveServers != nil
+    }
+    return try restoredEffectiveServersMatch(liveRecords, effective: snapshot.globalServers)
 }
 
 let loopbackResolver = "127.0.0.1"
