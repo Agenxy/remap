@@ -14,11 +14,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
-
-import tomllib
 
 from tools.remap_app import build as build_native_app
 from tools.remap_app import launch as launch_native_app

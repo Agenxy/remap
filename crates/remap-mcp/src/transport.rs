@@ -411,7 +411,7 @@ mod tests {
         drop(transport);
         let mut bytes = Vec::new();
         output.read_to_end(&mut bytes).await?;
-        assert!(bytes.is_empty());
+        assert_eq!(bytes, b"");
         Ok(())
     }
 
@@ -480,7 +480,7 @@ mod tests {
         assert!(duplicate.is_none());
         let mut response = Vec::new();
         output.read_to_end(&mut response).await?;
-        assert!(response.is_empty());
+        assert_eq!(response, b"");
         assert_eq!(admission.active(), 0);
         Ok(())
     }

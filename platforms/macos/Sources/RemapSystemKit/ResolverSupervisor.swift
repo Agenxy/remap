@@ -59,8 +59,8 @@ public final class ResolverSupervisor: Sendable {
         }
         guard await cycle(monitorAvailable: monitorAvailable, progress: &progress) else { return }
         for await _ in triggerStream(changes: monitor.events, interval: interval) {
-            guard !Task.isCancelled else { return }
-            guard await cycle(monitorAvailable: monitorAvailable, progress: &progress) else { return }
+            guard !Task.isCancelled,
+                  await cycle(monitorAvailable: monitorAvailable, progress: &progress) else { return }
         }
     }
 

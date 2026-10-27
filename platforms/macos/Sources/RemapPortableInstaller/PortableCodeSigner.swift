@@ -78,15 +78,15 @@ enum PortableCodeIdentityChecker {
         }
         var information: CFDictionary?
         guard SecCodeCopySigningInformation(
-            code,
-            SecCSFlags(rawValue: kSecCSSigningInformation),
-            &information
-        ) == errSecSuccess,
-            let values = information as? [CFString: Any],
-            let identifier = values[kSecCodeInfoIdentifier] as? String,
-            let cdHash = values[kSecCodeInfoUnique] as? Data,
-            let certificates = values[kSecCodeInfoCertificates] as? [SecCertificate],
-            let root = certificates.last
+                  code,
+                  SecCSFlags(rawValue: kSecCSSigningInformation),
+                  &information
+              ) == errSecSuccess,
+              let values = information as? [CFString: Any],
+              let identifier = values[kSecCodeInfoIdentifier] as? String,
+              let cdHash = values[kSecCodeInfoUnique] as? Data,
+              let certificates = values[kSecCodeInfoCertificates] as? [SecCertificate],
+              let root = certificates.last
         else {
             throw InstallError.integrity("a portable Remap executable has incomplete signing data")
         }

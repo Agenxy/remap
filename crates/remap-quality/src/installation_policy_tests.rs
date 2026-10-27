@@ -75,13 +75,13 @@ mod tests {
             assert_eq!(findings.len(), 1);
             assert_eq!(findings[0].rule, Rule::ExecutableOverwrite);
         }
-        assert!(
+        assert_eq!(
             analyze(
                 Path::new("."),
                 path,
                 "with destination.open(\"xb\") as writer:\n    shutil.copyfileobj(reader, writer)"
-            )?
-            .is_empty()
+            )?,
+            Vec::new()
         );
         Ok(())
     }
@@ -99,13 +99,13 @@ mod tests {
             assert_eq!(findings.len(), 1);
             assert_eq!(findings[0].rule, Rule::ExecutableOverwrite);
         }
-        assert!(
+        assert_eq!(
             analyze(
                 Path::new("."),
                 path,
                 "fn good() { fs::rename(staged, \"/usr/local/bin/remap\"); }"
-            )?
-            .is_empty()
+            )?,
+            Vec::new()
         );
         Ok(())
     }
@@ -116,13 +116,13 @@ mod tests {
         let findings = analyze(Path::new("."), path, "open(path, O_WRONLY | O_TRUNC)")?;
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule, Rule::ExecutableOverwrite);
-        assert!(
+        assert_eq!(
             analyze(
                 Path::new("."),
                 path,
                 "open(path, O_WRONLY | O_CREAT | O_EXCL)"
-            )?
-            .is_empty()
+            )?,
+            Vec::new()
         );
         Ok(())
     }

@@ -6,14 +6,13 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from http.client import HTTPResponse
 from pathlib import Path
 from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
-
-import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 MAXIMUM_RESPONSE_BYTES = 1_048_576

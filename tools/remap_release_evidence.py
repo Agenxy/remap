@@ -12,11 +12,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, cast
-
-import tomllib
 
 from tools.remap_release_inventory import (
     AppInventory,
