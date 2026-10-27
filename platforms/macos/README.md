@@ -24,9 +24,13 @@ signature. The package uses native Mach-O `preinstall` and `postinstall`
 executables; there is no installer shell script. The package is not Developer
 ID signed or notarized. Remap signs the complete XAR with a pinned self-signed
 `Remap Release Installer` certificate so Apple Installer validates its scripts,
-and independently signs the same final bytes with its dedicated Ed25519 release
-key under the `remap-package-v1` namespace.
-The pinned public key is
+and independently signs the same final bytes with its dedicated release key, a
+P-256 key held in the building Mac's Secure Enclave, under the `remap-package-v1`
+namespace. A development package is signed instead by the development file key
+pinned in
+[`docs/release/remap-development-signing-key.pub`](../../docs/release/remap-development-signing-key.pub),
+and its installer accepts only that key (ADR-0029).
+The pinned release public key is
 [`docs/release/remap-release-signing-key.pub`](../../docs/release/remap-release-signing-key.pub).
 The separate public Installer certificate is
 [`docs/release/remap-release-installer.pem`](../../docs/release/remap-release-installer.pem).

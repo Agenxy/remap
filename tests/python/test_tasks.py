@@ -26,6 +26,7 @@ from tools.remap_macos_release_installer_signing import (
 )
 from tools.remap_macos_signing import LocalCodeSigningIdentity
 from tools.remap_release_model import ArtifactSpec
+from tools.remap_release_signing import DevelopmentSigning, ReleaseSigning
 from tools.remap_tasks import (
     task_build_macos_app,
     task_help,
@@ -420,7 +421,7 @@ class NativeProductTaskTests(unittest.TestCase):
             product_version="0.2.0",
         )
 
-    def test_a_development_pin_refuses_to_build_a_package_by_default(self) -> None:
+    def test_a_file_key_refuses_to_build_a_release_package(self) -> None:
         """A signature from a key anyone can read proves nothing to anyone else."""
         with (
             patch.dict(
@@ -430,13 +431,14 @@ class NativeProductTaskTests(unittest.TestCase):
             ),
             patch("tools.remap_tasks.require_macos"),
             patch(
-                "tools.remap_tasks.pinned_release_key_is_development", return_value=True
-            ),
+                "tools.remap_tasks.ensure_release_installer_identity"
+            ) as installer_identity,
             patch("tools.remap_tasks.build_portable_macos_package") as build,
-            self.assertRaisesRegex(RuntimeError, "development-only"),
+            self.assertRaisesRegex(RuntimeError, "file key can never sign a release"),
         ):
             task_package_macos()
         build.assert_not_called()
+        installer_identity.assert_not_called()
 
     def test_a_development_package_needs_no_identity_and_says_what_it_is(self) -> None:
         """It is installed on the machine that built it, so it needs no keychain."""
@@ -450,9 +452,7 @@ class NativeProductTaskTests(unittest.TestCase):
                 clear=True,
             ),
             patch("tools.remap_tasks.require_macos"),
-            patch(
-                "tools.remap_tasks.pinned_release_key_is_development", return_value=True
-            ),
+            patch("tools.remap_tasks.preflight") as preflight,
             patch(
                 "tools.remap_tasks.ensure_release_installer_identity"
             ) as installer_identity,
@@ -463,12 +463,17 @@ class NativeProductTaskTests(unittest.TestCase):
         installer_identity.assert_not_called()
         keywords = cast("dict[str, object]", build.call_args.kwargs)
         self.assertIsNone(keywords["installer_identity"])
+        self.assertEqual(
+            keywords["signing"],
+            DevelopmentSigning(Path("/private/release/remap-release")),
+        )
+        preflight.assert_called_once_with(remap_tasks.ROOT, keywords["signing"])
         output = keywords["output"]
         self.assertIsInstance(output, Path)
         self.assertIn("-development", Path(str(output)).name)
 
-    def test_macos_package_uses_only_the_explicit_release_key(self) -> None:
-        release_key = "/private/release/remap-release.pub"
+    def test_a_release_package_is_signed_only_by_the_enclave_key(self) -> None:
+        release_key = "/private/release/remap-release.key"
         expected_identity = ReleaseInstallerSigningIdentity(
             name="Remap Release Installer",
             sha1="b" * 40,
@@ -478,36 +483,55 @@ class NativeProductTaskTests(unittest.TestCase):
         with (
             patch.dict(
                 "tools.remap_tasks.os.environ",
-                {"REMAP_RELEASE_SIGNING_KEY": release_key},
+                {"REMAP_RELEASE_SE_KEY": release_key},
                 clear=True,
             ),
             patch("tools.remap_tasks.require_macos"),
+            patch("tools.remap_tasks.preflight") as preflight,
             patch(
                 "tools.remap_tasks.ensure_release_installer_identity"
             ) as installer_identity,
-            patch(
-                "tools.remap_tasks.pinned_release_key_is_development",
-                return_value=False,
-            ),
             patch("tools.remap_tasks.build_portable_macos_package") as build,
         ):
             installer_identity.return_value = expected_identity
-            build.return_value = PortablePackage(
-                path=Path("/private/release/Remap.pkg"),
-                sha256="a" * 64,
-                signature_path=Path("/private/release/Remap.pkg.sig"),
-                signature_sha256="c" * 64,
-                release_manifest_sha256="b" * 64,
-                architecture="arm64",
-                product_version="0.2.0",
-            )
+            build.return_value = self._package_fixture()
             task_package_macos()
 
-        self.assertEqual(build.call_args.kwargs["signing_key"], Path(release_key))
+        self.assertEqual(
+            build.call_args.kwargs["signing"], ReleaseSigning(Path(release_key))
+        )
+        preflight.assert_called_once_with(
+            remap_tasks.ROOT, ReleaseSigning(Path(release_key))
+        )
         self.assertEqual(
             build.call_args.kwargs["installer_identity"],
             expected_identity,
         )
+        output = cast("Path", build.call_args.kwargs["output"])
+        self.assertNotIn("-development", output.name)
+
+    def test_a_release_package_preflights_before_the_keychain(self) -> None:
+        """A development-marked pin refuses before any identity is asked for."""
+        with (
+            patch.dict(
+                "tools.remap_tasks.os.environ",
+                {"REMAP_RELEASE_SE_KEY": "/private/release/remap-release.key"},
+                clear=True,
+            ),
+            patch("tools.remap_tasks.require_macos"),
+            patch(
+                "tools.remap_tasks.preflight",
+                side_effect=RuntimeError("remap-release-development-only"),
+            ),
+            patch(
+                "tools.remap_tasks.ensure_release_installer_identity"
+            ) as installer_identity,
+            patch("tools.remap_tasks.build_portable_macos_package") as build,
+            self.assertRaisesRegex(RuntimeError, "development-only"),
+        ):
+            task_package_macos()
+        installer_identity.assert_not_called()
+        build.assert_not_called()
 
     def test_release_evidence_uses_every_verified_workspace_crate(self) -> None:
         with tempfile.TemporaryDirectory(prefix="remap-release-task-") as directory:

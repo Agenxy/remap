@@ -6,6 +6,21 @@ platform claims separate.
 
 ## Unreleased
 
+- The release signing key lives in the Secure Enclave (ADR-0029). The new build-only
+  `remap-release-key` helper creates a P-256 key that the release-building Mac's Secure
+  Enclave will not export, writes only the Enclave's device-bound blob and never
+  overwrites one, and makes an OpenSSH SSHSIG signature that `ssh-keygen -Y verify`
+  accepts unchanged; every signature asks for Touch ID or the login password. A release
+  package (`REMAP_RELEASE_SE_KEY`) signs its manifest and package only with that key,
+  after proving the blob's public key is the release pin, and refuses a file key or a pin
+  marked `remap-release-development-only`. A development package
+  (`REMAP_DEVELOPMENT_PACKAGE=1`) keeps its file key and now has its own pin,
+  `docs/release/remap-development-signing-key.pub`; each package's installer compiles in
+  only its own kind's key, and `make install-package-macos` checks each kind against its
+  own pin. The `Remap Release Installer` identity stays RSA in the login keychain, because
+  the Enclave cannot hold RSA. The release pin is unchanged until the owner pins the new
+  key, so no release can be built before then. The README and release evidence also
+  quoted the lost August key's fingerprint; they now quote the release pin's.
 - Fixed the macOS resolver supervisor falling back to ordinary DNS and never
   re-arming until `remapd` restarted (ADR-0025). The daemon reports the
   highest generation it has accepted, so a fresh reconciler publishes above

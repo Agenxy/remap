@@ -27,7 +27,6 @@ from tools.remap_macos_package_metadata import (
 from tools.remap_macos_portable_package import (
     PACKAGE_NAMESPACE,
     canonical_release_json,
-    canonical_release_public_key,
     release_entries,
     release_manifest,
     validate_version,
@@ -40,6 +39,7 @@ from tools.remap_macos_xar import (
     canonicalize_xar_metadata,
 )
 from tools.remap_release_artifacts import publish_release_artifacts
+from tools.remap_release_signing import FileKeySigner
 
 
 @final
@@ -90,6 +90,7 @@ class PortablePackageTests(unittest.TestCase):
         _ = payload.write_bytes(b'{"schemaVersion":1}')
         signature_bytes = b"-----BEGIN SSH SIGNATURE-----\nfixture\n"
         sign_file = cast("Callable[..., None]", vars(portable_package)["_sign_file"])
+        signer = FileKeySigner(Path("/private/release.pub"))
         completed = subprocess.CompletedProcess(
             args=(),
             returncode=0,
@@ -101,7 +102,7 @@ class PortablePackageTests(unittest.TestCase):
             patch.object(subprocess, "run", return_value=completed) as runner,
             patch.object(portable_package, "_write_generated_signature") as writer,
         ):
-            sign_file(payload, Path("/private/release.pub"), namespace="release")
+            sign_file(payload, signer, namespace="release")
 
         runner.assert_called_once_with(
             (
@@ -113,7 +114,6 @@ class PortablePackageTests(unittest.TestCase):
                 "-n",
                 "release",
             ),
-            cwd=self.directory,
             check=True,
             stdin=ANY,
             capture_output=True,
@@ -467,32 +467,6 @@ class PortablePackageTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "canonical SemVer"),
             ):
                 validate_version(value)
-
-    def test_release_public_key_matches_the_native_verifier(self) -> None:
-        root = Path(__file__).resolve().parents[2]
-        public_key = (
-            (root / "docs/release/remap-release-signing-key.pub")
-            .read_text(encoding="utf-8")
-            .strip()
-        )
-        native = (
-            root
-            / "platforms/macos/Sources/RemapPortableInstaller/PortableReleaseManifest.swift"
-        ).read_text(encoding="utf-8")
-        self.assertIn(public_key, native)
-
-    def test_release_public_key_is_one_canonical_ed25519_identity(self) -> None:
-        key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest remap-release"
-        self.assertEqual(
-            canonical_release_public_key(key),
-            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest",
-        )
-        for unsafe in ("", "ssh-rsa value", "ssh-ed25519", "ssh-ed25519 a b c"):
-            with (
-                self.subTest(value=unsafe),
-                self.assertRaisesRegex(RuntimeError, "canonical Ed25519"),
-            ):
-                _ = canonical_release_public_key(unsafe)
 
     def test_detached_package_signature_binds_exact_bytes_and_namespace(self) -> None:
         key = self.directory / "release-key"
