@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Byte streams to a Supgang peer's exposed service, through Supgang's local
 //! stream endpoint (Supgang ADR 0006, "Local stream endpoint, version 1";
 //! Remap ADR-0026).

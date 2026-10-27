@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Landing paths preserve the origin root through the real daemon gateway.
 
 use std::error::Error;

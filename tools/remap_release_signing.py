@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Which key signs a Remap package, and the rule that keeps the two kinds apart.
 
 A development package is signed by a passphrase-less file key that anyone who can read the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Sending one routed request upstream: over the pooled client for an HTTP
 //! mapping, or over a Supgang stream for a peer mapping (ADR-0026).
 //!

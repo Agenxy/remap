@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Registry guidance remains advisory and moved-name graph changes are atomic.
 
 use remap_protocol::{Command, CommandResult, Surface};

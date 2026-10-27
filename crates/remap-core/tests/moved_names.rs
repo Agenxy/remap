@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Moved-name parsing, clock boundaries and immutable graph validation.
 
 use remap_core::{Mapping, MappingTarget, MovedTarget, NamePattern, RegistrySnapshot, RemapName};

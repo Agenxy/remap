@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Landing validation and durable round trips use the authority's wire surface.
 
 use remap_protocol::{Command, CommandResult, Surface};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Advisory reachability of a loopback HTTP target (ADR-0028).
 //!
 //! A mapping to a port with nothing listening is valid owner intent, and it

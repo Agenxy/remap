@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """The two kinds of package, their two pins, and the signer each one may use."""
 
 from __future__ import annotations

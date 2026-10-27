@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Advisory reachability in previews and apply receipts (ADR-0028).
 //!
 //! After the registry answers a preview or an apply, each loopback HTTP

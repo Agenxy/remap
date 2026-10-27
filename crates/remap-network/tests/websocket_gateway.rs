@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! WebSocket switches carried through the gateway (ADR-0021): the switch
 //! reaches the upstream, bytes flow both ways for longer than an HTTP
 //! connection may live, and each of the tunnel bounds closes or refuses one.

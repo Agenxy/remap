@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use crate::MappingTarget;
 
 /// Returns non-blocking guidance without changing the owner's target or policy.

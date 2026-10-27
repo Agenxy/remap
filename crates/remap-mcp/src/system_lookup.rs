@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Whether the operating system's own resolver returns Remap's answer.
 //!
 //! The DNS and forwarding probes ask Remap's listener directly, so they stay

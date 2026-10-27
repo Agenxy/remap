@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Adversarial same-origin redirect boundaries.
 
 use remap_core::{LandingPath, MAX_LANDING_BYTES, MappingTarget};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The `remap_health` tool's output: whether the system resolver returns
 //! Remap's answer, so an agent can tell a silent fallback from a healthy one.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Peer mappings carried through Supgang's local stream endpoint (ADR-0026),
 //! against a stand-in endpoint that speaks version 1 and pipes each stream
 //! to a real upstream: plaintext only when the owner chose it, pinned TLS

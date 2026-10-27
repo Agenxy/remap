@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! A failed upstream exchange names the mapping and why it failed, and
 //! never the upstream's address or port (ADR-0028).
 

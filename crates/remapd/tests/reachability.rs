@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Preview and apply probe loopback HTTP targets and advise when nothing
 //! listens there, without ever refusing the change (ADR-0028).
 

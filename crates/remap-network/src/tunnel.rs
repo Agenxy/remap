@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! WebSocket upgrades carried through the gateway under their own bounds
 //! (ADR-0021). An upgraded connection stops being HTTP: it is counted apart
 //! from HTTP connections, closed when it carries nothing for the idle limit,

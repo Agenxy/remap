@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// One enabled network service with a DNS protocol, as SystemConfiguration

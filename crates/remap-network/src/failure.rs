@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What the gateway tells a client when it cannot route a request (ADR-0028).
 //!
 //! The body names the stable error code, the mapping pattern the request

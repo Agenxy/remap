@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The MCP preview and committing tools carry the authority's reachability
 //! advice for loopback HTTP targets, and still commit (ADR-0028).
 

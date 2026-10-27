@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use crate::diagnostic::Diagnostic;
 
 pub(super) fn set_target(matches: &clap::ArgMatches) -> Result<String, Diagnostic> {
