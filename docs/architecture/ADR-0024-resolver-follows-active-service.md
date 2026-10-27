@@ -106,7 +106,10 @@ service still holding Remap's configuration returns to its captured prior
 state; a service at its prior state is left alone; any other state is a
 conflict and nothing is restored. Verification expects the global resolver to
 match the prior configuration only of services that are connected, since a
-disconnected service cannot contribute to it.
+disconnected service cannot contribute to it. With no service connected at
+all, macOS publishes no global resolver, so an empty one is the restored
+state; the per-service comparison is then the whole proof (amended
+2026-10-27, `ResolverOfflineRestoreTests.swift`).
 
 ## Consequences
 

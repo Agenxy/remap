@@ -28,6 +28,10 @@ final class ResolverTestNetwork: NativeNetworkConfiguring, Sendable {
         var services: [Service]
         var faults: Set<Fault> = []
         var commits = 0
+        var commitAttempts = 0
+        /// 1-based commit attempts refused before any change, as a stale
+        /// preferences session or a lost authorization would be.
+        var refusedCommitAttempts: Set<Int> = []
     }
 
     private let state: Mutex<State>
@@ -42,6 +46,16 @@ final class ResolverTestNetwork: NativeNetworkConfiguring, Sendable {
 
     func service(_ serviceID: String) -> Service? {
         state.withLock { $0.services.first { $0.serviceID == serviceID } }
+    }
+
+    /// Refuses the given 1-based future commit attempt without changing anything.
+    func refuseCommit(_ ordinal: Int) {
+        update { state in _ = state.refusedCommitAttempts.insert(state.commitAttempts + ordinal) }
+    }
+
+    /// Commits that changed the persisted configuration.
+    var commitCount: Int {
+        state.withLock(\.commits)
     }
 
     func setUp(_ serviceID: String, _ connected: Bool) {
@@ -90,7 +104,9 @@ final class ResolverTestNetwork: NativeNetworkConfiguring, Sendable {
 
     func commit(_ changes: [ServiceConfigurationChange]) throws {
         try state.withLock { state in
-            if state.faults.contains(.commitRefused) {
+            state.commitAttempts += 1
+            let refused = state.refusedCommitAttempts.contains(state.commitAttempts)
+            if refused || state.faults.contains(.commitRefused) {
                 throw ResolverError.preferences("commit and apply DNS preferences")
             }
             for change in changes {

@@ -382,7 +382,7 @@ final class ActivatedMac: Sendable {
     }
 }
 
-private final class HandoffBypassLog: ResolverBypassRecording, Sendable {
+final class HandoffBypassLog: ResolverBypassRecording, Sendable {
     private let recorded = Mutex<[ResolverBypassPayload]>([])
 
     func record(_ payload: ResolverBypassPayload) {
