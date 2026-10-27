@@ -105,6 +105,40 @@ origin under use-upstream. The default remains use-upstream; choose preserve-cli
 explicitly when an origin serves several names or selects virtual hosts by name.
 See [Name a local site](../tutorials/name-a-local-site.md) for the complete recipe.
 
+### Reachability advice
+
+Preview, apply, set and enable try one TCP connection, for at most a second, to
+each loopback HTTP target they leave enabled: an address on `127.0.0.0/8` or
+`::1`, or `localhost`. When nothing accepts it, the result carries an advisory:
+
+```text
+  Advisory   api.test: target refused connection; nothing is listening there, so requests will fail with 502 E_GATEWAY_UPSTREAM (cause refused) until a service starts
+```
+
+The change is still previewed or committed; start the service whenever you
+like. Peer targets, other names and addresses off loopback are never probed,
+and the probe sends no bytes. An exact retry of an apply returns its stored
+receipt with advice about what is listening at the time of the retry.
+
+### When the gateway cannot reach a target
+
+A request that matched a mapping but could not be completed receives a plain-text
+error naming the code, the matched mapping and a stable cause:
+
+```text
+Remap could not route this request.
+
+E_GATEWAY_UPSTREAM: The mapping's target refused the connection.
+
+Mapping: api.test
+Cause: refused
+Next: start the service; `remap get api.test` shows the target.
+```
+
+The causes are `refused`, `timeout`, `tls`, `reset`, `unreachable` and `other`.
+`504 E_GATEWAY_TIMEOUT` always has cause `timeout`. The response never shows the
+target's address or port; `remap get` shows it to you.
+
 ## Validate without the daemon
 
 ```text

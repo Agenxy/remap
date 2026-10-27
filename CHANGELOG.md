@@ -19,6 +19,23 @@ platform claims separate.
   global resolver, so restoration now accepts an empty one once every service
   Remap changed holds its captured configuration again; any other global
   resolver is checked exactly as before.
+- A failed routed request says which mapping failed and why (ADR-0028). The
+  `502 E_GATEWAY_UPSTREAM` and `504 E_GATEWAY_TIMEOUT` bodies, reported from
+  agenxy-supply, said neither. They keep their codes and now carry the matched
+  pattern (`Mapping: *.api.test`), a stable cause (`refused`, `timeout`,
+  `tls`, `reset`, `unreachable` or `other`) and a next step; every other error
+  after a match names the mapping too. The upstream's address and port still
+  never leave the gateway, and `remap get` shows the owner the target.
+- A mapping to a port with nothing listening no longer looks healthy until the
+  first request. Preview, apply, set and enable, on the CLI, over MCP and in
+  the native app, try one TCP connection, for at most a second, to each
+  loopback HTTP target the change leaves enabled, and advise
+  `target refused connection` when nothing accepts it. The change still
+  succeeds. Peer targets, other names and addresses off loopback are never
+  probed, and the probe sends no bytes, so the MCP tools keep their read-only
+  and closed-world annotations; their descriptions now say they probe.
+- `remap://help` explains the trade-offs between single-label names and a
+  suffix of the owner's choosing, without recommending one.
 - Fixed the macOS resolver supervisor falling back to ordinary DNS and never
   re-arming until `remapd` restarted (ADR-0025). The daemon reports the
   highest generation it has accepted, so a fresh reconciler publishes above

@@ -19,8 +19,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
+use crate::failure::UpstreamCause;
 use crate::proxy::ProxyClient;
-use crate::supgang_stream::SupgangStreams;
+use crate::supgang_stream::{StreamError, SupgangStreams};
 
 /// How the request leaves the gateway.
 pub(crate) enum Dialer {
@@ -49,8 +50,8 @@ pub(crate) struct PinnedTls {
 
 /// Why the request got no response.
 pub(crate) enum SendError {
-    /// The upstream, or every way to it, refused or failed.
-    Upstream,
+    /// The upstream, or every way to it, refused or failed, and why.
+    Upstream(UpstreamCause),
     /// Nothing answered before the routing deadline.
     Timeout,
 }
@@ -68,7 +69,7 @@ impl Dialer {
                     client
                         .request(request)
                         .await
-                        .map_err(|_| SendError::Upstream)
+                        .map_err(|error| upstream(&error))
                 })
                 .await
             }
@@ -82,12 +83,12 @@ impl StreamDial {
     async fn send(self, request: Request<Incoming>) -> Result<Response<Incoming>, SendError> {
         let stream = match self.streams.open(&self.node, &self.service).await {
             Ok(stream) => stream,
-            Err(_refused) => {
-                let client = self.fallback.ok_or(SendError::Upstream)?;
+            Err(refused) => {
+                let client = self.fallback.ok_or_else(|| stream_refused(&refused))?;
                 return client
                     .request(request)
                     .await
-                    .map_err(|_| SendError::Upstream);
+                    .map_err(|error| upstream(&error));
             }
         };
         let request = origin_form(request)?;
@@ -97,7 +98,7 @@ impl StreamDial {
                 let secured = connector
                     .connect(tls.server_name, stream)
                     .await
-                    .map_err(|_| SendError::Upstream)?;
+                    .map_err(|error| upstream(&error))?;
                 exchange(secured, request).await
             }
             None => exchange(stream, request).await,
@@ -113,14 +114,29 @@ where
     let (mut sender, connection) = http1::Builder::new()
         .handshake(TokioIo::new(io))
         .await
-        .map_err(|_| SendError::Upstream)?;
+        .map_err(|error| upstream(&error))?;
     tokio::spawn(async move {
         let _closed = connection.with_upgrades().await;
     });
     sender
         .send_request(request)
         .await
-        .map_err(|_| SendError::Upstream)
+        .map_err(|error| upstream(&error))
+}
+
+fn upstream(error: &(dyn std::error::Error + 'static)) -> SendError {
+    SendError::Upstream(UpstreamCause::classify(error))
+}
+
+/// A stream Supgang declined is a refusal; an endpoint that could not be
+/// used at all is reported without guessing at the network beyond it.
+const fn stream_refused(error: &StreamError) -> SendError {
+    SendError::Upstream(match error {
+        StreamError::Refused => UpstreamCause::Refused,
+        StreamError::Unavailable | StreamError::WrongOwner | StreamError::Malformed => {
+            UpstreamCause::Other
+        }
+    })
 }
 
 /// A stream is already addressed to the service, so the request target is
@@ -135,6 +151,6 @@ fn origin_form(request: Request<Incoming>) -> Result<Request<Incoming>, SendErro
     parts.uri = Uri::builder()
         .path_and_query(path)
         .build()
-        .map_err(|_| SendError::Upstream)?;
+        .map_err(|_| SendError::Upstream(UpstreamCause::Other))?;
     Ok(Request::from_parts(parts, body))
 }

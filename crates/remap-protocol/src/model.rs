@@ -278,7 +278,8 @@ pub struct ChangeEffect {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PreviewResult {
-    /// Advisory guidance that never blocks the owner's explicit target.
+    /// Advisory guidance that never blocks the owner's explicit target,
+    /// including reachability of loopback HTTP targets observed now.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
     /// Registry revision against which the projection ran.
@@ -293,7 +294,8 @@ pub struct PreviewResult {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ApplyResult {
-    /// Advisory guidance retained in the exact idempotent receipt.
+    /// Advisory guidance retained in the exact idempotent receipt, followed
+    /// by reachability of loopback HTTP targets observed when answering.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
     /// Caller-generated idempotency identifier.

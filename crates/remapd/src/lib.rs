@@ -5,6 +5,7 @@ mod launchd;
 mod network_bootstrap;
 mod peer;
 mod privilege;
+mod reachability;
 mod server;
 mod system_control;
 mod systemd;
