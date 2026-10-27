@@ -170,10 +170,9 @@ private func connectUnixSocket(path: String) throws -> Int32 {
         }
         var address = sockaddr_un()
         let bytes = Array(path.utf8CString)
-        guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
-            throw ResolverChannelError.transport
-        }
-        guard let pathOffset = MemoryLayout.offset(of: \sockaddr_un.sun_path) else {
+        guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path),
+              let pathOffset = MemoryLayout.offset(of: \sockaddr_un.sun_path)
+        else {
             throw ResolverChannelError.transport
         }
         let addressLength = pathOffset + bytes.count

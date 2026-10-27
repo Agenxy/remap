@@ -17,7 +17,7 @@ use rmcp::model::{
     CacheScope, CallToolResult, ClientCapabilities, DiscoverResult, ExtensionCapabilities,
     Implementation, InitializeRequestParams, InitializeResult, ListResourceTemplatesResult,
     ListResourcesResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
-    ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities, ServerInfo,
+    ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities, ServerConfig,
     SubscribeRequestParams, SubscriptionFilter, UnsubscribeRequestParams,
 };
 use rmcp::service::{RequestContext, SubscriptionContext};
@@ -444,7 +444,7 @@ impl ServerHandler for RemapMcp {
         Cow::Borrowed(&SUPPORTED_PROTOCOL_VERSIONS)
     }
 
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let mut extensions = ExtensionCapabilities::new();
         let mut app_settings = Map::new();
         app_settings.insert(
@@ -458,7 +458,7 @@ impl ServerHandler for RemapMcp {
             .enable_resources_subscribe()
             .enable_tools()
             .build();
-        ServerInfo::new(capabilities)
+        ServerConfig::new(capabilities)
             .with_server_info(server_implementation())
             .with_instructions(
                 "Read remap://help first. Observe remap_status, preview changes, then mutate with the observed expected_revision and a fresh UUIDv4 operation_id. Reuse an operation ID only to retry the identical request.",

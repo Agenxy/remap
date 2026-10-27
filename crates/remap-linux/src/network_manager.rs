@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::collections::BTreeMap;
 
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+use zbus::{OwnedObjectPath, OwnedVariant, Variant};
 
 use crate::resolved::{SystemdResolved, name_has_owner, snapshot_resolved, system_connection};
 use crate::{
@@ -18,7 +18,7 @@ use errors::{
     recovery_required, unsupported,
 };
 
-type Settings = BTreeMap<String, BTreeMap<String, OwnedValue>>;
+type Settings = BTreeMap<String, BTreeMap<String, OwnedVariant>>;
 
 const IPV4: &str = "ipv4";
 const IPV6: &str = "ipv6";
@@ -50,7 +50,7 @@ pub struct NetworkManagerStartupObservation {
 
 #[derive(Debug)]
 struct NetworkManagerBackend {
-    connection: zbus::blocking::Connection,
+    connection: zbus::Connection,
     device_path: OwnedObjectPath,
     interface_name: String,
     link: LinkIndex,
@@ -516,21 +516,24 @@ impl NetworkManagerBackend {
             .map_err(|_error| invalid_scope())?
             .into_string()
             .map_err(|_error| invalid_scope())?;
-        let manager = NetworkManagerProxy::new(&connection).map_err(|_error| bus_error())?;
-        let device_path = manager
-            .get_device_by_ip_iface(&interface_name)
-            .map_err(|_error| invalid_scope())?;
+        let device_path = zbus::block_on(async {
+            NetworkManagerProxy::new(&connection)
+                .await
+                .map_err(|_error| bus_error())?
+                .get_device_by_ip_iface(&interface_name)
+                .await
+                .map_err(|_error| invalid_scope())
+        })?;
         let backend = Self {
             connection,
             device_path,
             interface_name,
             link,
         };
-        if !backend
-            .device_proxy()?
-            .managed()
-            .map_err(|_error| bus_error())?
-        {
+        if !zbus::block_on(async {
+            let proxy = backend.device_proxy().await?;
+            proxy.managed().await.map_err(|_error| bus_error())
+        })? {
             return Err(invalid_scope());
         }
         Ok(backend)
@@ -553,9 +556,11 @@ impl NetworkManagerBackend {
         )? {
             return Ok(false);
         }
-        let proxy = self.device_proxy()?;
-        Ok(proxy.managed().map_err(|_error| bus_error())?
-            && proxy.state().map_err(|_error| bus_error())? == DEVICE_STATE_ACTIVATED)
+        zbus::block_on(async {
+            let proxy = self.device_proxy().await?;
+            Ok(proxy.managed().await.map_err(|_error| bus_error())?
+                && proxy.state().await.map_err(|_error| bus_error())? == DEVICE_STATE_ACTIVATED)
+        })
     }
 
     fn startup_observation(
@@ -580,10 +585,13 @@ impl NetworkManagerBackend {
     }
 
     fn applied(&self) -> LinuxResult<AppliedConnection> {
-        let proxy = self.device_proxy()?;
-        let (settings, version) = proxy
-            .get_applied_connection(0)
-            .map_err(|error| method_error(&error))?;
+        let (settings, version) = zbus::block_on(async {
+            let proxy = self.device_proxy().await?;
+            proxy
+                .get_applied_connection(0)
+                .await
+                .map_err(|error| method_error(&error))
+        })?;
         let digest = digest(&settings)?;
         Ok(AppliedConnection {
             settings,
@@ -593,16 +601,20 @@ impl NetworkManagerBackend {
     }
 
     fn reapply(&self, settings: Settings, version: u64) -> LinuxResult<()> {
-        self.device_proxy()?
-            .reapply(settings, version, REAPPLY_PRESERVE_EXTERNAL_IP)
-            .map_err(|error| method_error(&error))
+        zbus::block_on(async {
+            self.device_proxy()
+                .await?
+                .reapply(settings, version, REAPPLY_PRESERVE_EXTERNAL_IP)
+                .await
+                .map_err(|error| method_error(&error))
+        })
     }
 
-    fn device_proxy(&self) -> LinuxResult<NetworkManagerDeviceProxy<'_>> {
+    async fn device_proxy(&self) -> LinuxResult<NetworkManagerDeviceProxy<'_>> {
         NetworkManagerDeviceProxy::builder(&self.connection)
             .path(self.device_path.clone())
-            .map_err(|_error| bus_error())?
             .build()
+            .await
             .map_err(|_error| bus_error())
     }
 }
@@ -683,19 +695,19 @@ fn apply_owned_dns(settings: &Settings) -> LinuxResult<Settings> {
     let ipv4 = owned.get_mut(IPV4).ok_or_else(unsupported)?;
     insert_strings(ipv4, DNS_DATA, &["127.0.0.1"])?;
     insert_strings(ipv4, DNS_SEARCH, &["~."])?;
-    ipv4.insert(IGNORE_AUTO_DNS.to_owned(), OwnedValue::from(true));
+    ipv4.insert(IGNORE_AUTO_DNS.to_owned(), OwnedVariant::from(true));
     ipv4.insert(
         DNS_PRIORITY.to_owned(),
-        OwnedValue::from(EXCLUSIVE_PRIORITY),
+        OwnedVariant::from(EXCLUSIVE_PRIORITY),
     );
     insert_legacy_ipv4(ipv4, &[u32::from_ne_bytes([127, 0, 0, 1])])?;
     if let Some(ipv6) = owned.get_mut(IPV6) {
         insert_strings(ipv6, DNS_DATA, &[])?;
         insert_strings(ipv6, DNS_SEARCH, &[])?;
-        ipv6.insert(IGNORE_AUTO_DNS.to_owned(), OwnedValue::from(true));
+        ipv6.insert(IGNORE_AUTO_DNS.to_owned(), OwnedVariant::from(true));
         ipv6.insert(
             DNS_PRIORITY.to_owned(),
-            OwnedValue::from(EXCLUSIVE_PRIORITY),
+            OwnedVariant::from(EXCLUSIVE_PRIORITY),
         );
         insert_legacy_ipv6(ipv6, &[])?;
     }
@@ -747,8 +759,8 @@ fn clone_settings(settings: &Settings) -> LinuxResult<Settings> {
 }
 
 fn digest(settings: &Settings) -> LinuxResult<[u8; 32]> {
-    let context = zbus::zvariant::serialized::Context::new_dbus(zbus::zvariant::LE, 0);
-    let encoded = zbus::zvariant::to_bytes(context, settings).map_err(|_error| invalid_state())?;
+    let context = zbus::wire::serialized::Context::new(zbus::wire::LE, 0);
+    let encoded = zbus::wire::to_bytes(context, settings).map_err(|_error| invalid_state())?;
     Ok(crate::digest::sha256(encoded.bytes()))
 }
 
@@ -817,7 +829,7 @@ fn section_is_owned(settings: &Settings, name: &str, ipv4: bool) -> LinuxResult<
         && optional_i32(section.get(DNS_PRIORITY))? == Some(EXCLUSIVE_PRIORITY))
 }
 
-fn optional_strings(value: Option<&OwnedValue>) -> LinuxResult<Option<Vec<String>>> {
+fn optional_strings(value: Option<&OwnedVariant>) -> LinuxResult<Option<Vec<String>>> {
     value
         .map(|value| {
             value
@@ -828,16 +840,16 @@ fn optional_strings(value: Option<&OwnedValue>) -> LinuxResult<Option<Vec<String
         .transpose()
 }
 
-fn optional_bool(value: Option<&OwnedValue>) -> LinuxResult<Option<bool>> {
+fn optional_bool(value: Option<&OwnedVariant>) -> LinuxResult<Option<bool>> {
     value.map(value_bool).transpose()
 }
 
-fn optional_i32(value: Option<&OwnedValue>) -> LinuxResult<Option<i32>> {
+fn optional_i32(value: Option<&OwnedVariant>) -> LinuxResult<Option<i32>> {
     value.map(value_i32).transpose()
 }
 
 fn optional_legacy_dns(
-    value: Option<&OwnedValue>,
+    value: Option<&OwnedVariant>,
     ipv4: bool,
 ) -> LinuxResult<Option<NetworkManagerLegacyDns>> {
     let Some(value) = value else {
@@ -857,23 +869,23 @@ fn optional_legacy_dns(
     }
 }
 
-fn value_string(value: &OwnedValue) -> LinuxResult<String> {
+fn value_string(value: &OwnedVariant) -> LinuxResult<String> {
     value
         .try_clone()
         .map_err(|_error| invalid_state())
         .and_then(|value| String::try_from(value).map_err(|_error| invalid_state()))
 }
 
-fn value_bool(value: &OwnedValue) -> LinuxResult<bool> {
+fn value_bool(value: &OwnedVariant) -> LinuxResult<bool> {
     bool::try_from(value).map_err(|_error| invalid_state())
 }
 
-fn value_i32(value: &OwnedValue) -> LinuxResult<i32> {
+fn value_i32(value: &OwnedVariant) -> LinuxResult<i32> {
     i32::try_from(value).map_err(|_error| invalid_state())
 }
 
 fn insert_strings(
-    section: &mut BTreeMap<String, OwnedValue>,
+    section: &mut BTreeMap<String, OwnedVariant>,
     name: &str,
     values: &[&str],
 ) -> LinuxResult<()> {
@@ -881,39 +893,39 @@ fn insert_strings(
         .iter()
         .map(|value| (*value).to_owned())
         .collect::<Vec<_>>();
-    let value = OwnedValue::try_from(Value::new(values)).map_err(|_error| invalid_state())?;
+    let value = OwnedVariant::try_from(Variant::new(values)).map_err(|_error| invalid_state())?;
     section.insert(name.to_owned(), value);
     Ok(())
 }
 
 fn insert_legacy_ipv4(
-    section: &mut BTreeMap<String, OwnedValue>,
+    section: &mut BTreeMap<String, OwnedVariant>,
     values: &[u32],
 ) -> LinuxResult<()> {
     let value =
-        OwnedValue::try_from(Value::new(values.to_vec())).map_err(|_error| invalid_state())?;
+        OwnedVariant::try_from(Variant::new(values.to_vec())).map_err(|_error| invalid_state())?;
     section.insert(LEGACY_DNS.to_owned(), value);
     Ok(())
 }
 
 fn insert_legacy_ipv6(
-    section: &mut BTreeMap<String, OwnedValue>,
+    section: &mut BTreeMap<String, OwnedVariant>,
     values: &[Vec<u8>],
 ) -> LinuxResult<()> {
     let value =
-        OwnedValue::try_from(Value::new(values.to_vec())).map_err(|_error| invalid_state())?;
+        OwnedVariant::try_from(Variant::new(values.to_vec())).map_err(|_error| invalid_state())?;
     section.insert(LEGACY_DNS.to_owned(), value);
     Ok(())
 }
 
 fn restore_strings(
-    section: &mut BTreeMap<String, OwnedValue>,
+    section: &mut BTreeMap<String, OwnedVariant>,
     name: &str,
     value: Option<&Vec<String>>,
 ) -> LinuxResult<()> {
     match value {
         Some(values) => {
-            let value = OwnedValue::try_from(Value::new(values.clone()))
+            let value = OwnedVariant::try_from(Variant::new(values.clone()))
                 .map_err(|_error| invalid_state())?;
             section.insert(name.to_owned(), value);
         }
@@ -924,10 +936,10 @@ fn restore_strings(
     Ok(())
 }
 
-fn restore_bool(section: &mut BTreeMap<String, OwnedValue>, name: &str, value: Option<bool>) {
+fn restore_bool(section: &mut BTreeMap<String, OwnedVariant>, name: &str, value: Option<bool>) {
     match value {
         Some(value) => {
-            section.insert(name.to_owned(), OwnedValue::from(value));
+            section.insert(name.to_owned(), OwnedVariant::from(value));
         }
         None => {
             section.remove(name);
@@ -935,10 +947,10 @@ fn restore_bool(section: &mut BTreeMap<String, OwnedValue>, name: &str, value: O
     }
 }
 
-fn restore_i32(section: &mut BTreeMap<String, OwnedValue>, name: &str, value: Option<i32>) {
+fn restore_i32(section: &mut BTreeMap<String, OwnedVariant>, name: &str, value: Option<i32>) {
     match value {
         Some(value) => {
-            section.insert(name.to_owned(), OwnedValue::from(value));
+            section.insert(name.to_owned(), OwnedVariant::from(value));
         }
         None => {
             section.remove(name);
@@ -947,7 +959,7 @@ fn restore_i32(section: &mut BTreeMap<String, OwnedValue>, name: &str, value: Op
 }
 
 fn restore_legacy(
-    section: &mut BTreeMap<String, OwnedValue>,
+    section: &mut BTreeMap<String, OwnedVariant>,
     value: Option<&NetworkManagerLegacyDns>,
 ) -> LinuxResult<()> {
     match value {
@@ -982,8 +994,7 @@ fn require_interface_identity(expected: &str, observed: &str) -> LinuxResult<()>
 #[zbus::proxy(
     interface = "org.freedesktop.NetworkManager",
     default_service = "org.freedesktop.NetworkManager",
-    default_path = "/org/freedesktop/NetworkManager",
-    gen_async = false
+    default_path = "/org/freedesktop/NetworkManager"
 )]
 trait NetworkManager {
     #[zbus(name = "GetDeviceByIpIface")]
@@ -992,8 +1003,7 @@ trait NetworkManager {
 
 #[zbus::proxy(
     interface = "org.freedesktop.NetworkManager.Device",
-    default_service = "org.freedesktop.NetworkManager",
-    gen_async = false
+    default_service = "org.freedesktop.NetworkManager"
 )]
 trait NetworkManagerDevice {
     #[zbus(property, name = "Managed")]

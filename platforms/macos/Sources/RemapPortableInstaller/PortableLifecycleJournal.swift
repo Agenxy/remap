@@ -62,7 +62,7 @@ struct PortableAuthorityJournalPublication: Codable, Equatable, Sendable {
               URL(fileURLWithPath: stagedPath).deletingLastPathComponent()
               == URL(fileURLWithPath: finalPath).deletingLastPathComponent(),
               URL(fileURLWithPath: stagedPath).lastPathComponent
-              .hasPrefix(".remap-portable-"),
+                  .hasPrefix(".remap-portable-"),
               stagedPath != finalPath,
               newByteCount > 0,
               newByteCount <= PortableAuthorityFiles.maximumByteCount,

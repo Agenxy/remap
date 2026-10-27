@@ -292,7 +292,7 @@ mod tests {
         else {
             return Err("mapped query was forwarded".into());
         };
-        assert!(Message::from_vec(&bytes)?.answers.is_empty());
+        assert_eq!(Message::from_vec(&bytes)?.answers, Vec::new());
         Ok(())
     }
 

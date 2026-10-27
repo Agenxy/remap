@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::collections::BTreeMap;
 
-use zbus::zvariant::{OwnedValue, Value};
+use zbus::{OwnedVariant, Variant};
 
 use super::{
     DNS_DATA, DNS_PRIORITY, DNS_SEARCH, IGNORE_AUTO_DNS, IPV4, IPV6, LEGACY_DNS,
@@ -64,7 +64,7 @@ fn normalized_owned_connection_restores_exact_prior_and_detects_drift()
     let ipv4 = normalized
         .get_mut(IPV4)
         .ok_or_else(|| std::io::Error::other("fixture IPv4 section is absent"))?;
-    ipv4.insert("never-default".to_owned(), OwnedValue::from(false));
+    ipv4.insert("never-default".to_owned(), OwnedVariant::from(false));
     let drifted = super::AppliedConnection {
         digest: digest(&normalized)?,
         settings: normalized,
@@ -92,7 +92,7 @@ fn protected_drift_with_owned_dns_preserves_the_prior_restoration_fields()
     let ipv4 = normalized
         .get_mut(IPV4)
         .ok_or_else(|| std::io::Error::other("fixture IPv4 section is absent"))?;
-    ipv4.insert("never-default".to_owned(), OwnedValue::from(false));
+    ipv4.insert("never-default".to_owned(), OwnedVariant::from(false));
     let applied = super::AppliedConnection {
         digest: digest(&normalized)?,
         settings: normalized.clone(),
@@ -108,7 +108,7 @@ fn protected_drift_with_owned_dns_preserves_the_prior_restoration_fields()
         .ok_or_else(|| std::io::Error::other("restored IPv4 section is absent"))?;
     assert_eq!(
         restored_ipv4.get("never-default"),
-        Some(&OwnedValue::from(false))
+        Some(&OwnedVariant::from(false))
     );
     assert_eq!(snapshot_ip_dns(&restored, IPV4)?, prior.ipv4().cloned());
     assert_eq!(digest(&restored)?, successor.before_connection_digest());
@@ -131,7 +131,7 @@ fn fixture_settings() -> Result<Settings, Box<dyn std::error::Error>> {
 
     let mut ipv4 = BTreeMap::new();
     ipv4.insert("method".to_owned(), owned_string("manual")?);
-    ipv4.insert("never-default".to_owned(), OwnedValue::from(true));
+    ipv4.insert("never-default".to_owned(), OwnedVariant::from(true));
     ipv4.insert(DNS_DATA.to_owned(), owned_strings(&["1.1.1.1"])?);
     ipv4.insert(DNS_SEARCH.to_owned(), owned_strings(&["before.test"])?);
     ipv4.insert(LEGACY_DNS.to_owned(), owned_u32s(&[16_843_009])?);
@@ -153,18 +153,18 @@ fn normalize_empty_ipv6(settings: &mut Settings) {
     }
 }
 
-fn owned_string(value: &str) -> Result<OwnedValue, Box<dyn std::error::Error>> {
-    Ok(OwnedValue::try_from(Value::new(value))?)
+fn owned_string(value: &str) -> Result<OwnedVariant, Box<dyn std::error::Error>> {
+    Ok(OwnedVariant::try_from(Variant::new(value))?)
 }
 
-fn owned_strings(values: &[&str]) -> Result<OwnedValue, Box<dyn std::error::Error>> {
+fn owned_strings(values: &[&str]) -> Result<OwnedVariant, Box<dyn std::error::Error>> {
     let values = values
         .iter()
         .map(|value| (*value).to_owned())
         .collect::<Vec<_>>();
-    Ok(OwnedValue::try_from(Value::new(values))?)
+    Ok(OwnedVariant::try_from(Variant::new(values))?)
 }
 
-fn owned_u32s(values: &[u32]) -> Result<OwnedValue, Box<dyn std::error::Error>> {
-    Ok(OwnedValue::try_from(Value::new(values.to_vec()))?)
+fn owned_u32s(values: &[u32]) -> Result<OwnedVariant, Box<dyn std::error::Error>> {
+    Ok(OwnedVariant::try_from(Variant::new(values.to_vec()))?)
 }

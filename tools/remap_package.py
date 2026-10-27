@@ -9,10 +9,9 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import cast
-
-import tomllib
 
 
 def verify_policy_copies(root: Path, product_version: str) -> None:

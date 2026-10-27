@@ -269,7 +269,7 @@ mod tests {
     fn counts_branching_complexity() -> Result<(), Box<dyn Error>> {
         let source = "fn branch(a: bool, b: bool) { if a && b { } else if a { } }";
         let violations = analyze(Path::new("fixture.rs"), source)?;
-        assert!(violations.is_empty());
+        assert_eq!(violations, Vec::new());
         Ok(())
     }
 

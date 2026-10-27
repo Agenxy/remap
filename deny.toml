@@ -45,11 +45,12 @@ allow-workspace = true
 allow = []
 deny = []
 skip = [
-    # rmcp 3.1.2 depends on tracing 0.1.44 with its attribute macros enabled;
-    # tracing-attributes has not yet migrated to syn 3. Owner: Agenxy Remap
-    # maintainers. Expiry: 2026-10-01. Remove this exact exception as soon as
-    # that upstream edge converges; the public remediation is the rmcp upgrade.
-    { crate = "syn@2.0.119", reason = "official MCP SDK tracing macro edge" },
+    # rmcp 3.8.0, h2 0.4.20, hickory-proto 0.26.3 and hyper-util 0.1.21 depend
+    # on tracing 0.1.44 with its attribute macros enabled, and tracing-attributes
+    # 0.1.31, the current release, has not yet migrated to syn 3. Owner: Agenxy
+    # Remap maintainers. Re-checked 2026-10-27; expiry: 2027-01-31. Remove this
+    # exact exception as soon as tracing-attributes moves to syn 3.
+    { crate = "syn@2.0.119", reason = "tracing attribute macro edge" },
 ]
 skip-tree = []
 
