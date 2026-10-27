@@ -1,7 +1,8 @@
+<img src="docs/icon.svg" width="72" height="72" alt="">
+
 # Remap
 
-Remap is a serious, cross-platform name override and service-routing utility
-for technical users.
+A cross-platform name override and service-routing utility for technical users.
 
 Its contract is direct:
 
