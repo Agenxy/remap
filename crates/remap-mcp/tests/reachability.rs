@@ -87,7 +87,6 @@ async fn preview_set_and_apply_advise_on_a_refused_loopback_target() -> Result<(
             },
         )
         .await?;
-    let server_service = server_task.await??;
 
     let preview = call(
         &client,
@@ -96,6 +95,9 @@ async fn preview_set_and_apply_advise_on_a_refused_loopback_target() -> Result<(
     )
     .await?;
     assert_eq!(refusals(&preview["data"], "api.test"), 1, "{preview}");
+    // The SDK answers `server/discover` during bootstrap and returns the
+    // running service only once a later request opens the lifecycle.
+    let server_service = tokio::time::timeout(Duration::from_secs(1), server_task).await???;
 
     let set = call(
         &client,
