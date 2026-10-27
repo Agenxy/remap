@@ -409,11 +409,19 @@ func capturedService(
     )
 }
 
-/// Whether the global resolver is the one restoring `services` leaves.
+/// Whether the global resolver is the one restoring `services` leaves. The
+/// caller has already proven every owned service holds its captured prior
+/// configuration; this is only the global view.
 func restoredGlobalResolverMatches(
     _ services: [DNSServiceRecord],
     snapshot: NetworkSnapshot
 ) throws -> Bool {
+    // With no service connected, macOS publishes no global resolver, so an
+    // empty one is the restored state and there is nothing to compare.
+    let anyServiceUp = snapshot.services.contains { $0.effectiveServers != nil }
+    if !anyServiceUp, snapshot.globalServers.isEmpty {
+        return true
+    }
     // Only a service that is up can be expected in the global resolver.
     let liveRecords = services.filter {
         snapshot.service($0.serviceID)?.effectiveServers != nil

@@ -6,6 +6,12 @@ platform claims separate.
 
 ## Unreleased
 
+- Fixed a macOS safe bypass taken with no network connected reporting
+  `E_RESOLVER_SAFE_BYPASS_FAILED` until the network returned, although
+  ordinary DNS had been restored. With nothing connected macOS publishes no
+  global resolver, so restoration now accepts an empty one once every service
+  Remap changed holds its captured configuration again; any other global
+  resolver is checked exactly as before.
 - Fixed the macOS resolver supervisor falling back to ordinary DNS and never
   re-arming until `remapd` restarted (ADR-0025). The daemon reports the
   highest generation it has accepted, so a fresh reconciler publishes above
