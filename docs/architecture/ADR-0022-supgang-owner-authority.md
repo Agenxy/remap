@@ -190,9 +190,12 @@ The target accepts a request only when all of the following hold:
    - a random nonce;
    - `issued_at` and `expires_at`.
 
-   For Remap, the preconditions are the resolver plan the target last
-   reported (`remap-system plan`). A signature made for one network state
-   therefore cannot be replayed against another.
+   For the DNS operations, the preconditions are the resolver plan the target
+   last reported (`remap-system plan`). A signature made for one network
+   state therefore cannot be replayed against another. For the lifecycle
+   operations, they are the preview digest: the update preview computed from
+   the verified, staged candidate, or the recovery preview of the
+   interrupted transaction (see "The lifecycle operations").
 2. **The hive is pinned.** The signer holds a current membership certificate
    in the hive whose `HiveId` this machine pinned when Supgang mode was
    enabled.
