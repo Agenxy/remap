@@ -27,7 +27,7 @@ func supervisorPollsDaemonHealthAndReportsStateTransitionsOnce() async throws {
     )
 
     let task = Task { await supervisor.run() }
-    try await Task.sleep(for: .milliseconds(35))
+    try await eventually { channel.healthCount() >= 2 }
     task.cancel()
     await task.value
     monitor.finish()
@@ -59,7 +59,7 @@ func supervisorKeepsMonitorFailureVisibleWhilePolling() async throws {
     )
 
     let task = Task { await supervisor.run() }
-    try await Task.sleep(for: .milliseconds(25))
+    try await eventually { channel.healthCount() >= 2 }
     task.cancel()
     await task.value
     monitor.finish()
@@ -93,9 +93,7 @@ func supervisorRestoresOrdinaryDNSPromptlyAfterAChannelFault() async throws {
     )
 
     let task = Task { await supervisor.run() }
-    for _ in 0 ..< 100 where !states.withLock({ $0.contains(.bypassed(code: "E_RESOLVER_SAFE_BYPASS")) }) {
-        try await Task.sleep(for: .milliseconds(1))
-    }
+    try await eventually { states.withLock { $0.contains(.bypassed(code: "E_RESOLVER_SAFE_BYPASS")) } }
     task.cancel()
     await task.value
     monitor.finish()
@@ -132,9 +130,7 @@ func supervisorDefaultGraceNeverDelaysAChannelFault() async throws {
     )
 
     let task = Task { await supervisor.run() }
-    for _ in 0 ..< 100 where restoreCount.withLock({ $0 }) == 0 {
-        try await Task.sleep(for: .milliseconds(1))
-    }
+    try await eventually { restoreCount.withLock { $0 } > 0 }
     task.cancel()
     await task.value
     monitor.finish()
@@ -187,9 +183,7 @@ func supervisorReenrolsOnlyAfterTheRecoveredDaemonAcceptsACompletePlan() async t
     )
 
     let task = Task { await supervisor.run() }
-    for _ in 0 ..< 100 where commitCount.withLock({ $0 }) == 0 {
-        try await Task.sleep(for: .milliseconds(1))
-    }
+    try await eventually { commitCount.withLock { $0 } > 0 }
     task.cancel()
     await task.value
     monitor.finish()
