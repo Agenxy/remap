@@ -2,11 +2,13 @@
 
 ## Status
 
-Proposed, 2026-10-14. This extends ADR-0006 (native resolution and privilege)
-and ADR-0016 (peers are Supgang's). It depends on Supgang ADR 0005 (owner action
-authority), which is itself Proposed (see "Dependencies on Supgang"). Nothing
-here is implemented. Supgang stays an optional provider: Remap's native
-authority is the default and works with no Supgang installed.
+Proposed, 2026-10-14; amended 2026-10-27 to add the lifecycle operations
+`remap.system.update` and `remap.system.recover`. This extends ADR-0006 (native
+resolution and privilege) and ADR-0016 (peers are Supgang's). It depends on
+Supgang ADR 0005 (owner action authority), which is itself Proposed (see
+"Dependencies on Supgang"). Nothing here is implemented. Supgang stays an
+optional provider: Remap's native authority is the default and works with no
+Supgang installed.
 
 ## Context
 
@@ -59,16 +61,67 @@ ask.
 There is a closed list of named operations. Adding one requires an amendment
 to this ADR.
 
-| Operation | Effect |
-| --- | --- |
-| `remap.dns.activate` | `remap-system activate` with the installed version, owner UID and system socket |
-| `remap.dns.deactivate` | `remap-system deactivate` (compare-and-restore) |
+| Operation | Effect | Native fallback |
+| --- | --- | --- |
+| `remap.dns.activate` | `remap-system activate` with the installed version, owner UID and system socket | `remap-system activate` as root at the console |
+| `remap.dns.deactivate` | `remap-system deactivate` (compare-and-restore) | `remap-system deactivate` as root at the console |
+| `remap.system.update` | Replace the installed generation with one verified, staged release, as `remap system update` does after its approval | the package through Apple Installer, or `make update`, with the local device-owner approval |
+| `remap.system.recover` | Resume or roll back the one interrupted lifecycle transaction in the journal, as `remap system recover` does after its approval | `remap system recover` or `make recover`, with the local device-owner approval |
 
-Both operations require owner presence (ADR 0005 `required` mode). Each one is
+Every operation requires owner presence (ADR 0005 `required` mode). Each one is
 approved through a target-issued challenge, signed by an owner-presence key on
 the device the owner carries, with Touch ID for every signature. Remap's
-verifier refuses a `policy` grant for either operation, whatever the grant
-itself allows. Supgang never prompts for presence on the target.
+verifier refuses a `policy` grant for any of them, whatever the grant itself
+allows. Supgang never prompts for presence on the target.
+
+A refused or unavailable Supgang path never blocks the native fallback, and
+the fallback never consults Supgang.
+
+### The lifecycle operations
+
+The native lifecycle already separates *what will happen* from *who approves
+it*: the privileged authority computes an exact, state-bound preview, and the
+local device-owner prompt approves that preview and nothing else. The two
+lifecycle operations keep that shape and change only the approval. The owner
+assertion replaces the local prompt. The preview, the transaction, its journal
+and its rollback stay the same, so a remote approval cannot reach a state that
+a local one could not.
+
+For both operations the target-issued challenge carries the preview digest as
+its precondition, alongside the operation and its canonical arguments. Any
+change to the installed generation, the journal or the resolver state between
+the challenge and the assertion makes the digest stale, and the request is
+refused, exactly as a stale local approval is today.
+
+**`remap.system.update`.** Its canonical arguments are the release's version,
+channel and architecture, and the SHA-256 of its canonical release manifest.
+Issuing the challenge may copy the candidate into root-owned staging and
+verify it, because the preview is computed from the verified candidate. That
+changes nothing installed, holds one candidate at a time within the existing
+size bounds, and discards a candidate that does not verify. Then:
+
+- **Authorization is not authenticity.** The assertion says the owner asked
+  for this release. Whether the release is genuine is decided separately, by
+  the native release pin or, where the Mac opted in, by Supgang ADR 0007's
+  release role. An assertion can never make an unverified package acceptable.
+- **No remote downgrade.** The update is refused unless its version is greater
+  than the installed generation's, and greater than the channel's high-water
+  mark where one is kept. An older, genuinely signed release with a known flaw
+  therefore cannot be installed remotely. Downgrading stays native-only.
+- Resolver activation is carried across the update, as the native update does.
+
+**`remap.system.recover`.** Its canonical arguments are the interrupted
+transaction's identifier and its recovery preview digest. Recovery restores
+exactly what the journal records, which can include the immediately previous
+generation. That is not a downgrade in the sense above, because it returns
+the Mac to a generation it was already running.
+
+**Not on the list.** First installation is native-only. A Mac without Remap
+has no verifier to check an assertion, and the hive pin it would need is
+created in the same in-person visit. Uninstallation stays native-only, and so
+does any downgrade. Uninstalling also removes the Supgang pin, because
+removing capability needs no ceremony, so a later reinstallation is a first
+installation again.
 
 Mapping edits are not on the list: they are already per-user authority held
 by `remapd` (ADR-0003). Enabling Supgang mode, choosing the trust anchor, and
@@ -216,8 +269,14 @@ that failed.
 - The owner can bring DNS back on any of their machines from any other one,
   with one signature and no administrator password on the target. This is the
   Oct 13 failure, recoverable remotely.
-- A stolen owner device that holds a Remap grant can change DNS on every node
-  in that grant's scope until it is revoked. Four things bound that risk: the
+- An update that stopped halfway, or a newer release, can be finished from
+  anywhere with one carried-device approval, and no administrator password on
+  the target.
+- A stolen owner device that holds a Remap grant can, until it is revoked,
+  change DNS on every node in that grant's scope, and can update those nodes
+  or recover them. Updating installs only a genuinely signed, newer release,
+  so it cannot introduce code the release authority did not sign, and it
+  cannot downgrade. Four things bound that risk: the
   grant's scope, the five-minute expiry, the fresh-revocation requirement,
   and Supgang's hardware-held keys and threshold root (Supgang ADRs 0003 and
   0004). This ADR adds no bound beyond those. Grants are namespaced per tool,
@@ -250,6 +309,11 @@ Remap's review of ADR 0005 raised two gaps:
   target-issued challenge. Remap prefers the challenge.
 - A status lease that can only be renewed from home would make this mode
   fail exactly when the owner is away.
+
+`remap.system.update` does not depend on Supgang ADR 0007 (release and
+code-signing roles). The native release pin authenticates the release with or
+without it. ADR 0007 only adds a second, opt-in authenticity path, which a
+separate Remap ADR adopts.
 
 This ADR stays Proposed until ADR 0005 is accepted. No Remap code treats any
 of these shapes as stable before then.
