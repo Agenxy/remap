@@ -1,8 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Native repository-quality gates for Remap.
 
 mod discover;
+mod installation_policy;
+mod installation_policy_tests;
 mod limits;
 mod model;
+mod repository_policy;
 mod rust_metrics;
 mod scan;
 mod toolchain;
@@ -64,7 +68,7 @@ fn render_success(json_output: bool) {
     if json_output {
         println!("{}", json!({"ok": true, "violations": []}));
     } else {
-        println!("Remap quality: all structural gates passed");
+        println!("Remap quality: all repository gates passed");
     }
 }
 
@@ -96,7 +100,7 @@ fn render_violations(json_output: bool, violations: &[Violation]) {
         eprintln!("  help: {}", violation.rule.help());
     }
     eprintln!(
-        "Remap quality: {} structural violation(s)",
+        "Remap quality: {} repository violation(s)",
         violations.len()
     );
 }

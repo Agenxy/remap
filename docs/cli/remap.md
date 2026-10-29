@@ -1,35 +1,189 @@
 # `remap` command reference
 
-Status: M0 command contract.
-
 The CLI is human-readable by default and emits a stable JSON envelope when
-`--json` is present. In M0 it performs only local validation and diagnostics. It
-does not install a daemon, alter DNS, bind listeners, change trust, or write a
-registry.
+`--json` is present. Stateful commands reach the same authoritative daemon as
+MCP; they never edit the registry directly.
 
-## Discover the build
+## Start the local authority
 
 ```text
-remap --help
-remap doctor
-remap --json doctor
+remap daemon
+remap status
 ```
 
-`doctor` is deliberately useful before privileged installation exists. It
-reports the build, platform, current capabilities, DNS impact, and telemetry
-posture without making a network request.
+The daemon runs in the foreground until interrupted. Its private data directory,
+database, and Unix control socket are user-owned and permission restricted. Use
+`--data-dir PATH` for an explicit test or development authority.
 
-## Validate a mapping
+## Work with mappings
+
+```text
+remap set atlas http://127.0.0.1:5173
+remap set database 192.168.1.40
+remap set '*.lab' https://example.com:9443 --host-header use-upstream
+remap set hub supgang://MacSolis/dibs --host-header preserve-client
+remap list --all
+remap get atlas
+remap resolve service.lab
+remap disable atlas
+remap enable atlas
+remap remove atlas
+```
+
+Interactive mutations read the current registry revision and generate a UUIDv4
+operation identifier. Automation can make both guards explicit:
+
+```text
+remap set atlas 127.0.0.1 \
+  --expect 12 \
+  --operation-id 4df4bb55-93bb-4f99-9707-9761f6a69364
+```
+
+Reuse an operation identifier only for an exact retry. A stale revision or a
+conflicting reuse fails without partial effects. Supplying `--operation-id` on
+a single-mapping command therefore also requires `--expect`; both values must
+remain identical on a retry.
+
+Humans and agents share the same atomic preview/apply model. The document is a
+JSON array of tagged changes and is limited to 512 KiB:
+
+```json
+[
+  {
+    "kind": "set",
+    "pattern": "atlas",
+    "target": "http://127.0.0.1:5173",
+    "host_policy": "preserve-client"
+  },
+  { "kind": "disable", "pattern": "old-atlas" }
+]
+```
+
+```text
+remap preview changes.json
+remap apply changes.json --expect 12 \
+  --operation-id 4df4bb55-93bb-4f99-9707-9761f6a69364
+```
+
+Omit the file or use `-` to read the document from standard input. `apply`
+requires both guards so a lost response can be retried exactly.
+
+Listings are deterministically ordered and bounded. `--limit` accepts 1 through
+128; a returned cursor can be supplied with `--after`.
+
+### Open a page while preserving root-absolute assets
+
+```text
+remap set process.YOUR-SUFFIX http://127.0.0.1:8792/ --landing /ops/scorecard/
+```
+
+Root GET and HEAD requests redirect to the landing page and retain their query.
+Other requests, including `/bar.css` and POST `/`, reach the origin unchanged.
+Landing requires an origin-root HTTP target or a Supgang service. It cannot be
+`/`, leave the same origin, contain traversal, fragments or control characters,
+or exceed 2048 encoded bytes. Percent-encode non-ASCII text.
+
+Set changes in preview/apply documents accept an optional `landing` field.
+`apply --landing PATH` sets it on every set change in that batch. Get, list,
+validate and before/after previews show the landing path. Set without landing
+removes an existing landing. `validate` accepts the same `--landing` flag.
+
+### Rename a name
+
+```text
+remap set old.YOUR-SUFFIX --moved-to new.YOUR-SUFFIX --until 2030-01-01T00:00:00Z
+```
+
+Every HTTP request receives a 301 to the new name, retaining its path and query.
+The optional RFC3339 deadline stops the mapping from matching; the record stays
+listed. Self redirects and chains are refused. Atomic documents use the target
+`moved://new.YOUR-SUFFIX?until=2030-01-01T00:00:00Z`.
+
+Set, preview and validate give advisory warnings for pathful HTTP targets.
+Set and preview also give a host-policy hint when multiple names share one
+origin under use-upstream. The default remains use-upstream; choose preserve-client
+explicitly when an origin serves several names or selects virtual hosts by name.
+See [Name a local site](../tutorials/name-a-local-site.md) for the complete recipe.
+
+### Reachability advice
+
+Preview, apply, set and enable try one TCP connection, for at most a second, to
+each loopback HTTP target they leave enabled: an address on `127.0.0.0/8` or
+`::1`, or `localhost`. When nothing accepts it, the result carries an advisory:
+
+```text
+  Advisory   api.test: target refused connection; nothing is listening there, so requests will fail with 502 E_GATEWAY_UPSTREAM (cause refused) until a service starts
+```
+
+The change is still previewed or committed; start the service whenever you
+like. Peer targets, other names and addresses off loopback are never probed,
+and the probe sends no bytes. An exact retry of an apply returns its stored
+receipt with advice about what is listening at the time of the retry.
+
+### When the gateway cannot reach a target
+
+A request that matched a mapping but could not be completed receives a plain-text
+error naming the code, the matched mapping and a stable cause:
+
+```text
+Remap could not route this request.
+
+E_GATEWAY_UPSTREAM: The mapping's target refused the connection.
+
+Mapping: api.test
+Cause: refused
+Next: start the service; `remap get api.test` shows the target.
+```
+
+The causes are `refused`, `timeout`, `tls`, `reset`, `unreachable` and `other`.
+`504 E_GATEWAY_TIMEOUT` always has cause `timeout`. The response never shows the
+target's address or port; `remap get` shows it to you.
+
+## Validate without the daemon
 
 ```text
 remap validate atlas http://127.0.0.1:5173
 remap validate google.com 127.0.0.1
 remap validate '*.lab' https://example.com:9443/base
-remap validate atlas https://upstream.example --host-header use-upstream
 ```
 
-The result shows the canonical name, destination, inferred destination type,
-and HTTP host policy. Validation never persists the result.
+Validation canonicalizes the name, destination, inferred destination type, and
+HTTP host policy without reading or changing authority state.
+
+## Agent host
+
+```text
+remap mcp
+```
+
+This command serves MCP on standard input and output. It emits no banners or
+human results on standard output. See [the MCP guide](../mcp/README.md) for host
+configuration, versions, tools, resources, and security boundaries.
+
+## Manage the installed service
+
+```text
+remap system status
+remap system recover
+remap system uninstall
+```
+
+These commands hand off directly to the locally signed lifecycle client in the
+active immutable generation. They do not use a shell, accept a helper path, or
+run a binary from the working directory. The privileged service accepts the
+client only when its user, code identifier, certificate, and exact code hash
+match the root-owned lifecycle configuration.
+
+`status` is read-only. `recover` and `uninstall` first print the exact native
+effects, then require macOS device-owner authentication in an interactive
+terminal. Text input, a pseudo-terminal, and a disclosed state token cannot
+substitute for Touch ID or the account-password fallback. There is no `--yes`
+flag or environment-variable bypass.
+
+With `--json`, a mutation writes one canonical response per line: the preview
+before macOS authentication, followed by the mutation result. JSON does not
+make lifecycle mutation noninteractive. Errors are one bounded JSON object on
+standard output.
 
 ## JSON contract
 
@@ -39,44 +193,59 @@ Every structured response includes schema identity and success state:
 {
   "schema": "remap.cli/v1",
   "ok": true,
-  "command": "validate",
+  "command": "status",
   "result": {
-    "name_pattern": "atlas",
-    "target": "http://127.0.0.1:5173/",
-    "target_kind": "http",
-    "host_header_policy": "preserve-client",
-    "system_state_changed": false
+    "kind": "status",
+    "value": {
+      "revision": 12,
+      "mapping_count": 4,
+      "enabled_count": 3,
+      "schema_version": 2,
+      "daemon_version": "0.2.0"
+    }
   }
 }
 ```
 
-Errors use the same envelope and stable codes:
+When retryable retention maintenance is blocking new mutations, status adds a
+`maintenance` diagnostic with its stable code, explanation, recovery hint, and
+retryability. Reads and previews remain available; an exact retry of an already
+committed operation still returns its stored receipt.
+
+Errors retain the daemon's stable identity, retry guidance, and safe context:
 
 ```json
 {
   "schema": "remap.cli/v1",
   "ok": false,
   "error": {
-    "code": "R101",
-    "message": "the mapping name is not valid",
-    "detail": "'127.0.0.1' is an address literal, not a DNS name that Remap can override",
-    "hint": "Use a hostname such as 'atlas', 'api.lab', or '*.lab'; addresses belong on the target side."
+    "code": "E_REVISION_CONFLICT",
+    "message": "the registry is at revision 13, not the expected revision 12",
+    "detail": "current_revision=13, expected_revision=12",
+    "hint": "read current mappings, reconsider the change, and use the new revision",
+    "retryable": false,
+    "context": {
+      "current_revision": "13",
+      "expected_revision": "12"
+    }
   }
 }
 ```
 
 Structured results are written only to standard output. Human diagnostics and
-progress use standard error. Broken pipes terminate cleanly. JSON never includes
-credentials or hidden environment data.
+service lifecycle messages use standard error. Broken pipes terminate cleanly.
 
 ## Exit status
 
 | Status | Meaning |
 |---:|---|
-| `0` | Command completed successfully, including help and a downstream closed pipe |
-| `2` | Usage or supplied mapping input is invalid |
+| `0` | Command completed successfully, including help and a closed downstream pipe |
+| `1` | A non-retryable authority or service operation failed |
+| `2` | Usage or supplied offline mapping input is invalid |
+| `64` | Native lifecycle command usage is invalid |
+| `65` | Native lifecycle data or integrity validation failed |
+| `69` | The native lifecycle client or requested operation is unavailable |
 | `70` | Internal command state violated an invariant |
-
-Mutation commands will be added only when they can call the authoritative
-daemon. They will support structured preview before any destructive, trust, or
-system-wide action.
+| `73` | Native lifecycle state is busy or conflicts with the reviewed state |
+| `75` | A retryable authority or local transport condition prevented completion |
+| `77` | Native lifecycle authority or approval was rejected |

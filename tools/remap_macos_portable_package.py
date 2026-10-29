@@ -1,0 +1,912 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Build Remap's prebuilt, target-Mac-self-signed Apple Installer package."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import platform
+import plistlib
+import shutil
+import stat
+import subprocess
+import tempfile
+import time
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+from tools.remap_app import build as build_app
+from tools.remap_app import verify_structure as verify_app_structure
+from tools.remap_freshness import verify_selected_xcode
+from tools.remap_macos_artifact import expected_macos_sdk, normalize_macos_sdk_metadata
+from tools.remap_macos_package_metadata import (
+    normalize_package_extended_attributes,
+    normalize_package_timestamps,
+    removable_extended_attributes,
+    verify_payload_member_names,
+)
+from tools.remap_macos_release_installer_signing import (
+    ReleaseInstallerSigningIdentity,
+)
+from tools.remap_macos_release_installer_signing import (
+    sign_package as sign_release_installer_package,
+)
+from tools.remap_macos_xar import canonicalize_xar_metadata
+from tools.remap_native_package import MANPAGE_NAMES
+from tools.remap_release_artifacts import (
+    MAXIMUM_FILE_BYTES,
+    MAXIMUM_SIGNATURE_BYTES,
+    open_release_artifact,
+    publish_release_artifacts,
+)
+from tools.remap_release_signing import (
+    PackageKind,
+    PackageSigning,
+    Signer,
+    canonical_public_key,
+    open_signer,
+    pinned_public_key,
+    preflight,
+    swift_build_arguments,
+    verify_embedded_pin,
+)
+
+PACKAGE_IDENTIFIER = "org.agenxy.Remap.PortableInstaller"
+RELEASE_NAMESPACE = "remap-release"
+PACKAGE_NAMESPACE = "remap-package-v1"
+RELEASE_SIGNER_IDENTITY = "remap-release"
+LOCAL_BUILD_PATH_MARKERS = (b"/Users/", b"/private/var/folders/")
+
+
+@dataclass(frozen=True)
+class PortablePackage:
+    """One verified native package and its external release identity."""
+
+    path: Path
+    sha256: str
+    signature_path: Path
+    signature_sha256: str
+    release_manifest_sha256: str
+    architecture: str
+    product_version: str
+
+
+def build(
+    root: Path,
+    *,
+    product_version: str,
+    output: Path,
+    signing: PackageSigning,
+    installer_identity: ReleaseInstallerSigningIdentity | None,
+) -> PortablePackage:
+    """Build and verify one no-shell portable package without a paid identity.
+
+    `signing` says which kind of package this is and which key signs it: the development
+    file key, or the release key in the Secure Enclave. The kind also selects the one pin
+    compiled into the package's installer, and the pin both signatures are checked against.
+
+    `installer_identity` is `None` for a development package. Apple's installer
+    signature is what lets another Mac accept the package, so it is required for
+    anything distributed; producing one needs a private key in a keychain, and macOS
+    asks a human for the keychain password when the key's access list does not name the
+    signer. A package built to be installed on the machine that built it does not need
+    that signature and must not need that person.
+    """
+    verify_selected_xcode(required=True)
+    architecture = _architecture()
+    validate_version(product_version)
+    preflight(root, signing)
+    pinned_key = pinned_public_key(root, signing.kind)
+    output_signature = output.with_suffix(output.suffix + ".sig")
+    for artifact in (output, output_signature):
+        if artifact.exists() or artifact.is_symlink():
+            raise RuntimeError(f"refusing to overwrite release artifact {artifact}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="remap-portable-package-") as directory:
+        workspace = Path(directory)
+        os.chmod(workspace, 0o700)
+        products = _build_products(root, product_version, workspace, kind=signing.kind)
+        verify_embedded_pin(products / "remap-portable-installer", root, signing.kind)
+        signer = open_signer(
+            root, signing, release_key_tool=products / "remap-release-key"
+        )
+        package_root = workspace / "package-root"
+        scripts = workspace / "scripts"
+        package_root.mkdir(mode=0o700)
+        scripts.mkdir(mode=0o700)
+        staged = _payload_path(
+            package_root,
+            Path("/Library/Application Support/Agenxy/Remap/Portable/Staged"),
+        )
+        staged.mkdir(parents=True, mode=0o700)
+        _normalize_parent_modes(package_root, staged)
+        release_payload = staged / "payload"
+        _stage_release_payload(products, release_payload, root)
+        entries = release_entries(release_payload)
+        manifest = release_manifest(product_version, architecture, entries)
+        manifest_bytes = canonical_release_json(manifest)
+        manifest_path = staged / "release-manifest.json"
+        _ = manifest_path.write_bytes(manifest_bytes)
+        os.chmod(manifest_path, 0o400)
+        _sign_file(manifest_path, signer, namespace=RELEASE_NAMESPACE)
+        verify_detached_package_signature(
+            manifest_path,
+            manifest_path.with_suffix(manifest_path.suffix + ".sig"),
+            public_key=pinned_key,
+            namespace=RELEASE_NAMESPACE,
+        )
+        portable_installer = products / "remap-portable-installer"
+        for script in ("preinstall", "postinstall"):
+            _copy_file(portable_installer, scripts / script, mode=0o555)
+        _verify_tree(staged)
+        _verify_tree(scripts, script_root=True)
+        component_plist = workspace / "components.plist"
+        with component_plist.open("wb") as output_file:
+            plistlib.dump([], output_file, sort_keys=True)
+        os.chmod(component_plist, 0o400)
+        for package_input in (package_root, scripts, component_plist):
+            normalize_package_timestamps(package_input)
+            normalize_package_extended_attributes(package_input)
+        unsigned = workspace / "Remap.pkg"
+        _run_pkgbuild(
+            (
+                "/usr/bin/pkgbuild",
+                "--root",
+                str(package_root),
+                "--scripts",
+                str(scripts),
+                "--identifier",
+                PACKAGE_IDENTIFIER,
+                "--version",
+                product_version,
+                "--install-location",
+                "/",
+                "--ownership",
+                "recommended",
+                "--component-plist",
+                str(component_plist),
+                # macOS 27 stamps every created file with `com.apple.provenance`, which
+                # cannot be removed even as root, and pkgbuild carries an unremovable
+                # attribute into the payload as an AppleDouble `._` sidecar.
+                # `COPYFILE_DISABLE` below does not prevent it. Excluding the sidecars
+                # keeps the payload to the files Remap actually installs. Specifying a
+                # filter at all inhibits pkgbuild's own defaults, so those are restated
+                # here rather than silently lost.
+                "--filter",
+                r"(^|/)\._[^/]*$",
+                "--filter",
+                r"(^|/)\.DS_Store$",
+                "--filter",
+                r"(^|/)\.svn(/|$)",
+                "--filter",
+                r"(^|/)CVS(/|$)",
+                str(unsigned),
+            ),
+            root=root,
+            environment={**os.environ, "COPYFILE_DISABLE": "1"},
+        )
+        canonicalize_xar_metadata(unsigned)
+        _verify_package(
+            unsigned,
+            workspace / "expanded",
+            product_version=product_version,
+            expected_manifest=manifest_bytes,
+        )
+        if installer_identity is None:
+            signed = unsigned
+        else:
+            signed = workspace / "Remap-signed.pkg"
+            sign_release_installer_package(unsigned, signed, installer_identity)
+            canonicalize_xar_metadata(
+                signed,
+                signature_signer=products / "remap-release-xar-signer",
+                certificate_sha256=installer_identity.sha256,
+                keychain=installer_identity.keychain,
+            )
+            _verify_package(
+                signed,
+                workspace / "signed-expanded",
+                product_version=product_version,
+                expected_manifest=manifest_bytes,
+                require_unsigned=False,
+            )
+        _sign_file(signed, signer, namespace=PACKAGE_NAMESPACE)
+        signed_signature = signed.with_suffix(signed.suffix + ".sig")
+        verify_detached_package_signature(
+            signed,
+            signed_signature,
+            public_key=pinned_key,
+        )
+        publish_release_artifacts(
+            package=signed,
+            signature=signed_signature,
+            output=output,
+            output_signature=output_signature,
+        )
+        verify_detached_package_signature(
+            output,
+            output_signature,
+            public_key=pinned_key,
+        )
+    return PortablePackage(
+        path=output,
+        sha256=_sha256(output),
+        signature_path=output_signature,
+        signature_sha256=_sha256(output_signature),
+        release_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        architecture=architecture,
+        product_version=product_version,
+    )
+
+
+def _build_products(
+    root: Path, version: str, workspace: Path, *, kind: PackageKind
+) -> Path:
+    rust_environment = dict(os.environ)
+    _ = rust_environment.pop("RUSTFLAGS", None)
+    rust_environment["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(
+        (
+            f"--remap-path-prefix={root.resolve()}=/usr/src/remap",
+            f"--remap-path-prefix={Path.home()}=/usr/src/remap-build",
+        )
+    )
+    rust_environment["CARGO_INCREMENTAL"] = "0"
+    _run(
+        (
+            "mise",
+            "exec",
+            "--",
+            "cargo",
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            "remap",
+            "-p",
+            "remapd",
+        ),
+        root=root,
+        environment=rust_environment,
+    )
+    _run(
+        (
+            "xcrun",
+            "swift",
+            "build",
+            "--configuration",
+            "release",
+            "--package-path",
+            "platforms/macos",
+            *swift_build_arguments(kind),
+        ),
+        root=root,
+    )
+    swift_bin = Path(
+        _capture(
+            (
+                "xcrun",
+                "swift",
+                "build",
+                "--show-bin-path",
+                "--configuration",
+                "release",
+                "--package-path",
+                "platforms/macos",
+            ),
+            root=root,
+        )
+    )
+    swift_names = (
+        "remap-install",
+        "remap-installer-bootstrap",
+        "remap-installer-service",
+        "remap-lifecycle",
+        "remap-portable-installer",
+        "remap-resolver",
+        "remap-system",
+    )
+    normalize_macos_sdk_metadata(
+        tuple(swift_bin / name for name in swift_names),
+        expected_sdk=expected_macos_sdk(root),
+        minimum_macos="15.0",
+    )
+    products = workspace / "products"
+    products.mkdir(mode=0o700)
+    app = build_app(root, version, release=True, sign=False)
+    verify_app_structure(root, app)
+    binaries = {
+        "remap": root / "target/release/remap",
+        "remapd": root / "target/release/remapd",
+        "remap-release-key": swift_bin / "remap-release-key",
+        "remap-release-xar-signer": swift_bin / "remap-release-xar-signer",
+        **{name: swift_bin / name for name in swift_names},
+    }
+    for name, source in binaries.items():
+        _copy_file(source, products / name, mode=0o500)
+    _copy_tree(app, products / "Remap.app")
+    identifiers = {
+        "remap": "org.agenxy.Remap.cli",
+        "remapd": "org.agenxy.Remap.daemon",
+        "remap-install": "org.agenxy.Remap.install-bootstrap",
+        "remap-installer-bootstrap": "org.agenxy.Remap.installer-bootstrap",
+        "remap-installer-service": "org.agenxy.Remap.installer-service",
+        "remap-lifecycle": "org.agenxy.Remap.lifecycle-cli",
+        "remap-portable-installer": "org.agenxy.Remap.portable-installer",
+        "remap-release-key": "org.agenxy.Remap.release-key",
+        "remap-release-xar-signer": "org.agenxy.Remap.release-xar-signer",
+        "remap-resolver": "org.agenxy.Remap.resolver",
+        "remap-system": "org.agenxy.Remap.system",
+    }
+    for name, identifier in identifiers.items():
+        _strip_and_ad_hoc_sign(products / name, identifier=identifier, root=root)
+    app = products / "Remap.app"
+    _remove_copied_bundle_signature(app)
+    _strip_mach_o(app / "Contents/MacOS/Remap", root=root)
+    _ad_hoc_sign(app, identifier="org.agenxy.Remap", root=root)
+    verify_no_local_build_paths(app / "Contents/MacOS/Remap")
+    verify_app_structure(root, app)
+    cli = products / "remap"
+    manpages = products / "manpages"
+    _run((str(cli), "manpages", str(manpages)), root=root)
+    if sorted(path.name for path in manpages.glob("*.1")) != sorted(MANPAGE_NAMES):
+        raise RuntimeError("the portable CLI did not produce its exact 22-page manual")
+    for shell in ("bash", "fish", "zsh"):
+        result = subprocess.run(
+            (str(cli), "completions", shell),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        destination = products / f"remap.{shell}"
+        _ = destination.write_bytes(result.stdout)
+        os.chmod(destination, 0o400)
+    return products
+
+
+def _strip_and_ad_hoc_sign(path: Path, *, identifier: str, root: Path) -> None:
+    _strip_mach_o(path, root=root)
+    _ad_hoc_sign(path, identifier=identifier, root=root)
+    verify_no_local_build_paths(path)
+
+
+def _strip_mach_o(path: Path, *, root: Path) -> None:
+    os.chmod(path, 0o700)
+    _run(("/usr/bin/codesign", "--remove-signature", str(path)), root=root)
+    _run(("/usr/bin/xcrun", "strip", "-S", str(path)), root=root)
+
+
+def _remove_copied_bundle_signature(app: Path) -> None:
+    signature = app / "Contents/_CodeSignature"
+    if not signature.exists():
+        return
+    if signature.is_symlink() or not signature.is_dir():
+        raise RuntimeError("the copied app has an unsafe code-signature directory")
+    children = list(signature.iterdir())
+    if len(children) != 1 or children[0].name != "CodeResources":
+        raise RuntimeError("the copied app has an unexpected code-signature tree")
+    resources = children[0]
+    information = resources.lstat()
+    if resources.is_symlink() or not resources.is_file() or information.st_nlink != 1:
+        raise RuntimeError("the copied app has unsafe code-signature resources")
+    os.chmod(resources, 0o600)
+    resources.unlink()
+    signature.rmdir()
+
+
+def _ad_hoc_sign(path: Path, *, identifier: str, root: Path) -> None:
+    _run(
+        (
+            "/usr/bin/codesign",
+            "--force",
+            "--sign",
+            "-",
+            "--timestamp=none",
+            "--identifier",
+            identifier,
+            str(path),
+        ),
+        root=root,
+    )
+    _run(
+        ("/usr/bin/codesign", "--verify", "--strict", "--verbose=2", str(path)),
+        root=root,
+    )
+    if path.is_file():
+        os.chmod(path, 0o500)
+
+
+def verify_no_local_build_paths(path: Path) -> None:
+    data = path.read_bytes()
+    if any(marker in data for marker in LOCAL_BUILD_PATH_MARKERS):
+        raise RuntimeError(f"release executable contains a local build path: {path}")
+
+
+def _stage_release_payload(products: Path, destination: Path, root: Path) -> None:
+    product = destination / "product"
+    lifecycle = destination / "lifecycle"
+    product.mkdir(parents=True, mode=0o700)
+    lifecycle.mkdir(mode=0o700)
+    for directory in (
+        "app",
+        "bin",
+        "libexec",
+        "share/completions",
+        "share/licenses/remap",
+        "share/man/man1",
+    ):
+        (product / directory).mkdir(parents=True, exist_ok=True, mode=0o700)
+    _copy_tree(products / "Remap.app", product / "app/Remap.app")
+    _copy_file(products / "remap", product / "bin/remap", mode=0o500)
+    for name, destination_name in (
+        ("remap-install", "remap-install"),
+        ("remap-lifecycle", "remap-lifecycle"),
+        ("remap-resolver", "remap-resolver"),
+        ("remap-system", "remap-system"),
+        ("remapd", "remapd"),
+    ):
+        _copy_file(products / name, product / f"libexec/{destination_name}", mode=0o500)
+    for shell in ("bash", "fish", "zsh"):
+        _copy_file(
+            products / f"remap.{shell}",
+            product / f"share/completions/remap.{shell}",
+            mode=0o400,
+        )
+    for name in ("LICENSE", "NOTICE"):
+        _copy_file(root / name, product / f"share/licenses/remap/{name}", mode=0o400)
+    for name in MANPAGE_NAMES:
+        _copy_file(
+            products / "manpages" / name, product / f"share/man/man1/{name}", mode=0o400
+        )
+    _copy_file(
+        products / "remap-installer-bootstrap",
+        lifecycle / "remap-installer-bootstrap",
+        mode=0o500,
+    )
+    _copy_file(
+        products / "remap-installer-service",
+        lifecycle / "remap-installer-service",
+        mode=0o500,
+    )
+    for directory in (destination, *destination.rglob("*")):
+        if directory.is_dir() and not directory.is_symlink():
+            os.chmod(directory, 0o700)
+
+
+def release_entries(root: Path) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        information = path.lstat()
+        if path.is_symlink():
+            raise RuntimeError(f"portable release input is a symlink: {relative}")
+        mode = stat.S_IMODE(information.st_mode)
+        if path.is_dir():
+            if mode != 0o700:
+                raise RuntimeError(
+                    f"portable release directory has wrong mode: {relative}"
+                )
+            entries.append({"kind": "directory", "mode": mode, "path": relative})
+        elif path.is_file() and information.st_nlink == 1:
+            if mode not in {0o400, 0o500} or information.st_size > MAXIMUM_FILE_BYTES:
+                raise RuntimeError(
+                    f"portable release file has unsafe metadata: {relative}"
+                )
+            entries.append(
+                {
+                    "byteCount": information.st_size,
+                    "kind": "regularFile",
+                    "mode": mode,
+                    "path": relative,
+                    "sha256": _sha256(path),
+                }
+            )
+        else:
+            raise RuntimeError(
+                f"portable release input is not a unique regular node: {relative}"
+            )
+    return entries
+
+
+def release_manifest(
+    version: str,
+    architecture: str,
+    entries: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "architecture": architecture,
+        "entries": entries,
+        "minimumMacOSVersion": "15.0",
+        "productIdentifier": "org.agenxy.Remap",
+        "productVersion": version,
+        "schemaVersion": 1,
+    }
+
+
+def _sign_file(path: Path, signer: Signer, *, namespace: str) -> None:
+    signature = path.with_suffix(path.suffix + ".sig")
+    with path.open("rb") as input_file:
+        data = signer.sign(input_file, namespace=namespace)
+    if not data or len(data) > MAXIMUM_SIGNATURE_BYTES:
+        raise RuntimeError("the release signer returned an unsafe signature")
+    _write_generated_signature(signature, data)
+
+
+def _write_generated_signature(signature: Path, data: bytes) -> None:
+    incoming = signature.with_name(f".{signature.name}.{uuid.uuid4().hex}.incoming")
+    with incoming.open("xb") as output_file:
+        _ = output_file.write(data)
+        output_file.flush()
+        os.fsync(output_file.fileno())
+    os.chmod(incoming, 0o400)
+    try:
+        _detached_copy_without_attributes(incoming, signature, data)
+    finally:
+        if incoming.is_file() and not incoming.is_symlink():
+            incoming.unlink()
+
+
+def _detached_copy_without_attributes(
+    source: Path, destination: Path, data: bytes
+) -> None:
+    label = f"org.agenxy.remap.signature-copy.{uuid.uuid4().hex}"
+    result = subprocess.run(
+        (
+            "/bin/launchctl",
+            "submit",
+            "-l",
+            label,
+            "--",
+            "/bin/zsh",
+            "-c",
+            '/bin/dd if="$1" of="$2" bs=4096 2>/dev/null; '
+            + '/bin/chmod 0400 "$2"; /bin/sleep 300',
+            "remap-signature-copy",
+            str(source),
+            str(destination),
+        ),
+        cwd=destination.parent,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0 or result.stdout or result.stderr:
+        raise RuntimeError("launchd could not publish the generated signature")
+    deadline = time.monotonic() + 30
+    try:
+        while time.monotonic() < deadline:
+            if _generated_signature_matches(destination, data):
+                return
+            time.sleep(0.05)
+    finally:
+        _ = subprocess.run(
+            ("/bin/launchctl", "remove", label),
+            cwd=destination.parent,
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
+    raise RuntimeError("launchd did not publish the generated signature")
+
+
+def _generated_signature_matches(path: Path, data: bytes) -> bool:
+    if not path.exists() or path.is_symlink() or not path.is_file():
+        return False
+    information = path.stat()
+    return (
+        information.st_nlink == 1
+        and information.st_uid == os.getuid()
+        and stat.S_IMODE(information.st_mode) == 0o400
+        and information.st_size == len(data)
+        and not removable_extended_attributes(_extended_attribute_names(path))
+        and hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(data).digest()
+    )
+
+
+def _extended_attribute_names(path: Path) -> str:
+    result = subprocess.run(
+        ("/usr/bin/xattr", str(path)),
+        cwd=path.parent,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return result.stdout.strip()
+
+
+def verify_detached_package_signature(
+    package: Path,
+    signature: Path,
+    *,
+    public_key: str,
+    expected_package_owner_uid: int | None = None,
+    namespace: str = PACKAGE_NAMESPACE,
+) -> None:
+    """Verify the complete bytes under one namespace, by default the package's."""
+    canonical_key = canonical_public_key(public_key)
+    with (
+        open_release_artifact(
+            package,
+            maximum_bytes=MAXIMUM_FILE_BYTES * 2,
+            expected_owner_uid=expected_package_owner_uid,
+        ) as input_file,
+        open_release_artifact(
+            signature, maximum_bytes=MAXIMUM_SIGNATURE_BYTES
+        ) as signature_file,
+        tempfile.TemporaryDirectory(prefix="remap-package-verification-") as directory,
+    ):
+        workspace = Path(directory)
+        os.chmod(workspace, 0o700)
+        allowed_signers = workspace / "allowed-signers"
+        _ = allowed_signers.write_text(
+            f"{RELEASE_SIGNER_IDENTITY} {canonical_key}\n",
+            encoding="utf-8",
+        )
+        os.chmod(allowed_signers, 0o400)
+        private_signature = workspace / "package.sig"
+        with private_signature.open("xb") as output_file:
+            shutil.copyfileobj(signature_file, output_file, length=4096)
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        os.chmod(private_signature, 0o400)
+        result = subprocess.run(
+            (
+                "/usr/bin/ssh-keygen",
+                "-Y",
+                "verify",
+                "-f",
+                str(allowed_signers),
+                "-I",
+                RELEASE_SIGNER_IDENTITY,
+                "-n",
+                namespace,
+                "-s",
+                str(private_signature),
+            ),
+            cwd=workspace,
+            stdin=input_file,
+            check=False,
+            capture_output=True,
+            timeout=120,
+        )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"the detached package signature is invalid: {detail}")
+
+
+def _verify_package(
+    package: Path,
+    expanded: Path,
+    *,
+    product_version: str,
+    expected_manifest: bytes,
+    require_unsigned: bool = True,
+) -> None:
+    signature = subprocess.run(
+        ("/usr/sbin/pkgutil", "--check-signature", str(package)),
+        cwd=package.parent,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if require_unsigned and (
+        signature.returncode != 1 or "Status: no signature" not in signature.stdout
+    ):
+        raise RuntimeError(
+            "the portable package does not have the expected unsigned identity"
+        )
+    if not require_unsigned and signature.returncode != 0:
+        raise RuntimeError("the portable package lost its complete XAR signature")
+    payload_listing = subprocess.run(
+        ("/usr/sbin/pkgutil", "--payload-files", str(package)),
+        cwd=package.parent,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if payload_listing.returncode != 0 or payload_listing.stderr:
+        raise RuntimeError("the portable package payload listing failed")
+    verify_payload_member_names(payload_listing.stdout)
+    _run(
+        ("/usr/sbin/pkgutil", "--expand-full", str(package), str(expanded)),
+        root=package.parent,
+    )
+    if (expanded / "PackageInfo").is_file():
+        component = expanded
+    else:
+        components = [path for path in expanded.iterdir() if path.suffix == ".pkg"]
+        if len(components) != 1:
+            raise RuntimeError("portable package expansion is ambiguous")
+        component = components[0]
+    package_info = component / "PackageInfo"
+    document = package_info.read_text(encoding="utf-8")
+    if (
+        f'identifier="{PACKAGE_IDENTIFIER}"' not in document
+        or f'version="{product_version}"' not in document
+    ):
+        raise RuntimeError("portable package identity is not exact")
+    scripts = component / "Scripts"
+    for name in ("preinstall", "postinstall"):
+        path = scripts / name
+        if path.read_bytes()[:4] not in {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf"}:
+            raise RuntimeError(
+                "portable package scripts are not native Mach-O executables"
+            )
+        verify_no_local_build_paths(path)
+        _run(
+            ("/usr/bin/codesign", "--verify", "--strict", str(path)),
+            root=package.parent,
+        )
+    payload = (
+        component / "Payload/Library/Application Support/Agenxy/Remap/Portable/Staged"
+    )
+    if (payload / "release-manifest.json").read_bytes() != expected_manifest:
+        raise RuntimeError("portable package manifest changed during pkgbuild")
+    for path in payload.rglob("*"):
+        if path.is_file() and path.read_bytes()[:4] in {
+            b"\xcf\xfa\xed\xfe",
+            b"\xfe\xed\xfa\xcf",
+        }:
+            verify_no_local_build_paths(path)
+            _run(
+                ("/usr/bin/codesign", "--verify", "--strict", str(path)),
+                root=package.parent,
+            )
+    _verify_tree(payload)
+
+
+def _normalize_parent_modes(package_root: Path, leaf: Path) -> None:
+    for path in (leaf, *leaf.parents):
+        if path == package_root.parent:
+            break
+        if path == package_root:
+            os.chmod(path, 0o700)
+        elif path.name in {"Staged", "Portable", "Remap"}:
+            os.chmod(path, 0o700 if path.name != "Remap" else 0o711)
+        else:
+            os.chmod(path, 0o755)
+
+
+def _verify_tree(root: Path, *, script_root: bool = False) -> None:
+    for path in (root, *root.rglob("*")):
+        information = path.lstat()
+        if path.is_symlink() or (path.is_file() and information.st_nlink != 1):
+            raise RuntimeError(f"portable package tree contains an unsafe node: {path}")
+        mode = stat.S_IMODE(information.st_mode)
+        if path.is_dir():
+            allowed = {0o700} if path == root or script_root else {0o700, 0o711, 0o755}
+        elif script_root:
+            allowed = {0o555}
+        else:
+            allowed = {0o400, 0o500}
+        if mode not in allowed:
+            raise RuntimeError(
+                f"portable package node has unsafe mode {mode:o}: {path}"
+            )
+
+
+def _copy_file(source: Path, destination: Path, *, mode: int) -> None:
+    information = source.lstat()
+    if source.is_symlink() or not source.is_file() or information.st_nlink != 1:
+        raise RuntimeError(f"portable package input is unsafe: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with source.open("rb") as input_file, destination.open("xb") as output_file:
+        shutil.copyfileobj(input_file, output_file, length=1_048_576)
+        output_file.flush()
+        os.fsync(output_file.fileno())
+    os.chmod(destination, mode)
+
+
+def _copy_tree(source: Path, destination: Path) -> None:
+    if source.is_symlink() or not source.is_dir():
+        raise RuntimeError(f"portable package directory input is unsafe: {source}")
+    destination.mkdir(mode=0o700)
+    for child in sorted(source.iterdir()):
+        target = destination / child.name
+        if child.is_dir() and not child.is_symlink():
+            _copy_tree(child, target)
+        else:
+            mode = 0o500 if os.access(child, os.X_OK) else 0o400
+            _copy_file(child, target, mode=mode)
+
+
+def _payload_path(root: Path, absolute: Path) -> Path:
+    if not absolute.is_absolute():
+        raise RuntimeError("portable package payload path must be absolute")
+    return root.joinpath(*absolute.parts[1:])
+
+
+def _architecture() -> str:
+    value = platform.machine()
+    if value not in {"arm64", "x86_64"}:
+        raise RuntimeError(f"unsupported macOS release architecture: {value}")
+    return value
+
+
+def validate_version(value: str) -> None:
+    parts = value.split(".")
+    if len(parts) != 3 or not all(
+        part.isdigit() and str(int(part)) == part for part in parts
+    ):
+        raise RuntimeError("the portable package version must be canonical SemVer")
+
+
+def canonical_release_json(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as input_file:
+        for chunk in iter(lambda: input_file.read(1_048_576), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _capture(arguments: tuple[str, ...], *, root: Path) -> str:
+    result = subprocess.run(
+        arguments,
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return result.stdout.strip()
+
+
+def _run(
+    arguments: tuple[str, ...],
+    *,
+    root: Path,
+    environment: dict[str, str] | None = None,
+) -> None:
+    _ = subprocess.run(
+        arguments,
+        cwd=root,
+        env=environment,
+        check=True,
+        timeout=1_200,
+    )
+
+
+def _run_pkgbuild(
+    arguments: tuple[str, ...],
+    *,
+    root: Path,
+    environment: dict[str, str],
+) -> None:
+    """Run Apple's package builder and classify its protected-xattr diagnostic."""
+    result = subprocess.run(
+        arguments,
+        cwd=root,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=1_200,
+    )
+    diagnostics = [line for line in result.stderr.splitlines() if line]
+    provenance_diagnostics = [
+        line for line in diagnostics if line == "write: Permission denied"
+    ]
+    unexpected = [line for line in diagnostics if line != "write: Permission denied"]
+    if (
+        result.returncode != 0
+        or unexpected
+        or len(provenance_diagnostics) > 4
+        or "Wrote package to" not in result.stdout
+    ):
+        detail = "\n".join((*unexpected, result.stdout)).strip()
+        raise RuntimeError(f"Apple pkgbuild failed its exact output contract: {detail}")

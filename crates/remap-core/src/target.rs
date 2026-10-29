@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU16;
 use std::str::FromStr;
 
-use crate::{RemapName, RemapNameError};
+use crate::{MovedTarget, MovedTargetError, RemapName, RemapNameError};
 
 /// Supported upstream HTTP schemes.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
@@ -84,6 +85,8 @@ pub enum HttpUpstreamError {
     QueryNotSupported,
     /// An upstream base URL cannot include a fragment.
     FragmentNotSupported,
+    /// Raw whitespace and control characters must be percent-encoded.
+    InvalidCharacter,
     /// The port is missing, zero, non-numeric, or greater than 65535.
     InvalidPort(String),
     /// IPv6 literals must use URL brackets.
@@ -110,6 +113,9 @@ impl Display for HttpUpstreamError {
             Self::FragmentNotSupported => {
                 formatter.write_str("an upstream base URL cannot contain a fragment")
             }
+            Self::InvalidCharacter => formatter.write_str(
+                "an upstream URL cannot contain raw whitespace or control characters; percent-encode them",
+            ),
             Self::InvalidPort(port) => write!(
                 formatter,
                 "the upstream port '{port}' must be an integer from 1 through 65535"
@@ -142,14 +148,15 @@ pub struct HttpUpstream {
 }
 
 impl HttpUpstream {
-    /// Parses an upstream with the default preserve-client host policy.
+    /// Parses an upstream with the default use-upstream host policy.
     ///
     /// # Errors
     ///
     /// Returns a precise [`HttpUpstreamError`] when the URL uses an unsupported
-    /// scheme, malformed authority, credentials, query, fragment, or bad port.
+    /// scheme, malformed authority, credentials, raw whitespace, control
+    /// character, query, fragment, or bad port.
     pub fn parse(input: &str) -> Result<Self, HttpUpstreamError> {
-        Self::parse_with_policy(input, HostHeaderPolicy::PreserveClient)
+        Self::parse_with_policy(input, HostHeaderPolicy::UseUpstream)
     }
 
     /// Parses an upstream with an explicit host policy.
@@ -157,11 +164,18 @@ impl HttpUpstream {
     /// # Errors
     ///
     /// Returns a precise [`HttpUpstreamError`] when the URL uses an unsupported
-    /// scheme, malformed authority, credentials, query, fragment, or bad port.
+    /// scheme, malformed authority, credentials, raw whitespace, control
+    /// character, query, fragment, or bad port.
     pub fn parse_with_policy(
         input: &str,
         host_header_policy: HostHeaderPolicy,
     ) -> Result<Self, HttpUpstreamError> {
+        if input
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+        {
+            return Err(HttpUpstreamError::InvalidCharacter);
+        }
         let (raw_scheme, remainder) = input
             .split_once("://")
             .ok_or_else(|| HttpUpstreamError::InvalidUrl(input.to_owned()))?;
@@ -303,17 +317,23 @@ impl FromStr for HttpUpstream {
 /// A validation failure for an inferred mapping destination.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum MappingTargetError {
+    /// A moved destination or expiry is invalid.
+    InvalidMoved(MovedTargetError),
     /// A DNS alias is not a valid Remap hostname.
     InvalidName(RemapNameError),
     /// An HTTP upstream is invalid.
     InvalidHttpUpstream(HttpUpstreamError),
+    /// A `supgang://` target is invalid.
+    InvalidPeerService(PeerServiceError),
 }
 
 impl Display for MappingTargetError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidMoved(error) => Display::fmt(error, formatter),
             Self::InvalidName(error) => Display::fmt(error, formatter),
             Self::InvalidHttpUpstream(error) => Display::fmt(error, formatter),
+            Self::InvalidPeerService(error) => Display::fmt(error, formatter),
         }
     }
 }
@@ -321,32 +341,215 @@ impl Display for MappingTargetError {
 impl Error for MappingTargetError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::InvalidMoved(error) => Some(error),
             Self::InvalidName(error) => Some(error),
             Self::InvalidHttpUpstream(error) => Some(error),
+            Self::InvalidPeerService(error) => Some(error),
         }
     }
 }
 
-/// A direct DNS destination, DNS alias, or routed HTTP service.
+/// A service on a Supgang peer, resolved at route time (ADR-0016).
+///
+/// `supgang://<peer>/<service>`: the peer as `supgang resolve` accepts it
+/// and the service name as Supgang bounds it. Validated and stored as text;
+/// the address, port, and key pin come from the peer's signed record when a
+/// request is routed, never from this value.
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct PeerService {
+    peer: String,
+    service: String,
+    host_header_policy: HostHeaderPolicy,
+    transport: PeerTransport,
+}
+
+/// What protects a peer service's bytes inside Supgang's tunnel (ADR-0026).
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+pub enum PeerTransport {
+    /// `supgang://`: TLS to the key the peer advertises, verified end to end.
+    PinnedTls,
+    /// `supgang+http://`: plain HTTP carried only inside the authenticated
+    /// tunnel, chosen explicitly by the owner and never inferred.
+    PlaintextInTunnel,
+}
+
+impl PeerTransport {
+    const fn scheme(self) -> &'static str {
+        match self {
+            Self::PinnedTls => "supgang://",
+            Self::PlaintextInTunnel => "supgang+http://",
+        }
+    }
+}
+
+/// Maximum bytes in a peer selector, the bound Supgang's own names have.
+pub const MAX_PEER_SELECTOR_BYTES: usize = 64;
+/// Maximum bytes in a service name, the bound Supgang's advertisements have.
+pub const MAX_SERVICE_NAME_BYTES: usize = 16;
+
+impl PeerService {
+    /// Parses `supgang://<peer>/<service>` or `supgang+http://<peer>/<service>`
+    /// with an explicit host policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a precise [`PeerServiceError`] for a missing or malformed peer
+    /// or service, or for anything past the service name.
+    pub fn parse_with_policy(
+        input: &str,
+        host_header_policy: HostHeaderPolicy,
+    ) -> Result<Self, PeerServiceError> {
+        let (transport, remainder) = [PeerTransport::PinnedTls, PeerTransport::PlaintextInTunnel]
+            .into_iter()
+            .find_map(|transport| {
+                input
+                    .strip_prefix(transport.scheme())
+                    .map(|remainder| (transport, remainder))
+            })
+            .ok_or_else(|| PeerServiceError::InvalidUrl(input.to_owned()))?;
+        let (peer, service) = remainder
+            .split_once('/')
+            .ok_or(PeerServiceError::MissingService)?;
+        if service.contains('/') || service.contains('?') || service.contains('#') {
+            return Err(PeerServiceError::TrailingInput);
+        }
+        let peer_valid = !peer.is_empty()
+            && peer.len() <= MAX_PEER_SELECTOR_BYTES
+            && !peer.starts_with('-')
+            && peer
+                .chars()
+                .all(|character| !character.is_control() && !character.is_whitespace());
+        if !peer_valid {
+            return Err(PeerServiceError::InvalidPeer(peer.to_owned()));
+        }
+        let service_valid = !service.is_empty()
+            && service.len() <= MAX_SERVICE_NAME_BYTES
+            && !service.starts_with('-')
+            && service
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        if !service_valid {
+            return Err(PeerServiceError::InvalidService(service.to_owned()));
+        }
+        Ok(Self {
+            peer: peer.to_owned(),
+            service: service.to_owned(),
+            host_header_policy,
+            transport,
+        })
+    }
+
+    /// Returns the peer selector as the user wrote it.
+    #[must_use]
+    pub fn peer(&self) -> &str {
+        &self.peer
+    }
+
+    /// Returns the advertised service name.
+    #[must_use]
+    pub fn service(&self) -> &str {
+        &self.service
+    }
+
+    /// Returns how the upstream `Host` and SNI are formed.
+    #[must_use]
+    pub const fn host_header_policy(&self) -> HostHeaderPolicy {
+        self.host_header_policy
+    }
+
+    /// Returns what protects the service's bytes inside the tunnel.
+    #[must_use]
+    pub const fn transport(&self) -> PeerTransport {
+        self.transport
+    }
+}
+
+impl Display for PeerService {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}{}/{}",
+            self.transport.scheme(),
+            self.peer,
+            self.service
+        )
+    }
+}
+
+/// A validation failure for a `supgang://` target.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum PeerServiceError {
+    /// The input does not start with `supgang://`.
+    InvalidUrl(String),
+    /// No `/<service>` follows the peer.
+    MissingService,
+    /// The peer selector is empty, overlong, flag-shaped, or not printable.
+    InvalidPeer(String),
+    /// The service name is not one Supgang would advertise.
+    InvalidService(String),
+    /// Something follows the service name.
+    TrailingInput,
+}
+
+impl Display for PeerServiceError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidUrl(value) => write!(
+                formatter,
+                "'{value}' is not a supgang:// or supgang+http:// target"
+            ),
+            Self::MissingService => formatter.write_str(
+                "a supgang:// target names a peer and a service: supgang://<peer>/<service>",
+            ),
+            Self::InvalidPeer(peer) => write!(
+                formatter,
+                "'{peer}' is not a peer selector: a Supgang computer name, tag, fingerprint, or node id, \
+                 up to {MAX_PEER_SELECTOR_BYTES} bytes, not starting with '-'"
+            ),
+            Self::InvalidService(service) => write!(
+                formatter,
+                "'{service}' is not a service name: 1 through {MAX_SERVICE_NAME_BYTES} lowercase ASCII \
+                 letters, digits, or hyphens, not starting with a hyphen"
+            ),
+            Self::TrailingInput => {
+                formatter.write_str("nothing may follow the service name in a supgang:// target")
+            }
+        }
+    }
+}
+
+impl Error for PeerServiceError {}
+
+/// A direct DNS destination, DNS alias, routed HTTP service, or a service on
+/// a Supgang peer.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum MappingTarget {
+    /// A permanent redirect to another explicitly chosen Remap name.
+    Moved(MovedTarget),
     /// Return an IPv4 or IPv6 DNS answer directly.
     DnsAddress(IpAddr),
     /// Resolve or return a DNS alias under the finalized DNS policy.
     DnsAlias(RemapName),
     /// Return loopback from DNS and route HTTP by Host or TLS SNI.
     Http(HttpUpstream),
+    /// Return loopback from DNS and route to a Supgang peer's advertised
+    /// service, resolved and key-pinned at route time (ADR-0016).
+    Peer(PeerService),
 }
 
 /// The stable category of a mapping destination.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub enum MappingTargetKind {
+    /// A permanent redirect to another explicitly chosen Remap name.
+    Moved,
     /// A direct IPv4 or IPv6 DNS answer.
     DnsAddress,
     /// A DNS alias destination.
     DnsAlias,
     /// A locally routed HTTP or HTTPS service.
     Http,
+    /// A service on a Supgang peer.
+    Peer,
 }
 
 impl MappingTargetKind {
@@ -354,9 +557,11 @@ impl MappingTargetKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Moved => "moved",
             Self::DnsAddress => "dns-address",
             Self::DnsAlias => "dns-alias",
             Self::Http => "http",
+            Self::Peer => "peer",
         }
     }
 }
@@ -378,6 +583,16 @@ impl MappingTarget {
         input: &str,
         host_header_policy: HostHeaderPolicy,
     ) -> Result<Self, MappingTargetError> {
+        if input.starts_with("moved://") {
+            return MovedTarget::parse(input)
+                .map(Self::Moved)
+                .map_err(MappingTargetError::InvalidMoved);
+        }
+        if input.starts_with("supgang://") || input.starts_with("supgang+http://") {
+            return PeerService::parse_with_policy(input, host_header_policy)
+                .map(Self::Peer)
+                .map_err(MappingTargetError::InvalidPeerService);
+        }
         if input.contains("://") {
             return HttpUpstream::parse_with_policy(input, host_header_policy)
                 .map(Self::Http)
@@ -395,9 +610,11 @@ impl MappingTarget {
     #[must_use]
     pub const fn kind(&self) -> MappingTargetKind {
         match self {
+            Self::Moved(_) => MappingTargetKind::Moved,
             Self::DnsAddress(_) => MappingTargetKind::DnsAddress,
             Self::DnsAlias(_) => MappingTargetKind::DnsAlias,
             Self::Http(_) => MappingTargetKind::Http,
+            Self::Peer(_) => MappingTargetKind::Peer,
         }
     }
 }
@@ -405,9 +622,11 @@ impl MappingTarget {
 impl Display for MappingTarget {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Moved(target) => Display::fmt(target, formatter),
             Self::DnsAddress(address) => Display::fmt(address, formatter),
             Self::DnsAlias(name) => Display::fmt(name, formatter),
             Self::Http(upstream) => Display::fmt(upstream, formatter),
+            Self::Peer(service) => Display::fmt(service, formatter),
         }
     }
 }
@@ -416,6 +635,6 @@ impl FromStr for MappingTarget {
     type Err = MappingTargetError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        Self::parse_with_http_policy(input, HostHeaderPolicy::PreserveClient)
+        Self::parse_with_http_policy(input, HostHeaderPolicy::UseUpstream)
     }
 }

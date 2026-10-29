@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
@@ -11,6 +12,10 @@ pub(crate) enum Rule {
     Parameters,
     Complexity,
     Nesting,
+    EmDash,
+    ShellScript,
+    ExternalEmbeddedAsset,
+    ExecutableOverwrite,
 }
 
 impl Rule {
@@ -22,6 +27,10 @@ impl Rule {
             Self::Parameters => "Q004",
             Self::Complexity => "Q005",
             Self::Nesting => "Q006",
+            Self::EmDash => "Q007",
+            Self::ShellScript => "Q008",
+            Self::ExternalEmbeddedAsset => "Q009",
+            Self::ExecutableOverwrite => "Q010",
         }
     }
 
@@ -33,6 +42,10 @@ impl Rule {
             Self::Parameters => "function has too many parameters",
             Self::Complexity => "function is too complex",
             Self::Nesting => "function is nested too deeply",
+            Self::EmDash => "first-party prose contains an em dash",
+            Self::ShellScript => "repository contains a shell script",
+            Self::ExternalEmbeddedAsset => "embedded asset is not confined to its crate",
+            Self::ExecutableOverwrite => "installer uses an overwrite-capable executable copy",
         }
     }
 
@@ -44,6 +57,14 @@ impl Rule {
             Self::Parameters => "introduce a meaningful parameter object or simplify the operation",
             Self::Complexity => "replace branching with smaller decisions or explicit state",
             Self::Nesting => "use guard clauses and extract nested control flow",
+            Self::EmDash => "replace the punctuation with the relationship it represents",
+            Self::ShellScript => "move maintained automation into a typed tool",
+            Self::ExternalEmbeddedAsset => {
+                "keep embedded source assets inside the crate; verify generated assets with cargo package"
+            }
+            Self::ExecutableOverwrite => {
+                "create the destination exclusively, then publish by atomic rename; never truncate executable bytes"
+            }
         }
     }
 }
