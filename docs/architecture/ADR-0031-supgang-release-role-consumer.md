@@ -3,8 +3,8 @@
 ## Status
 
 Proposed, 2026-10-28, for the owner's review. It consumes Supgang ADR 0007
-(release and code-signing roles, Agenxy/supgang#13) and ADR 0005 (owner-action
-authority, Agenxy/supgang#12), both proposed. It extends ADR-0014 and ADR-0029
+(release and code-signing roles, Agenxy/supgang#13), accepted by the owner on
+28 and 29 October, and ADR 0005 (owner-action authority, Agenxy/supgang#12). It extends ADR-0014 and ADR-0029
 on what may authenticate a package, and it pairs with ADR-0022, whose
 `remap.system.update` operation authorizes an update but does not authenticate
 it. Nothing here is implemented, and nothing may be until the gates under
@@ -102,12 +102,19 @@ exact field set of each type, and nothing else. It checks, in order:
    that the grant also lists. It carries signatures from at least `threshold`
    distinct role keys, and `issued_at` ≤ now < `expires_at`, at most 30 days
    apart.
-5. For `presence: carried-device`, the statement's ADR 0005 assertion names
-   consumer `org.agenxy.supgang`, operation `release.sign`, and the
-   statement's digest without that field. It verifies under an owner-held
-   assertion key that the bundle's ADR 0005 grant authorizes. A statement
-   that claims `unattended` is accepted only if the grant says `unattended`
-   and every signer's custody is `hardware`.
+5. Presence, as ADR 0007 fixes it. The statement digest is
+   SHA-256(`supgang/release/v1\0` || content), and the role signers sign
+   those same prefixed bytes. The assertion is null exactly when the grant's
+   presence is `unattended`.
+   - For `carried-device`, the ADR 0005 assertion names consumer
+     `org.agenxy.supgang` and operation `release.sign`. Its request digest is
+     SHA-256(`supgang/action-request/v1\0` || statement digest). It verifies
+     under an owner-held assertion key that the bundle's ADR 0005 grant
+     authorizes.
+   - For `unattended`, every signer's custody is `hardware`, the grant lasts
+     at most 90 days, and the statement's channel is never `stable`. Remap
+     refuses an unattended statement on `stable` even if a grant were to list
+     it.
 6. The statement's `version` equals the manifest's `productVersion`, parses as
    SemVer 2.0, is at least the grant's `min_version`, and exceeds the floor
    below.
@@ -210,8 +217,15 @@ the product, under a certificate the target Mac has never held.
   gains a CBOR reader and the CryptoKit role verifier. Both sit within the K7
   ceilings, and both are tested only against real vectors, never fakes.
 
-## Open for the owner
+## Decided by the owner
 
-- Whether the first release accepts `unattended` roles at all.
-- The default maximum status age, proposed as 7 days.
-- Whether any channel besides `stable` is wanted now, and its name.
+Supgang ADR 0007 was accepted on 28 and 29 October:
+
+- `unattended` roles are in the first release, within the bounds in check 5:
+  hardware keys only, never `stable`, and 90 days at most.
+- The maximum status age is 7 days. A consumer may require shorter, and Remap
+  keeps 7 days as its default.
+
+Still open: whether any channel besides `stable` is wanted now, and its name.
+Until one exists, an `unattended` role has nothing on Remap it can publish
+to.
