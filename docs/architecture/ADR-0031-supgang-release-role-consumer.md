@@ -4,7 +4,7 @@
 
 Proposed, 2026-10-28, for the owner's review. It consumes Supgang ADR 0007
 (release and code-signing roles, Agenxy/supgang#13), accepted by the owner on
-28 and 29 October, and ADR 0005 (owner-action authority, Agenxy/supgang#12). It extends ADR-0014 and ADR-0029
+28 and 29 October and amended in Agenxy/supgang#16 (ed18ffc), and ADR 0005 (owner-action authority, Agenxy/supgang#12). It extends ADR-0014 and ADR-0029
 on what may authenticate a package, and it pairs with ADR-0022, whose
 `remap.system.update` operation authorizes an update but does not authenticate
 it. Nothing here is implemented, and nothing may be until the gates under
@@ -72,8 +72,11 @@ one, refuses the package as it does today:
 
 - `release-statement.cbor` is the ADR 0007 release statement, signed under
   `supgang/release/v1`, with at most 64 KiB.
-- `release-authority.cbor` holds the root-signed role grant, the root-signed
-  status, and the ADR 0005 grant for the assertion key, with at most 256 KiB.
+- `release-authority.cbor` is ADR 0007's authority bundle, the array
+  `[1, role_step, role_sig, owner_step, owner_sig, status]`, with at most
+  262144 bytes. `role_step` is the root-signed role grant; `owner_step` is the
+  ADR 0005 grant for the owner's assertion key, and it and `owner_sig` are
+  both null or both present; `status` is the root-signed status.
 - Both are mode 0400 and owned by root, under the same protected-ancestry and
   unique-file reads as the manifest.
 
@@ -96,8 +99,12 @@ exact field set of each type, and nothing else. It checks, in order:
    root, with `kind` `release`, the enrolled `role_id`, `consumer_id` exactly
    `org.agenxy.Remap` (the manifest's `productIdentifier`, byte for byte),
    `package_format` `remap-package-v1`, and `not_before` ≤ now < `not_after`.
-3. The status is root-signed on the same hive, shows the role and every signer
-   device unrevoked, and is no older than the enrolled maximum age.
+   A grant signed by any root other than the pinned one, including a
+   successor the old root names, refuses the role path. Following a root
+   succession takes a new enrolment.
+3. The status is root-signed on the same hive, lists the role and every
+   signer device as active, and is no older than the enrolled maximum age.
+   Remap checks membership in the status, never serial numbers.
 4. The statement names the same role, consumer, format and an enrolled channel
    that the grant also lists. It carries signatures from at least `threshold`
    distinct role keys, and `issued_at` ≤ now < `expires_at`, at most 30 days
@@ -108,9 +115,16 @@ exact field set of each type, and nothing else. It checks, in order:
    presence is `unattended`.
    - For `carried-device`, the ADR 0005 assertion names consumer
      `org.agenxy.supgang` and operation `release.sign`. Its request digest is
-     SHA-256(`supgang/action-request/v1\0` || statement digest). It verifies
-     under an owner-held assertion key that the bundle's ADR 0005 grant
-     authorizes.
+     SHA-256(`supgang/action-request/v1\0` || statement content), over the
+     content itself, not the statement digest. It verifies under the owner's
+     assertion key that the bundle's `owner_step` authorizes, and its
+     `challenge_digest` is non-null.
+   - The assertion is judged as of signing, not installation. Its
+     `issued_at` is at or after the statement's `issued_at` and before the
+     statement's `expires_at`. The owner grant was valid at that `issued_at`
+     and is active in the current status. The assertion's own expiry is
+     never compared with the time of installation, because a package may be
+     installed days after the owner approved it.
    - For `unattended`, every signer's custody is `hardware`, the grant lasts
      at most 90 days, and the statement's channel is never `stable`. Remap
      refuses an unattended statement on `stable` even if a grant were to list
@@ -190,9 +204,12 @@ the product, under a certificate the target Mac has never held.
 ## Before anything is built
 
 - Supgang publishes the frozen wire specification and test vectors that ADR
-  0007 requires, for the grant, status, statement and assertion, valid and
-  tampered. Remap vendors them with their SHA-256 recorded, and its verifier
-  passes every one. Remap adds its own vectors for each refusal above: a
+  0007 requires, for the grant, status, statement, assertion and authority
+  bundle. For each record they include valid cases, single-fault tampered
+  cases, and encoding refusals: a non-shortest integer, an indefinite length,
+  a tag, trailing bytes and an extra field. Remap vendors the frozen set with
+  its manifest's SHA-256 recorded, and its verifier passes every one. Draft
+  vectors are never vendored. Remap adds its own vectors for each refusal above: a
   wrong-case `consumer_id`, two matching artifacts, a SemVer-invalid version, a
   floor equal to the installed version, an unparsed staged role file beside a
   failing native signature, and a clock behind the last accepted status.
