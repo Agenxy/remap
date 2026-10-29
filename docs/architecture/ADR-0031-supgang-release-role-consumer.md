@@ -75,8 +75,9 @@ one, refuses the package as it does today:
 - `release-authority.cbor` is ADR 0007's authority bundle, the array
   `[1, role_step, role_sig, owner_step, owner_sig, status]`, with at most
   262144 bytes. `role_step` is the root-signed role grant; `owner_step` is the
-  ADR 0005 grant for the owner's assertion key, and it and `owner_sig` are
-  both null or both present; `status` is the root-signed status.
+  ADR 0005 grant for the owner's assertion key; it and `owner_sig` are both
+  null exactly when the grant's presence is `unattended`, and a bundle with
+  one null and not the other is refused; `status` is the root-signed status.
 - Both are mode 0400 and owned by root, under the same protected-ancestry and
   unique-file reads as the manifest.
 
