@@ -71,6 +71,14 @@ impl StoredMapping {
                     false,
                 )
             })?;
+        if matches!(pattern, NamePattern::Exact(_)) && target.template_arity().is_some() {
+            return Err(Diagnostic::new(
+                "E_TEMPLATE_NEEDS_WILDCARD",
+                remap_core::SnapshotError::TemplateNeedsWildcard(pattern).to_string(),
+                Some("write the template on a wildcard such as '*.lab'".to_owned()),
+                false,
+            ));
+        }
         if let MappingTarget::Moved(moved) = &target {
             moved.validate_source(&pattern).map_err(|error| {
                 Diagnostic::new(

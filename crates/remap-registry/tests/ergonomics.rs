@@ -116,3 +116,23 @@ fn moved_round_trip_expiry_and_reverse_chain_refusal() -> TestResult {
     assert_eq!(registry.revision(), 1);
     Ok(())
 }
+
+// A target template is accepted on a wildcard and refused, with its own code,
+// on an exact name, which has no labels to fill it (ADR-0032).
+#[test]
+fn a_target_template_needs_a_wildcard() -> TestResult {
+    let mut registry = Registry::open_in_memory()?;
+    let command = serde_json::from_value(json!({"kind":"preview", "changes":[
+        set("*.k7.internal", "supgang://{1}/{2}")]}))?;
+    let CommandResult::Preview(_) = registry.execute(command, Surface::Probe)? else {
+        return Err("wrong result".into());
+    };
+    let command = serde_json::from_value(json!({"kind":"preview", "changes":[
+        set("preview.k7.internal", "supgang://{1}/preview")]}))?;
+    let error = registry
+        .execute(command, Surface::Probe)
+        .err()
+        .ok_or("a template on an exact name was accepted")?;
+    assert_eq!(error.code, "E_TEMPLATE_NEEDS_WILDCARD");
+    Ok(())
+}

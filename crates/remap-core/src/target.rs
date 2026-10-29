@@ -5,6 +5,7 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU16;
 use std::str::FromStr;
 
+use crate::template::{self, TemplateNameError};
 use crate::{MovedTarget, MovedTargetError, RemapName, RemapNameError};
 
 /// Supported upstream HTTP schemes.
@@ -413,24 +414,13 @@ impl PeerService {
         if service.contains('/') || service.contains('?') || service.contains('#') {
             return Err(PeerServiceError::TrailingInput);
         }
-        let peer_valid = !peer.is_empty()
-            && peer.len() <= MAX_PEER_SELECTOR_BYTES
-            && !peer.starts_with('-')
-            && peer
-                .chars()
-                .all(|character| !character.is_control() && !character.is_whitespace());
-        if !peer_valid {
+        if template::placeholder(peer)?.is_none() && !peer_selector_valid(peer) {
             return Err(PeerServiceError::InvalidPeer(peer.to_owned()));
         }
-        let service_valid = !service.is_empty()
-            && service.len() <= MAX_SERVICE_NAME_BYTES
-            && !service.starts_with('-')
-            && service
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
-        if !service_valid {
+        if template::placeholder(service)?.is_none() && !service_name_valid(service) {
             return Err(PeerServiceError::InvalidService(service.to_owned()));
         }
+        template::arity([peer, service])?;
         Ok(Self {
             peer: peer.to_owned(),
             service: service.to_owned(),
@@ -462,6 +452,70 @@ impl PeerService {
     pub const fn transport(&self) -> PeerTransport {
         self.transport
     }
+
+    /// Returns how many name labels this target's placeholders read, or
+    /// `None` when the peer and service are both literal (ADR-0032).
+    #[must_use]
+    pub fn template_arity(&self) -> Option<usize> {
+        template::arity([&self.peer, &self.service]).ok().flatten()
+    }
+
+    /// Fills the placeholders from a name's labels, nearest the suffix first,
+    /// and validates the result exactly as a literal target is validated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TemplateNameError::LabelCount`] when the name supplies a
+    /// different number of labels than the template reads, and
+    /// [`TemplateNameError::Field`] when a label is not valid in its field.
+    pub fn instantiate(&self, captures: &[&str]) -> Result<Self, TemplateNameError> {
+        let Some(expected) = self.template_arity() else {
+            return Ok(self.clone());
+        };
+        if captures.len() != expected {
+            return Err(TemplateNameError::LabelCount {
+                expected,
+                found: captures.len(),
+            });
+        }
+        let peer = template::fill(&self.peer, captures);
+        let service = template::fill(&self.service, captures);
+        if !peer_selector_valid(&peer) {
+            return Err(TemplateNameError::Field(PeerServiceError::InvalidPeer(
+                peer,
+            )));
+        }
+        if !service_name_valid(&service) {
+            return Err(TemplateNameError::Field(PeerServiceError::InvalidService(
+                service,
+            )));
+        }
+        Ok(Self {
+            peer,
+            service,
+            host_header_policy: self.host_header_policy,
+            transport: self.transport,
+        })
+    }
+}
+
+fn peer_selector_valid(peer: &str) -> bool {
+    !peer.is_empty()
+        && peer.len() <= MAX_PEER_SELECTOR_BYTES
+        && !peer.starts_with('-')
+        && !peer.contains(['{', '}'])
+        && peer
+            .chars()
+            .all(|character| !character.is_control() && !character.is_whitespace())
+}
+
+fn service_name_valid(service: &str) -> bool {
+    !service.is_empty()
+        && service.len() <= MAX_SERVICE_NAME_BYTES
+        && !service.starts_with('-')
+        && service
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 impl Display for PeerService {
@@ -489,6 +543,9 @@ pub enum PeerServiceError {
     InvalidService(String),
     /// Something follows the service name.
     TrailingInput,
+    /// A field starts with `{` but is not `{1}` or `{2}`, or the
+    /// placeholders skip a capture (ADR-0032).
+    InvalidTemplate(String),
 }
 
 impl Display for PeerServiceError {
@@ -514,6 +571,11 @@ impl Display for PeerServiceError {
             Self::TrailingInput => {
                 formatter.write_str("nothing may follow the service name in a supgang:// target")
             }
+            Self::InvalidTemplate(value) => write!(
+                formatter,
+                "'{value}' is not a target template: a whole peer or service may be {{1}}, the label \
+                 nearest the wildcard's suffix, or {{2}}, the next one, and {{2}} needs {{1}}"
+            ),
         }
     }
 }
@@ -604,6 +666,16 @@ impl MappingTarget {
         RemapName::parse(input)
             .map(Self::DnsAlias)
             .map_err(MappingTargetError::InvalidName)
+    }
+
+    /// Returns how many name labels this target's placeholders read, or
+    /// `None` for a literal target (ADR-0032).
+    #[must_use]
+    pub fn template_arity(&self) -> Option<usize> {
+        match self {
+            Self::Peer(service) => service.template_arity(),
+            _ => None,
+        }
     }
 
     /// Returns the stable destination category.

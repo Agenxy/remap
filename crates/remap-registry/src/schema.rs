@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use remap_protocol::Diagnostic;
 
-pub(crate) const SCHEMA_VERSION: u32 = 2;
+pub(crate) const SCHEMA_VERSION: u32 = 3;
 pub(crate) const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn configure(connection: &Connection) -> Result<(), Diagnostic> {
@@ -126,6 +126,14 @@ fn migrate_without_wait(connection: &mut Connection) -> Result<(), Diagnostic> {
              PRAGMA user_version = 2;
              COMMIT;",
             )
+            .map_err(database_error)?;
+    }
+    if found <= 2 {
+        // Version 3 adds no column. It marks registries whose targets may be
+        // templates (ADR-0032), which an older daemon would misread, so an
+        // older daemon refuses the registry before reading any record.
+        connection
+            .execute_batch("PRAGMA user_version = 3;")
             .map_err(database_error)?;
     }
     connection
