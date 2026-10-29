@@ -115,9 +115,12 @@ exact field set of each type, and nothing else. It checks, in order:
      at most 90 days, and the statement's channel is never `stable`. Remap
      refuses an unattended statement on `stable` even if a grant were to list
      it.
-6. The statement's `version` equals the manifest's `productVersion`, parses as
-   SemVer 2.0, is at least the grant's `min_version`, and exceeds the floor
-   below.
+6. The statement's `version` is ADR 0007's `[major, minor, patch, pre]`,
+   where `pre` is null or `[label, number]`. Rendered as `M.m.p` or
+   `M.m.p-label.number`, it must equal the manifest's `productVersion` byte
+   for byte, so a manifest version of any other form cannot take the role
+   path. Ordering is SemVer for that form. The version must be at least the
+   grant's `min_version` and exceed the floor below.
 7. Exactly one artifact names `macos` and this Mac's architecture, and its
    length and SHA-256 equal the staged `release-manifest.json` bytes. The
    manifest is then decoded and the payload compared exactly as on the native
