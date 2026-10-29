@@ -41,6 +41,15 @@ platform claims separate.
   identity's trust setting when it is refused only as untrusted, after
   checking the exported certificate is the one in the keychain, and still
   refuses any other damaged state.
+- Fixed macOS asking whether `codesign` may use key "stdin". The build and
+  installer signing identities were imported through a pipe, and macOS names
+  a key's access prompt after the file it was read from, and labels the key
+  "Imported Private Key" in Keychain Access. Each identity is now imported
+  from a file named for it, in a directory only the owner can enter, under a
+  random per-run password, and removed straight after. Its key is labelled
+  and prompts as `Remap Build Signing`, `Remap Local Installer` or
+  `Remap Release Installer`. An identity created before this fix keeps its
+  old name until it is recreated.
 - `remap://help` explains the trade-offs between single-label names and a
   suffix of the owner's choosing, without recommending one.
 - The release signing key lives in the Secure Enclave (ADR-0029). The new build-only

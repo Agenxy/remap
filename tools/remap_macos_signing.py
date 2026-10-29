@@ -6,15 +6,16 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import secrets
 import ssl
 import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 IDENTITY_NAME = "Remap Build Signing"
 CERTIFICATE_LIFETIME_DAYS = 3_650
-ARCHIVE_TRANSPORT_PASSWORD = "remap-ephemeral-pipe"
 MAXIMUM_COMMAND_OUTPUT_BYTES = 1_048_576
 # Set to "1" where nobody can answer a macOS authorization dialog (a hosted CI
 # runner). `security add-trusted-cert` into the login keychain, and
@@ -339,26 +340,64 @@ def create_identity(keychain: Path) -> None:
     )
     certificate = _one_pem_block(material, b"CERTIFICATE")
     private_key = _one_private_key(material)
-    archive = _make_archive(certificate, private_key)
-    _ = _run_binary(
-        (
-            "/usr/bin/security",
-            "import",
-            "/dev/stdin",
-            "-k",
-            str(keychain),
-            "-P",
-            ARCHIVE_TRANSPORT_PASSWORD,
-            "-x",
-            "-T",
-            "/usr/bin/codesign",
-            "-f",
-            "pkcs12",
-        ),
-        archive,
+    password = secrets.token_urlsafe(32)
+    archive = _make_archive(certificate, private_key, password)
+    import_identity_archive(
+        keychain,
+        name=IDENTITY_NAME,
+        archive=archive,
+        password=password,
+        tool="/usr/bin/codesign",
+        run=_run_binary,
     )
     allow_apple_tools(keychain, _run_binary)
     _ = _run_binary(trust_arguments(keychain, "codeSign"), certificate)
+
+
+def import_identity_archive(
+    keychain: Path,
+    *,
+    name: str,
+    archive: bytes,
+    password: str,
+    tool: str,
+    run: Callable[[tuple[str, ...], bytes], bytes],
+) -> None:
+    """Import a PKCS#12 identity so macOS names its key after the identity.
+
+    `security import` names the key in every later "wants to access key"
+    dialog after the file it read, so an archive piped through stdin made
+    macOS ask the owner about a key called "stdin": a request nobody can
+    evaluate. With `-f pkcs12` it also labels the key "Imported Private Key"
+    in Keychain Access. Measured on macOS 27: a file named `<name>.p12`,
+    imported with its format inferred, gives the key both the label and the
+    prompt name `name`. `security import` cannot read a named pipe, so the
+    archive, encrypted under the caller's per-run password, is written to that
+    file in a directory only this user can enter, and removed as soon as the
+    import returns. Only `tool` may use the key without asking.
+    """
+    with tempfile.TemporaryDirectory(prefix="remap-identity-") as directory:
+        source = Path(directory) / f"{name}.p12"
+        descriptor = os.open(
+            source, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            _ = handle.write(archive)
+        _ = run(
+            (
+                "/usr/bin/security",
+                "import",
+                str(source),
+                "-k",
+                str(keychain),
+                "-P",
+                password,
+                "-x",
+                "-T",
+                tool,
+            ),
+            b"",
+        )
 
 
 def record_pending_trust(keychain: Path) -> bool:
@@ -632,7 +671,7 @@ def _run_binary(arguments: tuple[str, ...], input_bytes: bytes) -> bytes:
     return result.stdout
 
 
-def _make_archive(certificate: bytes, private_key: bytes) -> bytes:
+def _make_archive(certificate: bytes, private_key: bytes, password: str) -> bytes:
     certificate_reader, certificate_writer = os.pipe()
     key_reader, key_writer = os.pipe()
     try:
@@ -657,7 +696,7 @@ def _make_archive(certificate: bytes, private_key: bytes) -> bytes:
                 "-out",
                 "/dev/stdout",
                 "-passout",
-                f"pass:{ARCHIVE_TRANSPORT_PASSWORD}",
+                f"pass:{password}",
             ),
             check=False,
             capture_output=True,
