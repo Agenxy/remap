@@ -479,5 +479,24 @@ def _pem(label: str, body: bytes) -> bytes:
     )
 
 
+class TrustDialogTests(unittest.TestCase):
+    def test_an_unanswered_trust_dialog_says_how_to_resume(self) -> None:
+        def run_binary(arguments: tuple[str, ...], _input: bytes) -> bytes:
+            raise subprocess.TimeoutExpired(arguments, 120)
+
+        with self.assertRaises(RuntimeError) as raised:
+            remap_macos_signing.record_trust(
+                Path("/tmp/login.keychain-db"),
+                b"certificate",
+                policy="codeSign",
+                name="Remap Build Signing",
+                run=run_binary,
+            )
+        message = str(raised.exception)
+        self.assertIn('"Remap Build Signing"', message)
+        self.assertIn("Run the same command again", message)
+        self.assertIsNone(raised.exception.__cause__)
+
+
 if __name__ == "__main__":
     _ = unittest.main()

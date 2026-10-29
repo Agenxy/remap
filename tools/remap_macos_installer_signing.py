@@ -250,7 +250,9 @@ def create_identity(keychain: Path) -> None:
         run=run_binary,
     )
     codesigning.allow_apple_tools(keychain, run_binary)
-    _ = run_binary(codesigning.trust_arguments(keychain, "basic"), certificate)
+    codesigning.record_trust(
+        keychain, certificate, policy="basic", name=IDENTITY_NAME, run=run_binary
+    )
 
 
 def openssl_configuration() -> str:

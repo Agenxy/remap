@@ -351,7 +351,9 @@ def create_identity(keychain: Path) -> None:
         run=_run_binary,
     )
     allow_apple_tools(keychain, _run_binary)
-    _ = _run_binary(trust_arguments(keychain, "codeSign"), certificate)
+    record_trust(
+        keychain, certificate, policy="codeSign", name=IDENTITY_NAME, run=_run_binary
+    )
 
 
 def import_identity_archive(
@@ -440,7 +442,9 @@ def record_pending_trust(keychain: Path) -> bool:
         raise RuntimeError(
             "the exported Remap certificate is not the one in the keychain"
         )
-    _ = _run_binary(trust_arguments(keychain, "codeSign"), certificate)
+    record_trust(
+        keychain, certificate, policy="codeSign", name=IDENTITY_NAME, run=_run_binary
+    )
     return True
 
 
@@ -523,6 +527,30 @@ def allow_apple_tools(
         ),
         b"",
     )
+
+
+def record_trust(
+    keychain: Path,
+    certificate: bytes,
+    *,
+    policy: str,
+    name: str,
+    run: Callable[[tuple[str, ...], bytes], bytes],
+) -> None:
+    """Ask macOS, and through it the owner, to trust `name` for `policy`.
+
+    macOS puts this question to the owner in a dialog, and `run` gives it two
+    minutes. An unanswered dialog is an ordinary outcome, so it is reported as
+    what happened and how to resume, never as a stack trace.
+    """
+    try:
+        _ = run(trust_arguments(keychain, policy), certificate)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f'macOS asked to trust the "{name}" certificate, and the dialog was not '
+            + "answered within two minutes. Run the same command again at this Mac "
+            + "and approve it; the build resumes at this step."
+        ) from None
 
 
 def trust_arguments(keychain: Path, policy: str) -> tuple[str, ...]:
