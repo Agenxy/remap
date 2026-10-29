@@ -172,7 +172,7 @@ latest accepted status time.
 
 Remap has had one channel in practice, and the manifest carries none. Remap
 names its default channel `stable`, and every package a native install
-accepts is treated as `stable`. An `unattended` role must, by ADR 0007,
+accepts is treated as `stable`. Its only other channel is `preview` (below). An `unattended` role must, by ADR 0007,
 exclude the default channel, so an unattended role can never publish to
 `stable` on Remap. A channel name is a property of the statement and the
 enrolment, never of the manifest, so `remap-package-v1` is unchanged.
@@ -226,6 +226,21 @@ Supgang ADR 0007 was accepted on 28 and 29 October:
 - The maximum status age is 7 days. A consumer may require shorter, and Remap
   keeps 7 days as its default.
 
-Still open: whether any channel besides `stable` is wanted now, and its name.
-Until one exists, an `unattended` role has nothing on Remap it can publish
-to.
+## The second channel is `preview`
+
+The owner asked on 29 October that decisions inside a goal be made on their
+technical merits rather than wait for approval. This one is Remap's:
+
+- Remap's second channel is `preview`, for releases built and signed without
+  a person, typically by CI. It is named for what a Mac opts into, not for a
+  schedule.
+- A Mac accepts `preview` only if its owner lists it at enrolment. It is
+  never a default, and `stable` stays the only channel a native install
+  implies.
+- A `preview` version is a SemVer pre-release of the next stable version, such
+  as `0.3.0-preview.4`. That makes a later stable release of the same version
+  newer, by SemVer precedence, on a Mac that follows both channels.
+- `unattended` roles may publish only to `preview`. Grants and Remap's own
+  refusal on `stable` both enforce this.
+
+The owner can rename or withdraw it before anything is built.
