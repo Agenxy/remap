@@ -48,8 +48,10 @@ platform claims separate.
   from a file named for it, in a directory only the owner can enter, under a
   random per-run password, and removed straight after. Its key is labelled
   and prompts as `Remap Build Signing`, `Remap Local Installer` or
-  `Remap Release Installer`. An identity created before this fix keeps its
-  old name until it is recreated.
+  `Remap Release Installer`. The signing key a package creates on each Mac
+  it installs on was described as "codesign" and labelled the same way; it
+  is now `Remap Local Codesign`. An identity created before this fix keeps
+  its old name until it is recreated.
 - `remap://help` explains the trade-offs between single-label names and a
   suffix of the owner's choosing, without recommending one.
 - The release signing key lives in the Secure Enclave (ADR-0029). The new build-only

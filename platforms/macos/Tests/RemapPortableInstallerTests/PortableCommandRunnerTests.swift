@@ -84,6 +84,26 @@ func signingIdentityParsersRequireOneExactFingerprint() throws {
 }
 
 @Test
+func signingKeyIsImportedUnderItsOwnName() {
+    // macOS names a key's label and access prompt after the archive it was
+    // read from, and keeps that name only while it infers the format.
+    #expect(PortableCodeSigningIdentityStore.archiveFileName == "Remap Local Codesign.p12")
+    let archive = "/private/var/tmp/workspace/Remap Local Codesign.p12"
+    let arguments = PortableCodeSigningIdentityStore.importArguments(
+        archive: archive,
+        password: "secret"
+    )
+    #expect(arguments == [
+        "import", archive,
+        "-k", "/Library/Keychains/System.keychain",
+        "-P", "secret",
+        "-x",
+        "-T", "/usr/bin/codesign"
+    ])
+    #expect(!arguments.contains("-f"))
+}
+
+@Test
 func portableReleaseManifestHasOneCanonicalEncoding() throws {
     let entries = try [
         PortableReleaseEntry(
