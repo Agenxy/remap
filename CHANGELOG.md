@@ -14,9 +14,13 @@ platform claims separate.
   (`E_TEMPLATE_NEEDS_WILDCARD`). Matching and DNS are unchanged. A name that
   cannot fill the template, because it has another number of labels or a
   label its field cannot hold, gets `404 E_GATEWAY_TEMPLATE_NAME` naming the
-  mapping. The registry moves to schema 3, which adds no column, so an older
-  daemon refuses it before misreading a template; rolling back needs a
-  registry backup.
+  mapping. The registry moves to schema 3. It adds no column; it exists so an
+  older daemon refuses the registry before misreading a template.
+- Migrating an existing registry to a newer schema first keeps a copy of it
+  at the old schema, `registry.schema-<old>.<unix-ms>.sqlite3` (mode 0600),
+  beside it. If the copy cannot be made, the migration is refused
+  (`E_REGISTRY_SNAPSHOT`). To roll back, stop `remapd`, remove the registry's
+  `-wal` and `-shm` files, and move the copy over `registry.sqlite3`.
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
   without restoring anything. The activation record is now written active

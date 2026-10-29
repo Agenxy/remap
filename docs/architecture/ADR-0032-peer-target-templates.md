@@ -63,8 +63,23 @@ what they wrote. No wire field is added.
 `supgang://{1}/{2}` as a corrupt record, or worse, `supgang://{1}/dibs` as a
 peer literally named `{1}`. Schema version 3 adds no column. It only raises
 `user_version`, so an older daemon refuses the registry with
-`E_REGISTRY_SCHEMA_NEWER` before reading any record. As with ADR-0027, rolling
-back needs a compatible registry backup.
+`E_REGISTRY_SCHEMA_NEWER` before reading any record.
+
+**The way back is kept.** ADR-0027 said a rollback needs "a compatible
+registry backup", but Remap made none. From now on, before the registry
+migrates an existing database to a newer schema, it writes a coherent copy
+beside it with SQLite's `VACUUM INTO`:
+`registry.schema-<old>.<unix-ms>.sqlite3`, mode 0600.
+
+- `VACUUM INTO` refuses a destination that already holds data, so no copy is
+  ever overwritten.
+- If the copy cannot be made, the migration is refused with
+  `E_REGISTRY_SNAPSHOT` and the registry is left unchanged.
+- To roll back, stop `remapd`, remove `registry.sqlite3-wal` and
+  `registry.sqlite3-shm`, and move the copy over `registry.sqlite3`. A daemon
+  that reads the old schema then opens exactly the registry it left.
+- Changes made after the migration are not in the copy.
+- Copies are kept until the owner deletes them.
 
 **Not decided here.** A `k7://<node>/<deck>/<service>` target would take a
 third capture. It waits on K7's local stream endpoint contract and will extend
@@ -82,5 +97,6 @@ let a name choose where the gateway dials, and no owner has asked for that.
 - A name can only choose among what the owner's template allows: the peer and
   service fields, each checked against Supgang's own bounds. A request cannot
   reach a scheme, a host, a port, or a path that the owner did not write.
-- Rolling back to an older daemon requires restoring a registry backup, even
-  if no template was ever written.
+- Rolling back to an older daemon means putting the pre-migration copy back,
+  even if no template was ever written. The copy holds nothing written after
+  the upgrade.

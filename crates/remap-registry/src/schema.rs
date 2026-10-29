@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use std::time::Duration;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
@@ -82,6 +84,9 @@ fn migrate_without_wait(connection: &mut Connection) -> Result<(), Diagnostic> {
             false,
         ));
     }
+    if found > 0 && found < SCHEMA_VERSION {
+        snapshot_before_migration(connection, found)?;
+    }
     if found == 0 {
         connection
             .execute_batch(
@@ -157,6 +162,40 @@ fn migrate_without_wait(connection: &mut Connection) -> Result<(), Diagnostic> {
         ));
     }
     Ok(())
+}
+
+/// Keeps a coherent copy of an existing registry at its old schema beside it
+/// before migrating it, so going back to a daemon that reads only that schema
+/// is a file restore (ADR-0032). A copy that cannot be made refuses the
+/// migration: the registry is never upgraded without its way back.
+fn snapshot_before_migration(connection: &Connection, found: u32) -> Result<(), Diagnostic> {
+    let Some(database) = connection.path().filter(|path| !path.is_empty()) else {
+        return Ok(());
+    };
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis());
+    let destination =
+        Path::new(database).with_file_name(format!("registry.schema-{found}.{stamp}.sqlite3"));
+    let failure = || {
+        Diagnostic::new(
+            "E_REGISTRY_SNAPSHOT",
+            format!("the registry could not be copied before migrating it from schema {found}"),
+            Some(
+                "free disk space or repair the Remap data directory's permissions; the registry was not changed"
+                    .to_owned(),
+            ),
+            false,
+        )
+    };
+    let path = destination.to_str().ok_or_else(failure)?;
+    // VACUUM INTO refuses a destination that already holds data, so an
+    // earlier copy is never overwritten.
+    connection
+        .execute("VACUUM INTO ?1", [path])
+        .map_err(|_| failure())?;
+    std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o600))
+        .map_err(|_| failure())
 }
 
 pub(crate) fn database_error(error: rusqlite::Error) -> Diagnostic {
