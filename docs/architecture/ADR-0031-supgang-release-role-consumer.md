@@ -4,7 +4,7 @@
 
 Proposed, 2026-10-28, for the owner's review. It consumes Supgang ADR 0007
 (release and code-signing roles, Agenxy/supgang#13), accepted by the owner on
-28 and 29 October and amended in Agenxy/supgang#16 (ed18ffc), and ADR 0005 (owner-action authority, Agenxy/supgang#12). It extends ADR-0014 and ADR-0029
+28 and 29 October and amended in Agenxy/supgang#16 (ed18ffc and cb7c2bf), and ADR 0005 (owner-action authority, Agenxy/supgang#12). It extends ADR-0014 and ADR-0029
 on what may authenticate a package, and it pairs with ADR-0022, whose
 `remap.system.update` operation authorizes an update but does not authenticate
 it. Nothing here is implemented, and nothing may be until the gates under
