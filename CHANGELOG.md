@@ -48,6 +48,10 @@ platform claims separate.
   executable, `remap-linux-system`; `remapd` logs as `remapd`.
 - The `remap(1)` manual pages are dated as the changelog dates this release,
   and a test keeps them so; they carried a date three days before it.
+- macOS's network configuration log names Remap's changes "Remap DNS
+  Resolver" rather than "Agenxy Remap", and every dispatch queue Remap creates
+  is labelled under `org.agenxy.Remap`, the identifier family of its launchd
+  jobs and signatures.
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed

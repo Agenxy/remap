@@ -9,7 +9,7 @@ public enum RemapGatewayProbe {
 
     /// Challenges the local authority and compares its expected HTTP proof.
     public static func isReachable(port rawPort: UInt16 = 80) async -> Bool {
-        guard let client = try? RemapControlClient.discovered(clientVersion: clientVersion()),
+        guard let client = try? RemapControlClient.discovered(clientVersion: RemapControlClient.bundleVersion),
               let challenge = try? await client.runtimeChallenge()
         else {
             return false
@@ -36,11 +36,6 @@ public enum RemapGatewayProbe {
             return first
         }
     }
-
-    private static func clientVersion() -> String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "development"
-    }
 }
 
 private final class GatewayConnectionProbe: @unchecked Sendable {
@@ -49,7 +44,7 @@ private final class GatewayConnectionProbe: @unchecked Sendable {
     private let challenge: RemapRuntimeChallenge
     private let connection: NWConnection
     private let queue = DispatchQueue(
-        label: "org.agenxy.remap.gateway-probe",
+        label: "org.agenxy.Remap.gateway-probe",
         qos: .utility
     )
     private let state = Mutex(GatewayProbeState.idle)
