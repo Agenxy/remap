@@ -113,6 +113,7 @@ PYTHON_PATHS = (
     "tools/remap_release_inventory.py",
     "tools/remap_release_model.py",
     "tools/remap_release_signing.py",
+    "tests/python/test_administrator_prompts.py",
     "tests/python/test_app.py",
     "tests/python/test_docs.py",
     "tests/python/test_freshness.py",

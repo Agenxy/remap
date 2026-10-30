@@ -29,6 +29,10 @@ platform claims separate.
   "source build" or points at a DNS System Extension that Remap does not
   have. It says Remap manages one ordinary macOS resolver scope, which is
   true of source and package installations alike.
+- sudo's password prompt says who is asking and for what: "Remap needs
+  administrator approval to install its DNS service. Password for <you>:",
+  and likewise for update, repair and removal on macOS and Linux, and for
+  `make install-package-macos`. It was a bare "Password:".
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
