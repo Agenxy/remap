@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::num::NonZeroU16;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -12,7 +13,22 @@ use crate::wire::{read_bounded_frame, write_bounded_frame};
 /// Root-supervisor wire contract used only for resolver-plan lifecycle.
 pub const SYSTEM_PROTOCOL_VERSION: &str = "remap.system/v1";
 
-const MAX_SYSTEM_FRAME_BYTES: usize = 16 * 1024;
+/// The largest system frame either side accepts.
+pub const MAX_SYSTEM_FRAME_BYTES: usize = 16 * 1024;
+
+/// The most listeners one exchange names, and so the most descriptors one
+/// adoption carries. Root pages through the rest in later exchanges.
+pub const MAX_LISTENERS_PER_EXCHANGE: usize = 64;
+
+/// One reserved address and port a peer-machine name listens on (ADR-0033).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListenerAddress {
+    /// The reserved loopback address.
+    pub address: Ipv4Addr,
+    /// The port the owner listed for one service.
+    pub port: NonZeroU16,
+}
 
 /// One narrowly scoped request from the native resolver supervisor.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -52,6 +68,14 @@ pub enum SystemCommand {
     /// with (ADR-0033), so the root supervisor can hold them on `lo0`. Only
     /// addresses cross: never a name, a peer, or a service.
     LoopbackReservations,
+    /// Hands `remapd` listening sockets the root supervisor created on
+    /// reserved addresses, because only root may bind a port below 1024 on
+    /// one (ADR-0033 amendment). The descriptors travel as `SCM_RIGHTS` with
+    /// this frame, one per listener, in this order.
+    AdoptPeerMachineListeners {
+        /// At most [`MAX_LISTENERS_PER_EXCHANGE`] listeners, one per descriptor.
+        listeners: Vec<ListenerAddress>,
+    },
 }
 
 /// One bounded response from `remapd` to the native supervisor.
@@ -94,6 +118,11 @@ pub struct SystemResult {
     /// contract. The root side validates each address before acting on any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loopback_reservations: Option<Vec<Ipv4Addr>>,
+    /// Present with `loopback_reservations`: listeners of enabled
+    /// peer-machine names that `remapd` does not yet hold, at most
+    /// [`MAX_LISTENERS_PER_EXCHANGE`] of them in ascending order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unheld_listeners: Option<Vec<ListenerAddress>>,
 }
 
 impl SystemResult {
@@ -111,6 +140,7 @@ impl SystemResult {
             active_generation,
             highest_accepted_generation,
             loopback_reservations: None,
+            unheld_listeners: None,
         }
     }
 
@@ -124,6 +154,20 @@ impl SystemResult {
         let mut reservations: Vec<Ipv4Addr> = reservations.into_iter().collect();
         reservations.sort_unstable();
         self.loopback_reservations = Some(reservations);
+        self
+    }
+
+    /// Adds the first [`MAX_LISTENERS_PER_EXCHANGE`] unheld listeners, in
+    /// ascending order. Root asks again for the rest.
+    #[must_use]
+    pub fn with_unheld_listeners(
+        mut self,
+        listeners: impl IntoIterator<Item = ListenerAddress>,
+    ) -> Self {
+        let mut listeners: Vec<ListenerAddress> = listeners.into_iter().collect();
+        listeners.sort_unstable();
+        listeners.truncate(MAX_LISTENERS_PER_EXCHANGE);
+        self.unheld_listeners = Some(listeners);
         self
     }
 }
@@ -163,6 +207,21 @@ where
     R: AsyncRead + Unpin,
 {
     read_bounded_frame(reader, MAX_SYSTEM_FRAME_BYTES).await
+}
+
+/// Decodes one system request from a frame's payload, for a reader that
+/// receives the frame itself because descriptors may travel with it.
+///
+/// # Errors
+///
+/// Returns `InvalidData` when the payload is not exactly one system request.
+pub fn decode_system_request(payload: &[u8]) -> io::Result<SystemRequest> {
+    serde_json::from_slice(payload).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid system request JSON: {error}"),
+        )
+    })
 }
 
 /// Writes one frame within the 16 KiB system limit.

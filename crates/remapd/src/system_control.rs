@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::fs::Permissions;
 use std::io;
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use remap_network::{NetworkError, ResolverPlanStore, SnapshotStore};
+use remap_core::MappingTarget;
+use remap_network::{NetworkError, PeerMachineListeners, ResolverPlanStore, SnapshotStore};
 use remap_protocol::{
-    DEFAULT_DAEMON_DRAIN_GRACE, Diagnostic, SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest,
-    SystemResponse, SystemResult, read_system_frame, write_system_frame,
+    DEFAULT_DAEMON_DRAIN_GRACE, Diagnostic, ListenerAddress, MAX_LISTENERS_PER_EXCHANGE,
+    SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest, SystemResponse, SystemResult,
+    decode_system_request, write_system_frame,
 };
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Semaphore, watch};
@@ -18,6 +21,7 @@ use tokio::task::JoinSet;
 use tokio::time::{timeout, timeout_at};
 use uuid::Uuid;
 
+use crate::descriptor_handoff;
 use crate::peer;
 
 const CONNECTION_LIMIT: usize = 8;
@@ -36,6 +40,7 @@ pub(crate) struct SystemControlRuntime {
 struct SystemController {
     plans: ResolverPlanStore,
     snapshots: SnapshotStore,
+    peer_machines: Option<PeerMachineListeners>,
     state: Arc<Mutex<ControllerState>>,
 }
 
@@ -56,6 +61,7 @@ impl SystemControlRuntime {
         path: &Path,
         plans: ResolverPlanStore,
         snapshots: SnapshotStore,
+        peer_machines: Option<PeerMachineListeners>,
     ) -> Result<Self, Diagnostic> {
         prepare_socket_target(path).await?;
         let listener = UnixListener::bind(path).map_err(listener_error)?;
@@ -64,7 +70,7 @@ impl SystemControlRuntime {
         Ok(Self {
             listener,
             guard: Some(guard),
-            controller: SystemController::new(plans, snapshots),
+            controller: SystemController::new(plans, snapshots, peer_machines),
         })
     }
 
@@ -72,13 +78,14 @@ impl SystemControlRuntime {
         listener: StdUnixListener,
         plans: ResolverPlanStore,
         snapshots: SnapshotStore,
+        peer_machines: Option<PeerMachineListeners>,
     ) -> Result<Self, Diagnostic> {
         listener.set_nonblocking(true).map_err(listener_error)?;
         let listener = UnixListener::from_std(listener).map_err(listener_error)?;
         Ok(Self {
             listener,
             guard: None,
-            controller: SystemController::new(plans, snapshots),
+            controller: SystemController::new(plans, snapshots, peer_machines),
         })
     }
 
@@ -125,21 +132,46 @@ impl SystemControlRuntime {
 }
 
 impl SystemController {
-    fn new(plans: ResolverPlanStore, snapshots: SnapshotStore) -> Self {
+    fn new(
+        plans: ResolverPlanStore,
+        snapshots: SnapshotStore,
+        peer_machines: Option<PeerMachineListeners>,
+    ) -> Self {
         Self {
             plans,
             snapshots,
+            peer_machines,
             state: Arc::new(Mutex::new(ControllerState::default())),
         }
     }
 
+    #[cfg(test)]
     async fn execute(&self, request: SystemRequest) -> SystemResponse {
+        self.execute_with(request, Vec::new()).await
+    }
+
+    /// Runs one request. Descriptors are accepted only with the one request
+    /// that carries them; anything else that arrives with descriptors is
+    /// refused, and dropping them closes them.
+    async fn execute_with(
+        &self,
+        request: SystemRequest,
+        descriptors: Vec<OwnedFd>,
+    ) -> SystemResponse {
         let request_id = request.request_id;
         if request.protocol != SYSTEM_PROTOCOL_VERSION {
             return SystemResponse::failure(request_id, protocol_error());
         }
         let mut state = self.state.lock().await;
-        let result = self.execute_command(&mut state, request.command);
+        let result = match request.command {
+            SystemCommand::AdoptPeerMachineListeners { listeners } => {
+                self.adopt_listeners(&state, &listeners, descriptors)
+            }
+            command if descriptors.is_empty() => self.execute_command(&mut state, command),
+            _ => Err(descriptor_error(
+                "only a listener hand-off may carry descriptors",
+            )),
+        };
         match result {
             Ok(result) => SystemResponse::success(request_id, result),
             Err(error) => SystemResponse::failure(request_id, error),
@@ -164,9 +196,76 @@ impl SystemController {
             SystemCommand::ResolverHealth => Ok(system_result(state, &self.plans)),
             // The root supervisor learns addresses only, never which name or
             // peer each one serves (ADR-0033).
-            SystemCommand::LoopbackReservations => Ok(system_result(state, &self.plans)
-                .with_loopback_reservations(self.snapshots.load().peer_machine_addresses())),
+            SystemCommand::LoopbackReservations => Ok(self.reservations(state)),
+            SystemCommand::AdoptPeerMachineListeners { .. } => Err(descriptor_error(
+                "a listener hand-off must carry its descriptors",
+            )),
         }
+    }
+
+    /// Addresses, and the listed ports `remapd` does not yet hold on them.
+    fn reservations(&self, state: &ControllerState) -> SystemResult {
+        let snapshot = self.snapshots.load();
+        let unheld = self
+            .peer_machines
+            .as_ref()
+            .map_or_else(Vec::new, |listeners| {
+                snapshot
+                    .mappings()
+                    .iter()
+                    .filter(|mapping| mapping.is_enabled())
+                    .filter_map(|mapping| match (mapping.target(), mapping.peer_address()) {
+                        (MappingTarget::PeerMachine(machine), Some(address)) => {
+                            Some((machine, address))
+                        }
+                        _ => None,
+                    })
+                    .flat_map(|(machine, address)| {
+                        machine
+                            .services()
+                            .iter()
+                            .map(move |service| ListenerAddress {
+                                address,
+                                port: service.port(),
+                            })
+                    })
+                    .filter(|listener| !listeners.is_held(listener.address, listener.port.get()))
+                    .collect()
+            });
+        system_result(state, &self.plans)
+            .with_loopback_reservations(snapshot.peer_machine_addresses())
+            .with_unheld_listeners(unheld)
+    }
+
+    /// Adopts root-created listening sockets, one per named listener. The
+    /// count must match exactly; each socket is checked against the endpoint
+    /// it is named for before it is used.
+    fn adopt_listeners(
+        &self,
+        state: &ControllerState,
+        listeners: &[ListenerAddress],
+        descriptors: Vec<OwnedFd>,
+    ) -> Result<SystemResult, Diagnostic> {
+        let Some(machines) = self.peer_machines.as_ref() else {
+            return Err(descriptor_error(
+                "this daemon carries no peer-machine listeners",
+            ));
+        };
+        if listeners.len() != descriptors.len() || listeners.len() > MAX_LISTENERS_PER_EXCHANGE {
+            return Err(descriptor_error(
+                "a listener hand-off must carry one descriptor per listener",
+            ));
+        }
+        for (listener, descriptor) in listeners.iter().zip(descriptors) {
+            // A refused socket is closed here and stays unheld, so its name
+            // keeps failing closed; the next exchange reports it again.
+            let _refused = machines.adopt(
+                listener.address,
+                listener.port.get(),
+                std::net::TcpListener::from(descriptor),
+            );
+        }
+        Ok(self.reservations(state))
     }
 
     fn publish(
@@ -223,13 +322,14 @@ async fn serve_connection(
     controller: SystemController,
     mut shutdown: watch::Receiver<bool>,
 ) -> io::Result<()> {
-    let request = tokio::select! {
+    let frame = tokio::select! {
         () = shutdown_requested(&mut shutdown) => return Ok(()),
-        result = timeout(IO_TIMEOUT, read_system_frame::<SystemRequest, _>(&mut stream)) => {
+        result = timeout(IO_TIMEOUT, descriptor_handoff::read_frame(&stream)) => {
             result.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "system request timed out"))??
         }
     };
-    let response = controller.execute(request).await;
+    let request = decode_system_request(&frame.payload)?;
+    let response = controller.execute_with(request, frame.descriptors).await;
     timeout(IO_TIMEOUT, write_system_frame(&mut stream, &response))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "system response timed out"))??;
@@ -307,6 +407,15 @@ fn plan_error(_error: NetworkError) -> Diagnostic {
         "E_RESOLVER_PLAN",
         "the proposed resolver generation is invalid",
         Some("recompute complete native resolver state and publish a newer generation".to_owned()),
+        false,
+    )
+}
+
+fn descriptor_error(message: &'static str) -> Diagnostic {
+    Diagnostic::new(
+        "E_SYSTEM_DESCRIPTORS",
+        message,
+        Some("update the Remap app, service, and native supervisor together".to_owned()),
         false,
     )
 }
@@ -400,7 +509,7 @@ mod tests {
     async fn controller_binds_one_activation_and_never_exposes_addresses()
     -> Result<(), Box<dyn Error>> {
         let plans = ResolverPlanStore::initial(vec![endpoint(1)])?;
-        let controller = SystemController::new(plans, SnapshotStore::empty());
+        let controller = SystemController::new(plans, SnapshotStore::empty(), None);
         let activation_id = Uuid::new_v4();
         let response = controller
             .execute(SystemRequest {
@@ -430,6 +539,7 @@ mod tests {
         let controller = SystemController::new(
             ResolverPlanStore::initial(vec![endpoint(1)])?,
             SnapshotStore::empty(),
+            None,
         );
         let activation_id = Uuid::new_v4();
         let publish = SystemRequest {
@@ -459,7 +569,7 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         let activation_id = Uuid::new_v4();
         let controller =
-            SystemController::new(ResolverPlanStore::dormant(), SnapshotStore::empty());
+            SystemController::new(ResolverPlanStore::dormant(), SnapshotStore::empty(), None);
         let health = controller
             .execute(SystemRequest {
                 protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
@@ -532,7 +642,8 @@ mod tests {
                 .and_then(|result| result.highest_accepted_generation),
             Some(8)
         );
-        let restarted = SystemController::new(ResolverPlanStore::dormant(), SnapshotStore::empty());
+        let restarted =
+            SystemController::new(ResolverPlanStore::dormant(), SnapshotStore::empty(), None);
         let response = restarted
             .execute(SystemRequest {
                 protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
@@ -555,7 +666,7 @@ mod tests {
     async fn health_after_invalidation_reports_the_generation_a_new_supervisor_must_exceed()
     -> Result<(), Box<dyn Error>> {
         let controller =
-            SystemController::new(ResolverPlanStore::dormant(), SnapshotStore::empty());
+            SystemController::new(ResolverPlanStore::dormant(), SnapshotStore::empty(), None);
         let first = Uuid::new_v4();
         for generation in 1..=3 {
             let published = controller.execute(publish(first, generation)).await;
@@ -631,7 +742,7 @@ mod tests {
                 Mapping::new("app.test".parse()?, "http://127.0.0.1:5173".parse()?),
             ],
         )?);
-        let controller = SystemController::new(ResolverPlanStore::dormant(), snapshots);
+        let controller = SystemController::new(ResolverPlanStore::dormant(), snapshots, None);
         let response = controller
             .execute(SystemRequest {
                 protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
@@ -656,6 +767,40 @@ mod tests {
                 .result
                 .and_then(|result| result.loopback_reservations),
             None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn descriptors_are_accepted_only_with_a_matching_hand_off() -> Result<(), Box<dyn Error>>
+    {
+        let controller =
+            SystemController::new(ResolverPlanStore::dormant(), SnapshotStore::empty(), None);
+        let (read, _write) = nix::unistd::pipe()?;
+        let stray = controller.execute_with(health(), vec![read]).await;
+        assert_eq!(
+            stray.error.map(|error| error.code),
+            Some("E_SYSTEM_DESCRIPTORS".to_owned())
+        );
+        let listener = remap_protocol::ListenerAddress {
+            address: Ipv4Addr::new(127, 77, 0, 1),
+            port: std::num::NonZeroU16::new(22).ok_or_else(|| io::Error::other("zero port"))?,
+        };
+        let missing = controller
+            .execute_with(
+                SystemRequest {
+                    protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
+                    request_id: Uuid::new_v4(),
+                    command: SystemCommand::AdoptPeerMachineListeners {
+                        listeners: vec![listener],
+                    },
+                },
+                Vec::new(),
+            )
+            .await;
+        assert_eq!(
+            missing.error.map(|error| error.code),
+            Some("E_SYSTEM_DESCRIPTORS".to_owned())
         );
         Ok(())
     }
