@@ -14,6 +14,12 @@ platform claims separate.
   carry it. An identity that already exists keeps the name it was created
   with until it is recreated, so a Mac set up before this release goes on
   showing "Agenxy Local" until then.
+- The Touch ID or password dialog for an install, update, recovery or
+  removal reads "... is trying to apply the Remap changes you just
+  reviewed." macOS writes the start of that sentence itself, and the old
+  reason, "Approve the reviewed Remap system changes", landed in it
+  capitalised. Signing a release says which of its two signatures each
+  prompt is for: the release manifest or the installer package.
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
