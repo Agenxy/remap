@@ -6,6 +6,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::io::copy_bidirectional;
@@ -28,6 +29,36 @@ pub(crate) struct Carrier {
     pub(crate) resolver: Option<Arc<dyn PeerResolver>>,
     pub(crate) open_timeout: Duration,
     pub(crate) log: ConnectionLog,
+    pub(crate) refusals: RefusalCounts,
+}
+
+/// How many connections were closed without a stream since the daemon
+/// started, one counter per cause token: bounded by the five causes,
+/// whatever the traffic.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RefusalCounts {
+    counts: Arc<[AtomicU64; CarryFailure::CAUSES.len()]>,
+}
+
+impl RefusalCounts {
+    fn record(&self, failure: CarryFailure) {
+        if let Some(index) = CarryFailure::CAUSES
+            .iter()
+            .position(|cause| *cause == failure.cause())
+        {
+            self.counts[index].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The causes seen so far and their counts, in token order.
+    pub(crate) fn snapshot(&self) -> Vec<(&'static str, u64)> {
+        CarryFailure::CAUSES
+            .iter()
+            .zip(self.counts.iter())
+            .map(|(cause, count)| (*cause, count.load(Ordering::Relaxed)))
+            .filter(|(_, count)| *count > 0)
+            .collect()
+    }
 }
 
 impl fmt::Debug for Carrier {
@@ -40,7 +71,8 @@ impl fmt::Debug for Carrier {
     }
 }
 
-/// The mapping and service one listener carries connections for.
+/// The mapping and service one listener carries connections for. The
+/// pattern stays inside the runtime: no log line carries it.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub(crate) struct Route {
     pub(crate) pattern: String,
@@ -67,6 +99,15 @@ pub(crate) enum CarryFailure {
 }
 
 impl CarryFailure {
+    /// Every cause token, in the order status reports them.
+    pub(crate) const CAUSES: [&'static str; 5] = [
+        "endpoint",
+        "no-supgang",
+        "refused",
+        "timeout",
+        "unknown-peer",
+    ];
+
     const fn cause(self) -> &'static str {
         match self {
             Self::NoSupgang => "no-supgang",
@@ -92,11 +133,12 @@ impl CarryFailure {
 }
 
 /// The log line for a connection that could not be carried, in ADR-0028's
-/// key style: the mapping's pattern, the service, and the cause.
+/// key style: the service and the cause. Routine logs name no mapping
+/// (PRIVACY.md); `remap status` shows the owner which mapping's listener
+/// it was and counts each cause.
 pub(crate) fn failure_line(route: &Route, failure: CarryFailure) -> String {
     format!(
-        "remap gateway: peer machine connection closed. Mapping: {} Service: {} Cause: {} ({})",
-        route.pattern,
+        "remap gateway: peer machine connection closed. Service: {} Cause: {} ({})",
         route.service,
         failure.cause(),
         failure.reason()
@@ -109,10 +151,15 @@ impl Carrier {
     pub(crate) async fn carry(&self, mut client: TcpStream, route: &Route) {
         let mut upstream = match timeout(self.open_timeout, self.open(route)).await {
             Ok(Ok(upstream)) => upstream,
-            Ok(Err(failure)) => return (self.log)(&failure_line(route, failure)),
-            Err(_elapsed) => return (self.log)(&failure_line(route, CarryFailure::Timeout)),
+            Ok(Err(failure)) => return self.refuse(route, failure),
+            Err(_elapsed) => return self.refuse(route, CarryFailure::Timeout),
         };
         let _copied = copy_bidirectional(&mut client, &mut upstream).await;
+    }
+
+    fn refuse(&self, route: &Route, failure: CarryFailure) {
+        self.refusals.record(failure);
+        (self.log)(&failure_line(route, failure));
     }
 
     async fn open(&self, route: &Route) -> Result<tokio::net::UnixStream, CarryFailure> {
@@ -162,7 +209,7 @@ fn decode_node_id(selector: &str) -> Option<[u8; 32]> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CarryFailure, Route, decode_node_id, failure_line};
+    use super::{CarryFailure, RefusalCounts, Route, decode_node_id, failure_line};
 
     #[test]
     fn a_node_id_decodes_and_a_fingerprint_does_not() {
@@ -173,17 +220,46 @@ mod tests {
     }
 
     #[test]
-    fn the_log_line_names_the_mapping_service_and_cause_only() {
+    fn the_log_line_names_the_service_and_cause_only() {
         let route = Route {
             pattern: "pro.agenxy.internal".to_owned(),
             selector: "a8a37e32".to_owned(),
             service: "ssh".to_owned(),
         };
         let line = failure_line(&route, CarryFailure::Refused);
-        assert!(line.contains("Mapping: pro.agenxy.internal"));
+        assert!(
+            !line.contains("pro.agenxy.internal"),
+            "no mapped name: {line}"
+        );
         assert!(line.contains("Service: ssh"));
         assert!(line.contains("Cause: refused"));
         assert!(!line.contains("a8a37e32"), "the selector stays out: {line}");
         assert!(!line.contains("127."), "no address: {line}");
+    }
+
+    #[test]
+    fn every_cause_has_a_counter() {
+        let counts = RefusalCounts::default();
+        for failure in [
+            CarryFailure::NoSupgang,
+            CarryFailure::WrongOwner,
+            CarryFailure::Malformed,
+            CarryFailure::Refused,
+            CarryFailure::UnknownPeer,
+            CarryFailure::Timeout,
+            CarryFailure::Refused,
+        ] {
+            counts.record(failure);
+        }
+        assert_eq!(
+            counts.snapshot(),
+            vec![
+                ("endpoint", 2),
+                ("no-supgang", 1),
+                ("refused", 2),
+                ("timeout", 1),
+                ("unknown-peer", 1)
+            ]
+        );
     }
 }

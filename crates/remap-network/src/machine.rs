@@ -23,7 +23,7 @@ use tokio::sync::{Semaphore, watch};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{MissedTickBehavior, interval};
 
-use crate::machine_carry::{Carrier, ConnectionLog, Route};
+use crate::machine_carry::{Carrier, ConnectionLog, RefusalCounts, Route};
 use crate::peer::{PeerResolver, SupgangResolver};
 use crate::supgang_stream::SupgangStreams;
 use crate::{NetworkError, SnapshotStore};
@@ -118,9 +118,17 @@ pub struct ListenerReport {
 #[derive(Debug, Clone, Default)]
 pub struct PeerMachineStatus {
     reports: Arc<Mutex<Vec<ListenerReport>>>,
+    refusals: RefusalCounts,
 }
 
 impl PeerMachineStatus {
+    /// How many connections closed without a stream since the daemon
+    /// started, by cause token, omitting causes not seen. At most five.
+    #[must_use]
+    pub fn refusals(&self) -> Vec<(&'static str, u64)> {
+        self.refusals.snapshot()
+    }
+
     /// Returns the listeners in pattern then port order.
     #[must_use]
     pub fn reports(&self) -> Vec<ListenerReport> {
@@ -187,6 +195,7 @@ impl PeerMachineListeners {
     pub fn new(snapshots: SnapshotStore, status: PeerMachineStatus) -> Self {
         let resolver =
             SupgangResolver::discover().map(|resolver| Arc::new(resolver) as Arc<dyn PeerResolver>);
+        let refusals = status.refusals.clone();
         Self {
             snapshots,
             status,
@@ -195,6 +204,7 @@ impl PeerMachineListeners {
                 resolver,
                 open_timeout: PEER_MACHINE_OPEN_TIMEOUT,
                 log: Arc::new(|line| eprintln!("{line}")),
+                refusals,
             },
             binding: Binding::Reserved,
             permits: Arc::new(Semaphore::new(PEER_MACHINE_CONNECTION_LIMIT)),

@@ -15,8 +15,8 @@ platform claims separate.
   endpoint to the service the peer's owner exposes with `supgang expose`.
   The peer is selected by its node ID or fingerprint, never its name. TCP
   only: UDP and unexposed services are not reachable. A connection Supgang
-  does not carry is closed, and the daemon's log names the mapping, the
-  service and the cause. `get`, `list`, `preview` and the MCP tools show the
+  does not carry is closed, and the daemon's log names the service and the
+  cause, never the mapped name; `remap status` counts them by cause. `get`, `list`, `preview` and the MCP tools show the
   address (`peer_address`). On macOS, connections need the installed
   helper's reservation of the address, which ships separately. Until then,
   `remap status` and `remap doctor` report each listener as not listening,

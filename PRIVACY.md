@@ -9,10 +9,7 @@ Remap is designed for local control and minimal knowledge.
 - No central account, activation, entitlement, or license server.
 - No request or response bodies in logs.
 - No mapped hostnames, upstream addresses, peer addresses, certificate names,
-  or traffic metadata in routine logs. The one exception, decided in ADR-0033:
-  a connection to a peer-machine name that Supgang does not carry logs one line
-  with that mapping's pattern, the service name and a cause, and never an
-  address, port or peer identity.
+  or traffic metadata in routine logs.
 - No secret keys, credentials, tokens, cookies, authorization headers, or
   private configuration in logs or diagnostic bundles.
 - No network communication except traffic required by mappings, user-configured

@@ -182,9 +182,10 @@ peer-credential checks as ADR-0026; Remap never dials the peer and adds no
 authority, so whether a stream opens is the peer owner's exposure, judged by
 Supgang. Any local process can connect to a listener, exactly as it could run
 `supgang connect` as this user; the listeners confer nothing beyond that. A
-connection that is not carried closes and logs one line with the mapping's
-pattern, the service name and a cause token, never an address, port or peer
-identity. If another local service listens on every address at a listed port,
+connection that is not carried closes and logs one line with the service
+name and a cause token, never the mapped name, an address, port or peer
+identity; status counts each cause and names the mappings whose listeners
+cannot bind, to the owner alone. If another local service listens on every address at a listed port,
 a listener that cannot bind would leave connections reaching that service, so
 status and `remap doctor` name the `port-in-use` cause.
 
@@ -258,9 +259,7 @@ uninstall.
 Remap has no telemetry, analytics, account, remote control plane, forced update,
 or usage-reporting channel. Routine logs never contain mapped hostnames, targets,
 peer addresses, traffic metadata, request bodies, certificate subjects, or
-private keys. The one named exception is a peer-machine connection Supgang did
-not carry, whose log line names the owner's mapping pattern and service so the
-failure can be acted on (ADR-0033). Local diagnostics disclose only the minimum needed and are
+private keys. Local diagnostics disclose only the minimum needed and are
 inspectable before export.
 
 Authoritative mappings necessarily exist on enrolled devices. Zero knowledge

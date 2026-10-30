@@ -336,7 +336,7 @@ async fn a_fingerprint_is_resolved_for_each_connection() -> TestResult {
 }
 
 #[tokio::test]
-async fn refusals_close_the_connection_and_name_mapping_service_and_cause() -> TestResult {
+async fn refusals_close_the_connection_log_service_and_cause_and_count() -> TestResult {
     let (running, upstream) = standard().await?;
     let address = Ipv4Addr::new(127, 77, 0, 1);
     running.publish(
@@ -360,12 +360,17 @@ async fn refusals_close_the_connection_and_name_mapping_service_and_cause() -> T
     for local in &locals {
         closed_without_bytes(*local).await?;
     }
-    let refused = running.logged("Mapping: pro.test").await?;
-    assert!(refused.contains("Service: web"), "{refused}");
+    let refused = running.logged("Service: web").await?;
     assert!(refused.contains("Cause: refused"), "{refused}");
-    let unknown = running.logged("Mapping: gone.test").await?;
-    assert!(unknown.contains("Cause: unknown-peer"), "{unknown}");
+    let unknown = running.logged("Cause: unknown-peer").await?;
+    assert!(unknown.contains("Service: ssh"), "{unknown}");
+    // The owner reads which causes occurred from status, not the log.
+    assert_eq!(
+        running.status.refusals(),
+        vec![("refused", 1), ("unknown-peer", 1)]
+    );
     for line in running.lines.lock().map_err(|_| "log poisoned")?.iter() {
+        assert!(!line.contains(".test"), "a mapped name was logged: {line}");
         assert!(!line.contains("127.0.0.1"), "an address was logged: {line}");
         assert!(!line.contains(&upstream.port().to_string()), "{line}");
         assert!(
@@ -397,9 +402,13 @@ async fn without_supgang_the_connection_closes_naming_it_missing() -> TestResult
         return Err("expected one listener".into());
     };
     closed_without_bytes(local).await?;
-    let line = running.logged("Mapping: pro.test").await?;
-    assert!(line.contains("Service: ssh"), "{line}");
+    let line = running.logged("Service: ssh").await?;
     assert!(line.contains("Cause: no-supgang"), "{line}");
+    assert!(
+        !line.contains("pro.test"),
+        "a mapped name was logged: {line}"
+    );
+    assert_eq!(running.status.refusals(), vec![("no-supgang", 1)]);
     Ok(())
 }
 

@@ -173,9 +173,11 @@ displays canonically: `ssh=022` is stored as `ssh=22`.
   kind. Get, list, resolve, preview, apply receipts and the MCP tools carry
   it, and older receipts are unchanged.
 - `RegistryStatus.peer_machine_listeners`: `{listening, not_listening,
-  failures}`, present only while the daemon runs at least one peer-machine
-  listener. `failures` lists at most 64 entries, each
-  `{pattern, service, address, port, cause, detail}`.
+  failures, refusals}`, present while the daemon runs a peer-machine
+  listener or has counted a refusal. `failures` lists at most 64 entries,
+  each `{pattern, service, address, port, cause, detail}`. `refusals` maps
+  each carriage cause seen since the daemon started to its count, so it
+  holds at most five entries.
 
 ### DNS
 
@@ -212,13 +214,16 @@ Each accepted connection is carried as follows:
 A connection that is not carried is closed, and the daemon logs:
 
 ```text
-remap gateway: peer machine connection closed. Mapping: PATTERN Service: NAME Cause: TOKEN (reason)
+remap gateway: peer machine connection closed. Service: NAME Cause: TOKEN (reason)
 ```
 
 The tokens are `no-supgang`, `refused`, `unknown-peer`, `endpoint` and
-`timeout`. The line never carries an address, port or selector. It is the
-one exception to the rule that routine logs name no mapping, and PRIVACY.md
-and the threat model record it.
+`timeout`. This narrows the decision above, which had the log name the
+mapping: PRIVACY.md's rule that routine logs carry no mapped name stands, so
+the line carries no pattern, address, port or selector. The owner learns
+which mapping is affected from `remap status` and `remap doctor`, which only
+the owner can read. They name each listener that cannot bind, and they count
+the connections not carried since the daemon started, by cause.
 
 ### What step 2 provides
 
@@ -249,8 +254,8 @@ the gateway.
 - `crates/remap-network/tests/peer_machine_listeners.rs`: these run against
   a stand-in version-1 endpoint. They cover a round trip in both directions
   by node ID and by fingerprint, and refusal for an unexposed service, an
-  unknown fingerprint and a missing Supgang, each naming the mapping,
-  service and cause with no address. They also cover following add, disable,
+  unknown fingerprint and a missing Supgang. Each logs the service and cause
+  with no mapped name or address, and each is counted by cause in status. They also cover following add, disable,
   enable and remove, binding the reserved address or reporting
   `address-not-reserved` without falling back, and refusing a substitute
   address off loopback.

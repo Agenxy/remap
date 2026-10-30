@@ -117,7 +117,9 @@ machine and the TCP services its name reaches, on any network (ADR-0033).
   the peer, resolving the peer for every connection. TCP only: UDP and
   services the owner has not exposed are not reachable. Supgang decides
   whether a stream opens; a refused or failed stream closes the connection,
-  and the daemon's log names the mapping, the service and the reason.
+  and the daemon's log names the service and the cause, never the mapped
+  name. `remap status` counts the connections not carried since the daemon
+  started, by cause.
 - Listening needs the installed helper to reserve the address on this
   machine. Until it is reserved, `remap doctor` reports the mapping's
   listener as not listening, with the cause.

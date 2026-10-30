@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::Diagnostic;
@@ -214,6 +216,11 @@ pub struct PeerMachineListeners {
     /// The first not-listening listeners, by pattern then port, at most 64.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failures: Vec<PeerMachineListenerFailure>,
+    /// Connections closed without a stream since the daemon started, by
+    /// cause: `endpoint`, `no-supgang`, `refused`, `timeout` or
+    /// `unknown-peer`. Causes not seen are omitted.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refusals: BTreeMap<String, u64>,
 }
 
 /// One peer-machine service listener that could not bind.

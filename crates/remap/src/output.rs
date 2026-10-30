@@ -325,6 +325,18 @@ fn write_peer_machines(
             terminal_text(&failure.detail)
         )?;
     }
+    if !listeners.refusals.is_empty() {
+        let counts: Vec<String> = listeners
+            .refusals
+            .iter()
+            .map(|(cause, count)| format!("{} {count}", terminal_text(cause)))
+            .collect();
+        writeln!(
+            writer,
+            "             connections not carried since start: {}",
+            counts.join(", ")
+        )?;
+    }
     Ok(())
 }
 
@@ -745,6 +757,9 @@ mod tests {
                         cause: "address-not-reserved".to_owned(),
                         detail: "this address is not reserved on this machine yet".to_owned(),
                     }],
+                    refusals: [("refused".to_owned(), 3), ("unknown-peer".to_owned(), 1)]
+                        .into_iter()
+                        .collect(),
                 }),
             }),
         };
@@ -757,6 +772,10 @@ mod tests {
         );
         assert!(
             output.contains("pro.test ssh at 127.77.0.1:22 not listening: address-not-reserved"),
+            "{output}"
+        );
+        assert!(
+            output.contains("connections not carried since start: refused 3, unknown-peer 1"),
             "{output}"
         );
         Ok(())

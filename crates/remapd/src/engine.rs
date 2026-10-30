@@ -183,7 +183,13 @@ impl Engine {
     /// `None` when none run.
     fn peer_machine_summary(&self) -> Option<PeerMachineListeners> {
         let reports = self.peer_machines.reports();
-        if reports.is_empty() {
+        let refusals: std::collections::BTreeMap<String, u64> = self
+            .peer_machines
+            .refusals()
+            .into_iter()
+            .map(|(cause, count)| (cause.to_owned(), count))
+            .collect();
+        if reports.is_empty() && refusals.is_empty() {
             return None;
         }
         let failures: Vec<PeerMachineListenerFailure> = reports
@@ -205,6 +211,7 @@ impl Engine {
             listening: u64::try_from(reports.len() - not_listening).unwrap_or(u64::MAX),
             not_listening: u64::try_from(not_listening).unwrap_or(u64::MAX),
             failures: failures.into_iter().take(MAX_LISTENER_FAILURES).collect(),
+            refusals,
         })
     }
 
