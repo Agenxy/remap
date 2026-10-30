@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +16,8 @@ from tools.remap_rehearsal_publish import (
     RehearsalInputs,
     publish,
     rehearsal_root_from_environment,
+    release_directory,
+    source_archive,
 )
 
 URL = "https://rehearsal.example/remap"
@@ -111,6 +115,68 @@ class RehearsalPublishTests(unittest.TestCase):
             _ = publish(root, URL + "/", inputs)
         with self.assertRaisesRegex(ValueError, "http"):
             _ = publish(root, "file:///tmp", inputs)
+
+    def test_the_destination_is_checked_before_anything_is_built(self) -> None:
+        root, inputs = self.scratch()
+        self.assertEqual(
+            release_directory(root, URL, "0.2.0"),
+            root / "releases/Agenxy/remap/download/v0.2.0",
+        )
+        _ = publish(root, URL, inputs)
+        with self.assertRaisesRegex(FileExistsError, "never rewritten"):
+            _ = release_directory(root, URL, "0.2.0")
+        with self.assertRaisesRegex(ValueError, "existing absolute directory"):
+            _ = release_directory(root / "missing", URL, "0.2.1")
+
+
+class SourceArchiveTests(unittest.TestCase):
+    """The source archive is HEAD, laid out as GitHub's tag archive, from a clean tree."""
+
+    def repository(self) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        repository = Path(directory.name) / "remap"
+        repository.mkdir()
+
+        def git(*arguments: str) -> None:
+            _ = subprocess.run(
+                ("git", "-C", str(repository), *arguments),
+                check=True,
+                capture_output=True,
+                timeout=60,
+            )
+
+        git("init", "-q")
+        _ = (repository / "README.md").write_text("Remap\n", encoding="utf-8")
+        git("add", "README.md")
+        git(
+            "-c",
+            "user.name=Remap Tests",
+            "-c",
+            "user.email=tests@remap.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "fixture",
+        )
+        return repository
+
+    def test_head_is_archived_under_the_tag_archive_prefix(self) -> None:
+        repository = self.repository()
+        destination = repository.parent / "out"
+        destination.mkdir()
+        archive = source_archive(repository, "0.2.0", destination)
+        self.assertEqual(archive.name, "remap-0.2.0.tar.gz")
+        with tarfile.open(archive) as members:
+            self.assertIn("remap-0.2.0/README.md", members.getnames())
+
+    def test_a_tree_with_changes_head_lacks_is_refused(self) -> None:
+        repository = self.repository()
+        _ = (repository / "README.md").write_text("changed\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "commit or remove them"):
+            _ = source_archive(repository, "0.2.0", repository.parent)
 
 
 if __name__ == "__main__":

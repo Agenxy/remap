@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,8 +34,12 @@ class RehearsalInputs:
     source_archive: Path
 
 
-def publish(root: Path, base_url: str, inputs: RehearsalInputs) -> Path:
-    """Write one version into `root` and return its release-asset directory."""
+def release_directory(root: Path, base_url: str, version: str) -> Path:
+    """The release-asset directory `version` would be published to, which must be new.
+
+    `make rehearsal-publish` asks this before it builds anything, so a root, a URL, or an
+    already published version that would be refused is refused first.
+    """
     if not root.is_absolute() or not root.is_dir():
         raise ValueError(
             f"the rehearsal root {root} must be an existing absolute directory"
@@ -43,13 +48,55 @@ def publish(root: Path, base_url: str, inputs: RehearsalInputs) -> Path:
         raise ValueError(
             "the rehearsal URL must be an http(s) origin and path with no trailing /"
         )
-    tag = f"v{inputs.version}"
-    release = root / "releases" / OWNER / REPOSITORY / "download" / tag
-    archive = root / "releases" / OWNER / REPOSITORY / "archive" / "refs" / "tags"
+    release = root / "releases" / OWNER / REPOSITORY / "download" / f"v{version}"
     if release.exists():
         raise FileExistsError(
             f"{release} is already published; a rehearsal is never rewritten"
         )
+    return release
+
+
+def source_archive(repository: Path, version: str, destination: Path) -> Path:
+    """`git archive` of HEAD, laid out as GitHub's tag archive is, into `destination`.
+
+    The package is built from the working tree and the archive from HEAD, so they are the
+    same source only when the tree has nothing HEAD does not; anything else is refused.
+    """
+    changes = subprocess.run(
+        ("git", "-C", str(repository), "status", "--porcelain"),
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout
+    if changes:
+        raise RuntimeError(
+            "the working tree has changes HEAD does not, so a package built from it "
+            + "would not match HEAD's source archive; commit or remove them first"
+        )
+    archive = destination / f"remap-{version}.tar.gz"
+    _ = subprocess.run(
+        (
+            "git",
+            "-C",
+            str(repository),
+            "archive",
+            "--format=tar.gz",
+            f"--prefix={REPOSITORY}-{version}/",
+            f"--output={archive}",
+            "HEAD",
+        ),
+        check=True,
+        timeout=300,
+    )
+    return archive
+
+
+def publish(root: Path, base_url: str, inputs: RehearsalInputs) -> Path:
+    """Write one version into `root` and return its release-asset directory."""
+    release = release_directory(root, base_url, inputs.version)
+    tag = f"v{inputs.version}"
+    archive = root / "releases" / OWNER / REPOSITORY / "archive" / "refs" / "tags"
     release.mkdir(parents=True)
     assets = [inputs.package, inputs.signature, inputs.pin]
     for asset in assets:
