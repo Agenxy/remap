@@ -1,122 +1,133 @@
-# ADR-0033: A name may answer with a Supgang peer's current address
+# ADR-0033: A peer's name reaches it on any network
 
 ## Status
 
-Proposed, 2026-10-30, for the owner's go-ahead. Nothing here is implemented,
-and nothing may be until the owner approves. It extends ADR-0016 and ADR-0026,
-which route a peer's advertised services, to the peer's own address. It is
-independent of ADR-0031 and ADR-0032; templates for this target are a
-follow-up.
+Proposed, 2026-10-30. The owner asked on 30 October for this as a capability,
+not a document: the fleet travels, and its machines are spread across networks.
+The design is settled with Supgang where marked, and building starts with the
+on-network path. It extends ADR-0016 and ADR-0026, which route a peer's HTTP
+services, to the peer itself. It adds one privileged operation, a loopback
+address reservation, so it is recorded here before that lands.
 
 ## Context
 
 On 30 October a new MacBook Pro joined the fleet. The owner asked for a stable
-name that follows the machine's Supgang-tracked address, resolvable from
-MacMarine and Solis, so that keeping track of its address is automatic.
+name for it that keeps working wherever the machines are.
 
-Remap cannot say that today:
+Remap cannot provide one today:
 
 - `supgang://<peer>/<service>` follows the peer, because the gateway resolves
-  it through `supgang resolve` on every routed request. But DNS answers it with
-  the loopback gateway, and it carries only HTTP services the peer advertises.
-- A name for the machine itself, for ssh, K7 node traffic or any other port,
-  can only be an `address` mapping. That is one fixed IP, and it goes stale
-  the next time the machine changes network.
+  it on every request. But it carries only HTTP, to services the peer
+  advertises, through the loopback gateway.
+- A name for the machine itself, for ssh, K7 node traffic or any other TCP
+  service, can only be an `address` mapping. That is one fixed IP, which goes
+  stale when the machine changes network and never worked off the LAN.
 
-Supgang already holds what the name needs: a device-signed, expiring record of
-the peer's address candidates, one of which it marks `preferred`. Remap
-already has a client for it, which `remap-network`'s peer resolver uses.
+Off a shared network the only thing that reaches another member is Supgang's
+authenticated stream. A peer's public or NAT address reaches Supgang's own
+QUIC port and nothing else. A name that works everywhere must therefore be
+able to ride that stream, and should go direct only when the machines share a
+network.
 
 ## Decision
 
-### The target
+### One target, two paths
 
-`supgang://<peer>`, a peer selector with no service, is a DNS target. A
-mapping such as `pro.agenxy.internal → supgang://<node-id>` answers A or AAAA queries
-with the peer's current address. The owner writes every such mapping, so Remap
-still imposes no name, suffix or namespace, and a Supgang record never creates
-one.
+`supgang://<peer>`, with no service, names a machine. A mapping such as
+`pro.agenxy.internal → supgang://<node-id>` resolves to whichever path reaches
+that peer from this Mac now:
 
-The peer is selected by its Supgang node ID or the fingerprint Supgang shows
-for it, never by its name. Supgang names are labels: they may repeat, and they
-change with `supgang name set`. The node ID is stable and cryptographic. A name
-in this position is refused, and the refusal shows the matching peer's
-fingerprint so the owner can write it instead. `remap get` and `remap list` show
-the peer's current signed name beside the selector, for display only.
+| This Mac and the peer | The name answers | Traffic |
+| --- | --- | --- |
+| Share a network | The peer's on-link local address | Direct, every protocol |
+| Do not | The peer's reserved loopback address on this Mac | TCP, through Supgang's stream, to the services the peer's owner exposes |
+| No fresh record, or no Supgang | SERVFAIL | None |
 
-### Who resolves, and when
+The answer has a TTL of 10 seconds, so it follows either machine between
+networks. The owner writes every mapping, so Remap imposes no name or suffix,
+and a Supgang record never creates one.
 
-`remapd` stays the sole writer, and DNS keeps answering only from immutable
-snapshots:
+### Selecting the peer
 
-- `remapd` resolves each enabled peer-address mapping through the existing
-  `supgang --json resolve` client when it is created or enabled, every
-  10 seconds, and when the record it holds expires.
-- When the selected address changes, `remapd` publishes a new versioned
-  snapshot. An unchanged answer publishes nothing.
-- The DNS path never runs Supgang, waits on it, or reads its files.
+The peer is selected by its Supgang node ID or shown fingerprint, never its
+name. Supgang names are labels that may repeat and can be changed with
+`supgang name set`. A name in this position is refused, and the refusal shows
+the matching fingerprint. `remap get` shows the peer's current signed name for
+display.
 
-### What a name answers
+### The on-network path (agreed with Supgang, 30 October)
 
-- **The address** is the IP of the candidate Supgang marks `preferred`, with
-  its port removed. It is published only when that candidate's scope is
-  `local` and its address lies on one of this Mac's own interface networks.
-  It is returned as A for IPv4 or AAAA for IPv6, with a TTL of 10 seconds, and
-  NOERROR with no answers for the other family.
-- **Off the shared network, no address.** Supgang computes `preferred` from
-  this Mac's viewpoint, as a dial preference. Off the LAN it can be a public,
-  `mapped` or gateway-reported address, and only Supgang's own QUIC port is
-  reachable there. A preferred candidate that is not local and on-link answers
-  NOERROR with no data, never a WAN address. Off-network reach is a Supgang
-  tunnel to loopback (`expose` on the peer, `forward` here), named with an
-  ordinary loopback mapping. That is not this target.
-- **Never the whole candidate list.** It includes link-local and VM-bridge
-  addresses, and a client that picks one at random would fail.
-- **No fresh record.** If the record has expired, the peer is unknown or
-  ambiguous, or Supgang is not installed, the name answers SERVFAIL. It never
-  answers a stale address, and it never falls through to public DNS for a
-  name it owns. `remap resolve` and `remap get` say which case applies.
+`remapd`, the sole writer, resolves each enabled peer mapping through the
+existing `supgang --json resolve` client every 10 seconds and when the record
+expires. It publishes a new immutable DNS snapshot only when the answer
+changes, and DNS never runs or waits on Supgang.
 
-### What it does not promise
+The direct answer is the candidate Supgang marks `preferred`, with its port
+removed, and only when that candidate's scope is `local` and its address is
+on one of this Mac's interface networks. Supgang computes `preferred` from this
+Mac's viewpoint as a dial preference. A public, `mapped` or gateway-reported
+preference is never published. Remap also never publishes the whole candidate
+list, which includes link-local and VM-bridge addresses.
 
-Supgang signs that its own QUIC port is reachable at a candidate address.
-Whether ssh, K7 or any other service answers on that IP is up to the peer's
-firewall and network. The help text, `remap://help` and the CLI manual say so.
-The gateway is not involved. The target is never routed over HTTP, and the
-gateway stays loopback-only.
+### The off-network path
 
-## Before anything is built
+- **A reserved loopback address per peer mapping.** Remap allocates each
+  enabled peer mapping a stable address in `127.77.0.0/16`, recorded with the
+  mapping. The privileged helper makes it an `lo0` alias on macOS, and Linux
+  routes all of `127.0.0.0/8` to loopback already. The reservation is the one
+  new privileged operation, and it lives behind the platform adapter, like
+  every other lifecycle effect, with exact uninstall.
+- **Listeners on the peer's service ports.** On that address the gateway
+  listens on the port of each service the peer's owner exposes, and carries
+  each accepted TCP connection through Supgang's local stream endpoint
+  (Supgang ADR 0006, as ADR-0026 does for HTTP) to that service. It never
+  listens on a non-loopback address.
+- **Supgang authorizes.** The peer's owner decides what is reachable with
+  `supgang expose`. Remap adds no authority, and a connection to a port the
+  peer does not expose is refused with a named reason.
+- **TCP only.** UDP and unexposed ports are not reachable off the network. The
+  help text says so.
+- **Open with Supgang:** whether the signed record lists every exposed service
+  with its port, or the mapping must name the port-to-service pairs. Remap
+  prefers the signed record, so K7 and Supgang can change ports without anyone
+  editing a mapping.
 
-- The owner approves this ADR.
-- Supgang confirmed the selection rule above on 30 October: `preferred` only
-  when local and on-link, and nothing otherwise. It has no change notice
-  today, so polling `supgang --json resolve` every 10 seconds is the
-  contract. A future bounded wait is not designed around.
-- Tests:
-  - address selection and expiry against real `supgang resolve` JSON
-    fixtures, including preferred-public, `mapped`-only, link-local-only,
-    off-link-local, expired and ambiguous records, and a name in the selector
-    position;
-  - `remapd` republishing a snapshot when the preferred address changes, and
-    not republishing when it stays the same;
-  - SERVFAIL with no Supgang binary;
-  - the onboarding acceptance: from MacMarine and Solis, the name resolves to
-    the new MacBook Pro. When that machine takes a new address on the same
-    network, for example by moving between Wi-Fi and Ethernet, the new address
-    resolves within 20 seconds. When it leaves the network, the name answers
-    no data rather than a stale or WAN address.
+## Building order
+
+1. The target, the selector, the on-network answer, and the polling and
+   republishing in `remapd`. This is useful at once on a shared network and
+   needs no privilege.
+2. The loopback reservation, through the platform adapters, with its tests
+   and uninstall.
+3. The stream listeners, once Supgang answers the open question.
+
+Each step ships with tests:
+
+- selection and expiry against real `supgang resolve` JSON fixtures, covering
+  preferred-public, `mapped`-only, link-local-only, off-link-local, expired and
+  ambiguous records, and a name in the selector position;
+- snapshot republishing on change only;
+- SERVFAIL with no Supgang;
+- the reservation's install and uninstall;
+- a stream round trip.
+
+The onboarding acceptance runs from MacMarine and Solis:
+
+- the name reaches the new MacBook Pro on the shared network;
+- it follows the machine to a new address within 20 seconds;
+- with the machine on another network, such as a phone hotspot, ssh through
+  the same name still connects.
 
 ## Consequences
 
-- On a shared network, a machine's name follows its address with no edit, as
-  long as Supgang tracks it. Away from that network the name deliberately
-  answers nothing. Names for remote services stay on the tunnel path.
-- `remapd` reads this Mac's interface networks to decide what is on-link,
-  through a portable interface list, behind the platform adapters.
+- A machine's name works at home and away, with no edit, as long as Supgang
+  tracks it.
 - A Mac without Supgang behaves exactly as today. Supgang stays an optional
-  provider, and the target says plainly when it is missing.
-- `remapd` gains a small periodic resolver, bounded to one `supgang resolve`
-  per enabled peer-address mapping every 10 seconds.
-- Wildcard templates (`*.agenxy.internal → supgang://{1}`, after ADR-0032) are
-  a natural follow-up and need their own decision, because they would turn
-  any label into a Supgang lookup.
+  provider, and a missing provider is named.
+- `remapd` gains a bounded poller, and the gateway gains loopback TCP listeners
+  beside its HTTP ones.
+- The privileged helper gains one operation, loopback address reservation, and
+  its uninstall.
+- Wildcard templates (`*.agenxy.internal → supgang://{1}`, after ADR-0032)
+  remain a separate decision, because they would turn any label into a
+  Supgang lookup.
