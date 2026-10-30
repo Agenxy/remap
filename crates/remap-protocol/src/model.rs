@@ -215,6 +215,10 @@ pub struct MappingView {
     pub enabled: bool,
     /// Revision that most recently changed this record.
     pub updated_revision: u64,
+    /// Loopback address the registry allocated to a peer-machine mapping
+    /// (ADR-0033); its DNS answer while enabled. Absent for other kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_address: Option<String>,
 }
 
 /// One bounded page from the registry.
