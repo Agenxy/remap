@@ -90,3 +90,55 @@ private func socketAddress(_ value: UInt32) -> sockaddr {
     address.sin_addr = in_addr(s_addr: value.bigEndian)
     return withUnsafeBytes(of: &address) { $0.load(as: sockaddr.self) }
 }
+
+/// Creates the listening sockets peer-machine names need. Root creates them
+/// because only root may bind a port below 1024 on a specific address, and
+/// because creating them the moment the alias exists leaves no window in which
+/// another account could bind the address first (ADR-0033 amendment).
+public protocol LoopbackListenerFactory: Sendable {
+    /// A listening TCP socket bound to exactly this address and port.
+    func listen(on listener: LoopbackListener) throws -> Int32
+}
+
+public struct DarwinLoopbackListenerFactory: LoopbackListenerFactory {
+    public init() {}
+
+    public func listen(on listener: LoopbackListener) throws -> Int32 {
+        guard let reservation = LoopbackReservation(listener.address), listener.port != 0 else {
+            throw LoopbackReservationError.invalidReservations
+        }
+        let operation = "listen on \(listener.address):\(listener.port)"
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw LoopbackReservationError.interface(operation) }
+        do {
+            var enabled: Int32 = 1
+            // SO_REUSEADDR lets root bind this one address beside a wildcard
+            // listener, such as Remote Login's sshd on *:22, measured on macOS
+            // 27.2; connections to the alias then reach this socket.
+            guard fcntl(descriptor, F_SETFD, FD_CLOEXEC) == 0,
+                  setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &enabled, socklen_t(MemoryLayout<Int32>.size)) == 0
+            else {
+                throw LoopbackReservationError.interface(operation)
+            }
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = listener.port.bigEndian
+            address.sin_addr = in_addr(s_addr: reservation.value.bigEndian)
+            let bound = withUnsafePointer(to: &address) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            guard bound == 0, Darwin.listen(descriptor, listenBacklog) == 0 else {
+                throw LoopbackReservationError.interface(operation)
+            }
+            return descriptor
+        } catch {
+            close(descriptor)
+            throw error
+        }
+    }
+}
+
+private let listenBacklog: Int32 = 128

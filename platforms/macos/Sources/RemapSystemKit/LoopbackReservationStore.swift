@@ -46,6 +46,9 @@ public struct LoopbackReservationStore: Sendable {
         else {
             throw LoopbackReservationError.invalidRecord
         }
+        // Aliases do not survive a restart. Entries from an earlier boot name
+        // nothing this supervisor added, so they are dropped, never adopted.
+        guard record.boot == bootSession() else { return [] }
         let owned = record.reservations.compactMap(LoopbackReservation.init)
         guard owned.count == record.reservations.count else {
             throw LoopbackReservationError.invalidRecord
@@ -62,7 +65,11 @@ public struct LoopbackReservationStore: Sendable {
             }
             return
         }
-        let record = LoopbackReservationRecord(version: 1, reservations: owned.sorted().map(\.description))
+        let record = LoopbackReservationRecord(
+            version: 1,
+            boot: bootSession(),
+            reservations: owned.sorted().map(\.description)
+        )
         let data = try CanonicalJSON.encoder.encode(record)
         let temporary = directory.appendingPathComponent(
             ".loopback-reservations-\(UUID().uuidString.lowercased()).tmp",
@@ -88,11 +95,41 @@ public struct LoopbackReservationStore: Sendable {
             throw error
         }
     }
+
+    /// Runs `body` holding an exclusive lock beside the record, so the keeper
+    /// and deactivation, which run in different processes, never interleave.
+    func withLock<Result>(_ body: () throws -> Result) throws -> Result {
+        let lock = directory.appendingPathComponent(".loopback-reservations.lock", isDirectory: false)
+        let descriptor = open(lock.path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else {
+            throw ResolverError.secureStorage("open the loopback reservation lock")
+        }
+        defer { close(descriptor) }
+        var information = stat()
+        guard fstat(descriptor, &information) == 0,
+              information.st_uid == ownerUID,
+              (information.st_mode & S_IFMT) == S_IFREG,
+              flock(descriptor, LOCK_EX) == 0
+        else {
+            throw ResolverError.secureStorage("lock the loopback reservation record")
+        }
+        return try body()
+    }
 }
 
 private struct LoopbackReservationRecord: Codable {
     let version: Int
+    let boot: String
     let reservations: [String]
+}
+
+/// This boot's session identifier, which changes at every restart.
+func bootSession() -> String {
+    var size = 0
+    guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0, size > 0 else { return "" }
+    var buffer = [CChar](repeating: 0, count: size)
+    guard sysctlbyname("kern.bootsessionuuid", &buffer, &size, nil, 0) == 0 else { return "" }
+    return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
 }
 
 private let maximumRecordBytes: off_t = 16 * 1024

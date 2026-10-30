@@ -243,7 +243,7 @@ private final class RecordingResolverChannel: ResolverSystemExchanging, Sendable
             switch command {
             case .health:
                 state.events.append(.health)
-            case .loopbackReservations:
+            case .loopbackReservations, .adoptListeners:
                 break
             case let .invalidate(activationID, generation):
                 state.events.append(.invalidate(

@@ -57,16 +57,16 @@ func theDaemonsAnswerIsRefusedWholeWhenAnyPartIsInvalid() throws {
 func theKeeperFollowsTheDaemonAndReleasesWithoutAnActivation() throws {
     let fixture = try KeeperFixture()
     fixture.daemon.update { $0.loopbackReservations = ["127.77.0.1", "127.77.0.2"] }
-    #expect(fixture.keeper.reconcile() == .held(2))
+    #expect(fixture.keeper.reconcile() == .held(aliases: 2, listenersUnheld: 0))
     #expect(fixture.interface.aliases.map(\.description) == ["127.77.0.1", "127.77.0.2"])
     #expect(try fixture.store.read() == fixture.interface.present)
 
     fixture.daemon.update { $0.loopbackReservations = ["127.77.0.2"] }
-    #expect(fixture.keeper.reconcile() == .held(1))
+    #expect(fixture.keeper.reconcile() == .held(aliases: 1, listenersUnheld: 0))
     #expect(fixture.interface.aliases.map(\.description) == ["127.77.0.2"])
 
     try fixture.removeActivation()
-    #expect(fixture.keeper.reconcile() == .held(0))
+    #expect(fixture.keeper.reconcile() == .held(aliases: 0, listenersUnheld: 0))
     #expect(fixture.interface.aliases.isEmpty)
     #expect(!FileManager.default.fileExists(atPath: fixture.store.recordURL.path))
 }
@@ -75,7 +75,7 @@ func theKeeperFollowsTheDaemonAndReleasesWithoutAnActivation() throws {
 func anUnreachableDaemonKeepsTheCurrentAliases() throws {
     let fixture = try KeeperFixture()
     fixture.daemon.update { $0.loopbackReservations = ["127.77.0.1"] }
-    #expect(fixture.keeper.reconcile() == .held(1))
+    #expect(fixture.keeper.reconcile() == .held(aliases: 1, listenersUnheld: 0))
     fixture.daemon.update { $0.refusesEverything = true }
     #expect(fixture.keeper.reconcile() == .unchanged("E_LOOPBACK_AUTHORITY_UNAVAILABLE"))
     #expect(fixture.interface.aliases.map(\.description) == ["127.77.0.1"])
@@ -91,7 +91,7 @@ func anInterruptedAddIsRecordedFirstAndFinishedNextTime() throws {
     #expect(try fixture.store.read().map(\.description).sorted() == ["127.77.0.1", "127.77.0.2"])
 
     fixture.interface.refuse(nil)
-    #expect(fixture.keeper.reconcile() == .held(2))
+    #expect(fixture.keeper.reconcile() == .held(aliases: 2, listenersUnheld: 0))
     #expect(fixture.interface.aliases.map(\.description) == ["127.77.0.1", "127.77.0.2"])
 }
 
@@ -133,6 +133,48 @@ func theAliasControlsAreTheValuesDarwinsHeadersDefine() {
     #expect(deleteAddress == 0x8020_6919)
 }
 
+@Test
+func unheldListenersOnHeldAliasesAreCreatedAndHandedOver() throws {
+    let fixture = try KeeperFixture()
+    let ssh = LoopbackListener(address: "127.77.0.1", port: 22)
+    let kassette = LoopbackListener(address: "127.77.0.1", port: 7443)
+    fixture.daemon.update {
+        $0.loopbackReservations = ["127.77.0.1"]
+        $0.unheldListeners = [ssh, kassette]
+    }
+    #expect(fixture.keeper.reconcile() == .held(aliases: 1, listenersUnheld: 0))
+    #expect(fixture.listenerFactory.created == [ssh, kassette])
+    // One descriptor travelled with each listener, and root kept none open.
+    #expect(fixture.daemon.snapshot().adoptedDescriptorCounts == [2])
+    #expect(fixture.listenerFactory.openDescriptors == 0)
+}
+
+@Test
+func aPortRootCannotBindStaysUnheldWithoutSpinning() throws {
+    let fixture = try KeeperFixture()
+    let taken = LoopbackListener(address: "127.77.0.1", port: 8080)
+    fixture.daemon.update {
+        $0.loopbackReservations = ["127.77.0.1"]
+        $0.unheldListeners = [taken]
+    }
+    fixture.listenerFactory.refuse(taken)
+    #expect(fixture.keeper.reconcile() == .held(aliases: 1, listenersUnheld: 1))
+    #expect(fixture.daemon.snapshot().adoptedDescriptorCounts.isEmpty)
+}
+
+@Test
+func anUnheldListenerOutsideTheRangeRefusesTheWholeList() throws {
+    let result = ResolverSystemResult(
+        activationID: nil,
+        activeGeneration: nil,
+        loopbackReservations: ["127.77.0.1"],
+        unheldListeners: [LoopbackListener(address: "127.0.0.1", port: 22)]
+    )
+    #expect(throws: LoopbackReservationError.invalidReservations) {
+        _ = try unheldListeners(from: result, within: [reservation("127.77.0.1")])
+    }
+}
+
 private func reservation(_ text: String) throws -> LoopbackReservation {
     try #require(LoopbackReservation(text))
 }
@@ -141,6 +183,7 @@ private struct KeeperFixture {
     let directory: URL
     let daemon = ResolverTestDaemon()
     let interface = TestLoopbackInterface()
+    let listenerFactory = TestListenerFactory()
     let store: LoopbackReservationStore
     let keeper: LoopbackReservationKeeper
 
@@ -155,6 +198,7 @@ private struct KeeperFixture {
             channel: daemon,
             interface: interface,
             store: store,
+            listeners: listenerFactory,
             activation: activation,
             observe: { _ in }
         )
@@ -195,5 +239,40 @@ private final class TestLoopbackInterface: LoopbackInterface, Sendable {
 
     func remove(_ reservation: LoopbackReservation) throws {
         state.withLock { _ = $0.present.remove(reservation) }
+    }
+}
+
+/// Root's socket factory, with real descriptors the keeper must close.
+private final class TestListenerFactory: LoopbackListenerFactory, Sendable {
+    private struct State {
+        var created: [LoopbackListener] = []
+        var open: Set<Int32> = []
+        var refused: LoopbackListener?
+    }
+
+    private let state = Mutex(State())
+
+    var created: [LoopbackListener] {
+        state.withLock { $0.created }
+    }
+
+    /// Descriptors this factory made that are still open in this process.
+    var openDescriptors: Int {
+        state.withLock { $0.open.count(where: { fcntl($0, F_GETFD) != -1 }) }
+    }
+
+    func refuse(_ listener: LoopbackListener) {
+        state.withLock { $0.refused = listener }
+    }
+
+    func listen(on listener: LoopbackListener) throws -> Int32 {
+        try state.withLock {
+            guard $0.refused != listener else { throw LoopbackReservationError.interface("listen") }
+            let descriptor = open("/dev/null", O_RDONLY | O_CLOEXEC)
+            guard descriptor >= 0 else { throw LoopbackReservationError.interface("open") }
+            $0.created.append(listener)
+            $0.open.insert(descriptor)
+            return descriptor
+        }
     }
 }

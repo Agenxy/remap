@@ -80,8 +80,10 @@ enum RemapResolverCommand {
 
     private static func logReservations(_ outcome: LoopbackReservationOutcome) {
         switch outcome {
-        case let .held(count):
-            logger.notice("peer-machine loopback addresses held: \(count, privacy: .public)")
+        case let .held(aliases, unheld):
+            logger.notice(
+                "peer-machine aliases: \(aliases, privacy: .public), listeners pending: \(unheld, privacy: .public)"
+            )
         case let .unchanged(code):
             logger.error("peer-machine loopback addresses unchanged: \(code, privacy: .public)")
         }

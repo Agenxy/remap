@@ -256,7 +256,7 @@ private final class CountingHealthChannel: ResolverSystemExchanging, Sendable {
                 state.generation = generation
             case .invalidate:
                 state.generation = nil
-            case .loopbackReservations:
+            case .loopbackReservations, .adoptListeners:
                 break
             }
             return ResolverSystemResult(
@@ -298,7 +298,7 @@ private final class RecoveringResolverChannel: ResolverSystemExchanging, Sendabl
                 throw ResolverChannelError.transport
             }
             switch command {
-            case .health, .loopbackReservations:
+            case .health, .loopbackReservations, .adoptListeners:
                 break
             case let .invalidate(_, generation):
                 if state.generation == generation {
