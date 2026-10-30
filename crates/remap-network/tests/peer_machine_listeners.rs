@@ -15,7 +15,8 @@ use std::time::Duration;
 
 use remap_core::{Mapping, MappingTarget, NamePattern, RegistrySnapshot};
 use remap_network::{
-    ListenerCause, ListenerReport, ListenerState, PeerMachineListeners, PeerMachineStatus,
+    DnsDecision, DnsEngine, DnsPolicy, ListenerCause, ListenerReport, ListenerSource,
+    ListenerState, PeerMachineAdoptError, PeerMachineListeners, PeerMachineStatus,
     PeerResolveError, PeerResolver, ResolvedPeerService, SnapshotStore, SupgangStreams,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -152,6 +153,8 @@ fn machine(pattern: &str, target: &str, address: Ipv4Addr) -> Result<Mapping, Bo
 struct Running {
     snapshots: SnapshotStore,
     status: PeerMachineStatus,
+    runtime: PeerMachineListeners,
+    socket: std::path::PathBuf,
     lines: Lines,
     _shutdown: watch::Sender<bool>,
     _directory: tempfile::TempDir,
@@ -227,18 +230,43 @@ struct Setup {
     with_endpoint: bool,
     resolver: Option<Arc<dyn PeerResolver>>,
     substitute: bool,
+    source: ListenerSource,
+    idle: Option<Duration>,
+    /// Look the endpoint up for every connection and start it later.
+    lookup: bool,
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        Self {
+            exposed: Vec::new(),
+            with_endpoint: true,
+            resolver: None,
+            substitute: true,
+            source: ListenerSource::Bind,
+            idle: None,
+            lookup: false,
+        }
+    }
 }
 
 fn start(setup: Setup) -> Result<Running, Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     let socket = directory.path().join("control.sock");
-    endpoint(&socket, setup.exposed)?;
+    if !setup.lookup {
+        endpoint(&socket, setup.exposed)?;
+    }
     let snapshots = SnapshotStore::empty();
     let status = PeerMachineStatus::default();
     let lines: Lines = Arc::default();
     let sink = Arc::clone(&lines);
     let mut runtime = PeerMachineListeners::new(snapshots.clone(), status.clone())
-        .with_supgang_streams(setup.with_endpoint.then(|| SupgangStreams::at(socket)))
+        .with_supgang_streams(
+            setup
+                .with_endpoint
+                .then(|| SupgangStreams::at(socket.clone())),
+        )
+        .with_listener_source(setup.source)
         .with_peer_resolver(setup.resolver)
         .with_log(Arc::new(move |line| {
             if let Ok(mut lines) = sink.lock() {
@@ -248,11 +276,19 @@ fn start(setup: Setup) -> Result<Running, Box<dyn Error>> {
     if setup.substitute {
         runtime = runtime.with_substitute_address(Ipv4Addr::LOCALHOST)?;
     }
+    if let Some(idle) = setup.idle {
+        runtime = runtime.with_idle_timeout(idle);
+    }
+    if setup.lookup {
+        runtime = runtime.with_supgang_socket(socket.clone());
+    }
     let (shutdown, receiver) = watch::channel(false);
-    tokio::spawn(runtime.serve(receiver));
+    tokio::spawn(runtime.clone().serve(receiver));
     Ok(Running {
         snapshots,
         status,
+        runtime,
+        socket,
         lines,
         _shutdown: shutdown,
         _directory: directory,
@@ -266,6 +302,7 @@ async fn standard() -> Result<(Running, SocketAddr), Box<dyn Error>> {
         with_endpoint: true,
         resolver: Some(Arc::new(Fleet)),
         substitute: true,
+        ..Setup::default()
     })?;
     Ok((running, upstream))
 }
@@ -389,6 +426,7 @@ async fn without_supgang_the_connection_closes_naming_it_missing() -> TestResult
         with_endpoint: false,
         resolver: None,
         substitute: true,
+        ..Setup::default()
     })?;
     running.publish(
         1,
@@ -468,6 +506,7 @@ async fn the_reserved_address_is_bound_exactly_or_reported() -> TestResult {
         with_endpoint: true,
         resolver: None,
         substitute: false,
+        ..Setup::default()
     })?;
     let address = Ipv4Addr::new(127, 77, 254, 201);
     let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
@@ -510,4 +549,281 @@ fn a_substitute_address_off_loopback_is_refused() {
     let runtime = PeerMachineListeners::new(SnapshotStore::empty(), PeerMachineStatus::default())
         .with_substitute_address(Ipv4Addr::new(192, 0, 2, 1));
     assert!(runtime.is_err());
+}
+
+/// The response code and first A answer DNS gives `name` now.
+fn dns(
+    snapshots: &SnapshotStore,
+    name: &str,
+) -> Result<(hickory_proto::op::ResponseCode, Option<Ipv4Addr>), Box<dyn Error>> {
+    use hickory_proto::op::{Message, Query};
+    use hickory_proto::rr::{Name, RData, RecordType};
+    let mut query = Message::query();
+    query.add_query(Query::query(Name::from_ascii(name)?, RecordType::A));
+    let engine = DnsEngine::new(snapshots.clone(), DnsPolicy::default());
+    let DnsDecision::Respond(bytes) = engine.decide(&query.to_vec()?)? else {
+        return Err("a mapped name was forwarded".into());
+    };
+    let response = Message::from_vec(&bytes)?;
+    let address = response
+        .answers
+        .iter()
+        .find_map(|record| match &record.data {
+            RData::A(address) => Some(address.0),
+            _ => None,
+        });
+    Ok((response.response_code, address))
+}
+
+fn adopted(port: u16) -> Result<std::net::TcpListener, Box<dyn Error>> {
+    Ok(std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))?)
+}
+
+#[tokio::test]
+async fn an_adopted_socket_is_held_carries_and_lets_the_name_answer() -> TestResult {
+    let upstream = banner_upstream().await?;
+    let running = start(Setup {
+        exposed: vec![("ssh", upstream)],
+        resolver: Some(Arc::new(Fleet)),
+        source: ListenerSource::Adopt,
+        ..Setup::default()
+    })?;
+    let address = Ipv4Addr::new(127, 77, 0, 1);
+    running.publish(
+        1,
+        vec![machine(
+            "pro.test",
+            &format!("supgang://{}?ssh=22", node_id()),
+            address,
+        )?],
+    )?;
+    let reports = running.reports_where(|reports| reports.len() == 1).await?;
+    assert_eq!(
+        reports[0].state,
+        ListenerState::NotListening(ListenerCause::AwaitingSocket)
+    );
+    assert!(!running.runtime.is_held(address, 22));
+    assert_eq!(
+        dns(&running.snapshots, "pro.test.")?.0,
+        hickory_proto::op::ResponseCode::ServFail
+    );
+
+    let first = adopted(0)?;
+    let first_local = first.local_addr()?;
+    running.runtime.adopt(address, 22, first)?;
+    let [local] = running.listening(1).await?[..] else {
+        return Err("expected one listener".into());
+    };
+    assert_eq!(local, first_local);
+    assert!(running.runtime.is_held(address, 22));
+    assert!(!running.runtime.is_held(address, 23));
+    assert_eq!(
+        dns(&running.snapshots, "pro.test.")?,
+        (hickory_proto::op::ResponseCode::NoError, Some(address))
+    );
+    round_trip(local).await?;
+
+    // A second hand-over replaces the held listener.
+    let second = adopted(0)?;
+    let second_local = second.local_addr()?;
+    running.runtime.adopt(address, 22, second)?;
+    running
+        .reports_where(|reports| {
+            reports.len() == 1 && reports[0].state == ListenerState::Listening(second_local)
+        })
+        .await?;
+    round_trip(second_local).await?;
+    assert!(
+        TcpStream::connect(first_local).await.is_err(),
+        "the replaced socket still listens"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_socket_on_any_other_endpoint_is_refused() -> TestResult {
+    let runtime = PeerMachineListeners::new(SnapshotStore::empty(), PeerMachineStatus::default())
+        .with_listener_source(ListenerSource::Adopt);
+    let address = Ipv4Addr::new(127, 77, 0, 1);
+    assert_eq!(
+        runtime.adopt(address, 22, adopted(0)?),
+        Err(PeerMachineAdoptError::WrongEndpoint)
+    );
+    assert_eq!(
+        runtime.adopt(Ipv4Addr::LOCALHOST, 22, adopted(0)?),
+        Err(PeerMachineAdoptError::NotPeerMachineEndpoint)
+    );
+    assert!(!runtime.is_held(address, 22));
+    Ok(())
+}
+
+/// A port that cannot be held keeps the whole name from answering, so a
+/// connection can never reach whatever else listens there.
+#[tokio::test]
+async fn a_bind_failure_makes_the_name_fail_instead_of_answer() -> TestResult {
+    let upstream = banner_upstream().await?;
+    let running = start(Setup {
+        exposed: vec![("ssh", upstream)],
+        substitute: false,
+        ..Setup::default()
+    })?;
+    let address = Ipv4Addr::new(127, 77, 254, 202);
+    let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await?
+        .local_addr()?
+        .port();
+    // Where the platform routes the address, something else holds the port
+    // first; elsewhere the address itself is not there.
+    let _occupant = std::net::TcpListener::bind((address, port)).ok();
+    running.publish(
+        1,
+        vec![machine(
+            "pro.test",
+            &format!("supgang://{}?ssh={port}", node_id()),
+            address,
+        )?],
+    )?;
+    let reports = running.reports_where(|reports| reports.len() == 1).await?;
+    assert!(
+        matches!(
+            reports[0].state,
+            ListenerState::NotListening(
+                ListenerCause::AddressNotReserved | ListenerCause::PortInUse
+            )
+        ),
+        "{reports:?}"
+    );
+    assert_eq!(
+        dns(&running.snapshots, "pro.test.")?,
+        (hickory_proto::op::ResponseCode::ServFail, None)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_silent_connection_is_closed_after_the_idle_deadline() -> TestResult {
+    let upstream = banner_upstream().await?;
+    let running = start(Setup {
+        exposed: vec![("ssh", upstream)],
+        idle: Some(Duration::from_millis(200)),
+        ..Setup::default()
+    })?;
+    running.publish(
+        1,
+        vec![machine(
+            "pro.test",
+            &format!("supgang://{}?ssh=22", node_id()),
+            Ipv4Addr::new(127, 77, 0, 1),
+        )?],
+    )?;
+    let [local] = running.listening(1).await?[..] else {
+        return Err("expected one listener".into());
+    };
+    let mut client = TcpStream::connect(local).await?;
+    let mut banner = [0_u8; 18];
+    timeout(WAIT, client.read_exact(&mut banner)).await??;
+    let began = tokio::time::Instant::now();
+    let mut rest = Vec::new();
+    timeout(WAIT, client.read_to_end(&mut rest)).await??;
+    assert!(began.elapsed() >= Duration::from_millis(150));
+    assert_eq!(rest, Vec::<u8>::new());
+    Ok(())
+}
+
+#[tokio::test]
+async fn one_listener_carries_at_most_its_own_share() -> TestResult {
+    let (running, _upstream) = standard().await?;
+    running.publish(
+        1,
+        vec![machine(
+            "pro.test",
+            &format!("supgang://{}?ssh=22", node_id()),
+            Ipv4Addr::new(127, 77, 0, 1),
+        )?],
+    )?;
+    let [local] = running.listening(1).await?[..] else {
+        return Err("expected one listener".into());
+    };
+    let mut carried = Vec::new();
+    for _connection in 0..remap_network::PEER_MACHINE_LISTENER_CONNECTION_LIMIT {
+        let mut client = TcpStream::connect(local).await?;
+        let mut banner = [0_u8; 18];
+        timeout(WAIT, client.read_exact(&mut banner)).await??;
+        carried.push(client);
+    }
+    closed_without_bytes(local).await?;
+    drop(carried.pop());
+    // A slot frees once the carried connection's close is seen.
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let mut client = TcpStream::connect(local).await?;
+        let mut banner = [0_u8; 18];
+        if timeout(Duration::from_millis(500), client.read_exact(&mut banner))
+            .await
+            .is_ok_and(|read| read.is_ok())
+        {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() > deadline {
+            return Err("no slot freed after a connection closed".into());
+        }
+    }
+}
+
+#[tokio::test]
+async fn refusals_are_logged_once_per_interval_and_all_counted() -> TestResult {
+    let upstream = banner_upstream().await?;
+    let running = start(Setup {
+        exposed: vec![("ssh", upstream)],
+        with_endpoint: false,
+        ..Setup::default()
+    })?;
+    running.publish(
+        1,
+        vec![machine(
+            "pro.test",
+            &format!("supgang://{}?ssh=22", node_id()),
+            Ipv4Addr::new(127, 77, 0, 1),
+        )?],
+    )?;
+    let [local] = running.listening(1).await?[..] else {
+        return Err("expected one listener".into());
+    };
+    for _attempt in 0..3 {
+        closed_without_bytes(local).await?;
+    }
+    running.logged("Cause: no-supgang").await?;
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while running.status.refusals() != vec![("no-supgang", 3)] {
+        if tokio::time::Instant::now() > deadline {
+            return Err(format!("counted {:?}", running.status.refusals()).into());
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(running.lines.lock().map_err(|_| "log poisoned")?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn supgang_started_after_the_runtime_is_found_on_the_next_connection() -> TestResult {
+    let upstream = banner_upstream().await?;
+    let running = start(Setup {
+        lookup: true,
+        ..Setup::default()
+    })?;
+    running.publish(
+        1,
+        vec![machine(
+            "pro.test",
+            &format!("supgang://{}?ssh=22", node_id()),
+            Ipv4Addr::new(127, 77, 0, 1),
+        )?],
+    )?;
+    let [local] = running.listening(1).await?[..] else {
+        return Err("expected one listener".into());
+    };
+    closed_without_bytes(local).await?;
+    running.logged("Cause: no-supgang").await?;
+    endpoint(&running.socket, vec![("ssh", upstream)])?;
+    round_trip(local).await
 }

@@ -132,6 +132,10 @@ pub(crate) struct PreboundNetwork {
 pub(crate) struct PreparedNetwork {
     pub(crate) dns: Option<DnsRuntime>,
     pub(crate) gateway: Option<GatewayRuntime>,
+    /// The peer-machine listener runtime, present with the gateway. Clones
+    /// are handles to it: the system control channel adopts root-created
+    /// sockets through one (ADR-0033).
+    pub(crate) peer_machines: Option<PeerMachineListeners>,
     pub(crate) system_control: Option<SystemControlRuntime>,
     pub(crate) snapshots: SnapshotStore,
 }
@@ -451,10 +455,10 @@ fn spawn_network_services(
                 .await
                 .map_err(network_diagnostic)
         });
-        // Peer-machine listeners run beside the HTTP gateway, each bound
-        // only to its mapping's reserved address (ADR-0033).
-        let listeners =
-            PeerMachineListeners::new(network.snapshots.clone(), engine.peer_machine_status());
+    }
+    // Peer-machine listeners run beside the HTTP gateway, each held only on
+    // its mapping's reserved address (ADR-0033).
+    if let Some(listeners) = network.peer_machines {
         let runtime_shutdown = shutdown.subscribe();
         services.spawn(async move {
             listeners
