@@ -5,11 +5,14 @@ from __future__ import annotations
 
 import plistlib
 import re
+import tempfile
 import unittest
 from pathlib import Path
 from typing import cast
 
 from tools.remap_macos_portable_package import PRODUCT_IDENTIFIERS
+from tools.remap_package import verify_native_plist_versions
+from tools.remap_tasks import PRODUCT_VERSION
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "platforms/macos/Package.swift"
@@ -76,6 +79,23 @@ class MacOSProductIdentityTests(unittest.TestCase):
         ]
         names.extend(_rust_constants(path)["NAME"] for path in RUST_PRODUCTS.values())
         self.assertEqual(len(names), len(set(names)))
+
+    def test_every_swift_plist_declares_the_product_version(self) -> None:
+        verify_native_plist_versions(ROOT, PRODUCT_VERSION)
+
+    def test_a_plist_left_at_an_older_version_fails_the_gate(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="remap-plist-version-") as directory:
+            root = Path(directory)
+            plist = root / "platforms/macos/Sources/RemapExample/Info.plist"
+            plist.parent.mkdir(parents=True)
+            document = {
+                "CFBundleShortVersionString": "0.1.0",
+                "CFBundleVersion": "0.1.0",
+            }
+            _ = plist.write_bytes(plistlib.dumps(document))
+
+            with self.assertRaisesRegex(RuntimeError, "RemapExample/Info.plist"):
+                verify_native_plist_versions(root, "0.2.0")
 
 
 if __name__ == "__main__":

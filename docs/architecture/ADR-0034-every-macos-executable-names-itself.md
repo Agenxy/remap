@@ -44,7 +44,7 @@ access dialog says "<program> wants to use …". Neither the Swift helpers nor
 Every macOS executable Remap builds carries an `Info.plist` in its
 `__TEXT,__info_plist` section, which macOS reads as the bundle information of an
 executable that has no bundle. It declares `CFBundleIdentifier`, `CFBundleName`,
-`CFBundleDisplayName`, `CFBundleInfoDictionaryVersion`,
+`CFBundleDisplayName`, the version, `CFBundleInfoDictionaryVersion`,
 `CFBundleDevelopmentRegion` and `NSHumanReadableCopyright`.
 
 | Executable | `CFBundleIdentifier` | `CFBundleName` |
@@ -77,11 +77,12 @@ target is macOS. The portable core gains no Apple dependency: a section in the
 executable is a property of how it is linked, not an API it calls, and Linux
 builds link nothing.
 
-The Swift plists carry no version. The Swift package has no version input, the
-product version lives in the Cargo workspace, and a literal copied into nine
-plists would drift with the first release that forgot one. An absent key is
-true; a stale one is not. The Rust plists, which the build derives from that
-same version, carry it.
+Every plist also declares the product version as `CFBundleShortVersionString`
+and `CFBundleVersion`. The Rust build scripts substitute the crate version. The
+Swift plists hold it as a literal, as `RemapProduct.swift` already does, and the
+development gate's existing check that the native version equals
+`workspace.package.version` now covers each plist too, so a release that bumps
+one and forgets another fails `make check` and names the file.
 
 `tests/python/test_macos_product_identity.py` holds every plist to its signing
 identifier, a distinct `Remap …` name, and an embedding in the build. A test in
