@@ -20,6 +20,8 @@ public enum ResolverSystemCommand: Encodable, Sendable {
     case publish(activationID: UUID, generation: UInt64, upstreams: [String])
     case invalidate(activationID: UUID, generation: UInt64)
     case health
+    /// The loopback addresses enabled peer-machine names answer with (ADR-0033).
+    case loopbackReservations
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -42,6 +44,8 @@ public enum ResolverSystemCommand: Encodable, Sendable {
             try container.encode(generation, forKey: .generation)
         case .health:
             try container.encode("resolver_health", forKey: .kind)
+        case .loopbackReservations:
+            try container.encode("loopback_reservations", forKey: .kind)
         }
     }
 }
@@ -54,21 +58,27 @@ public struct ResolverSystemResult: Decodable, Equatable, Sendable {
     /// sends it only when it exceeds `activeGeneration`, and a daemon older
     /// than ADR-0025 never sends it, so absence is decoded as nil.
     public let highestAcceptedGeneration: UInt64?
+    /// Present only in the answer to `loopbackReservations`. Root validates
+    /// every entry against the reserved range before acting on any of them.
+    public let loopbackReservations: [String]?
 
     public init(
         activationID: UUID?,
         activeGeneration: UInt64?,
-        highestAcceptedGeneration: UInt64? = nil
+        highestAcceptedGeneration: UInt64? = nil,
+        loopbackReservations: [String]? = nil
     ) {
         self.activationID = activationID
         self.activeGeneration = activeGeneration
         self.highestAcceptedGeneration = highestAcceptedGeneration
+        self.loopbackReservations = loopbackReservations
     }
 
     enum CodingKeys: String, CodingKey {
         case activationID = "activation_id"
         case activeGeneration = "active_generation"
         case highestAcceptedGeneration = "highest_accepted_generation"
+        case loopbackReservations = "loopback_reservations"
     }
 }
 

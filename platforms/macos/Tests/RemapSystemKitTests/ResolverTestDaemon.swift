@@ -21,6 +21,7 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
         var publications: [UInt64] = []
         var publishedUpstreams: [String] = []
         var invalidations: [UUID] = []
+        var loopbackReservations: [String] = []
     }
 
     private let state: Mutex<State>
@@ -50,6 +51,8 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
                 state.publishedUpstreams = upstreams
             case let .invalidate(activationID, generation):
                 try invalidate(&state, activationID: activationID, generation: generation)
+            case .loopbackReservations:
+                return try wireResult(state, loopbackReservations: state.loopbackReservations)
             }
             return try wireResult(state)
         }
@@ -90,7 +93,7 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
         state.invalidations.append(activationID)
     }
 
-    private func wireResult(_ state: State) throws -> Data {
+    private func wireResult(_ state: State, loopbackReservations: [String]? = nil) throws -> Data {
         var object: [String: Any] = [
             "activation_id": state.activationID.map { $0.uuidString.lowercased() } ?? NSNull(),
             "active_generation": state.activeGeneration.map { NSNumber(value: $0) } ?? NSNull()
@@ -98,6 +101,9 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
         let exceedsActive = state.highestGeneration > (state.activeGeneration ?? 0)
         if state.reportsHighWater, state.highestGeneration > 0, exceedsActive {
             object["highest_accepted_generation"] = NSNumber(value: state.highestGeneration)
+        }
+        if let loopbackReservations {
+            object["loopback_reservations"] = loopbackReservations
         }
         return try JSONSerialization.data(withJSONObject: object)
     }

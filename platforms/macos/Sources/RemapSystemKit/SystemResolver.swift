@@ -134,8 +134,12 @@ public struct SystemResolver: Sendable {
             .commitPrepared()
     }
 
+    /// Restores ordinary DNS, then releases every loopback address held for
+    /// peer-machine names (ADR-0033), so nothing outlives the activation.
+    /// DNS is restored first because it is what the owner depends on.
     public func deactivate(store: ActivationStore = .standard) throws {
         try restoreOrdinaryDNS(store: store, retainPreparedRecord: false)
+        try LoopbackReservationKeeper.releaseAll(store: LoopbackReservationStore(directory: store.directory))
     }
 
     /// Restores ordinary DNS while retaining the integrity-covered activation

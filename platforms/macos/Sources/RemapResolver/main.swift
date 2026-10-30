@@ -34,7 +34,12 @@ enum RemapResolverCommand {
                     bypassLog: LoggedResolverBypassLog(store: .standard, logger: logger),
                     observe: logState
                 )
+                // Reservations for peer-machine names (ADR-0033) are kept by
+                // their own task, so nothing they do can change DNS.
+                let keeper = LoopbackReservationKeeper(channel: channel, observe: logReservations)
+                async let reservations: Void = keeper.run()
                 await supervisor.run()
+                await reservations
             }
         } catch {
             logger.error("resolver supervisor stopped: \(errorCode(error), privacy: .public)")
@@ -70,6 +75,15 @@ enum RemapResolverCommand {
             logger.notice("resolver supervisor ready")
         case let .degraded(code):
             logger.error("resolver supervisor degraded: \(code, privacy: .public)")
+        }
+    }
+
+    private static func logReservations(_ outcome: LoopbackReservationOutcome) {
+        switch outcome {
+        case let .held(count):
+            logger.notice("peer-machine loopback addresses held: \(count, privacy: .public)")
+        case let .unchanged(code):
+            logger.error("peer-machine loopback addresses unchanged: \(code, privacy: .public)")
         }
     }
 
