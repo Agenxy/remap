@@ -77,8 +77,9 @@ impl SystemLookup {
 }
 
 /// The first enabled exact mapping and the addresses Remap must answer for
-/// it: loopback for a routed name, the literal address for a direct one. A
-/// wildcard or an alias has no single predictable answer and is skipped.
+/// it: loopback for a routed name, the literal address for a direct one, and
+/// the allocated address for a peer machine. A wildcard or an alias has no
+/// single predictable answer and is skipped.
 #[must_use]
 pub fn candidate(mappings: &[MappingView]) -> Option<(String, Vec<IpAddr>)> {
     mappings
@@ -91,6 +92,7 @@ pub fn candidate(mappings: &[MappingView]) -> Option<(String, Vec<IpAddr>)> {
                     IpAddr::V6(Ipv6Addr::LOCALHOST),
                 ],
                 "dns-address" => vec![mapping.target.parse().ok()?],
+                "peer-machine" => vec![mapping.peer_address.as_deref()?.parse().ok()?],
                 _ => return None,
             };
             Some((mapping.pattern.clone(), expected))
@@ -152,6 +154,24 @@ mod tests {
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         IpAddr::V6(Ipv6Addr::LOCALHOST),
     ];
+
+    #[test]
+    fn a_peer_machine_name_must_resolve_to_its_allocated_address() {
+        let mut machine = view(
+            "pro.test",
+            "supgang://a8a37e32?ssh=22",
+            "peer-machine",
+            true,
+        );
+        machine.peer_address = Some("127.77.0.3".to_owned());
+        assert_eq!(
+            candidate(&[machine]),
+            Some((
+                "pro.test".to_owned(),
+                vec![IpAddr::V4(Ipv4Addr::new(127, 77, 0, 3))]
+            ))
+        );
+    }
 
     #[test]
     fn a_routed_name_must_resolve_to_loopback_and_a_direct_name_to_its_address() {

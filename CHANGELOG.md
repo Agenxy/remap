@@ -6,6 +6,22 @@ platform claims separate.
 
 ## Unreleased
 
+- A Supgang peer machine can have one name that works on any network
+  (ADR-0033). `remap set pro.agenxy.internal 'supgang://<node-id>?ssh=22,k7=7443'`
+  gives the machine a stable loopback address in `127.77.0.0/16`, allocated
+  when the mapping is created and kept until it is removed. DNS answers A
+  with that address and no AAAA. The gateway listens on that address at each
+  listed port and carries each TCP connection through Supgang's local stream
+  endpoint to the service the peer's owner exposes with `supgang expose`.
+  The peer is selected by its node ID or fingerprint, never its name. TCP
+  only: UDP and unexposed services are not reachable. A connection Supgang
+  does not carry is closed, and the daemon's log names the service and the
+  cause, never the mapped name; `remap status` counts them by cause. `get`, `list`, `preview` and the MCP tools show the
+  address (`peer_address`). On macOS, connections need the installed
+  helper's reservation of the address, which ships separately. Until then,
+  `remap status` and `remap doctor` report each listener as not listening,
+  with cause `address-not-reserved`. A registry holds at most 256 such
+  mappings. The registry moves to schema 4, behind the pre-migration copy.
 - A wildcard's peer target may read its peer and service from the name
   (ADR-0032). `*.k7.internal → supgang://{1}/{2}` routes
   `preview.solis.k7.internal` to `supgang://solis/preview`, where `{1}` is the

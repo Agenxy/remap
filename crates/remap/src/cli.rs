@@ -37,7 +37,13 @@ const SET_GUIDANCE: &str = concat!(
     "Examples:\n",
     "  remap set remap.test http://127.0.0.1:4270\n",
     "  remap set '*.lab' https://example.com:9443 --host-header use-upstream\n",
-    "  remap set atlas 127.0.0.1 --expect 12 --operation-id <UUID>\n\n",
+    "  remap set atlas 127.0.0.1 --expect 12 --operation-id <UUID>\n",
+    "  remap set pro.internal 'supgang://<node-id>?ssh=22,k7=7443'\n\n",
+    "A supgang://<node-id>?<service>=<port> target names a Supgang peer machine by its node ID\n",
+    "(64 lowercase hex) or fingerprint (8), never its name. Its name answers one loopback\n",
+    "address in 127.77.0.0/16, and each listed port is carried through Supgang to the service\n",
+    "the peer's owner exposes with 'supgang expose'. TCP only; UDP and unexposed services are\n",
+    "not reachable.\n\n",
     "Without explicit guards, Remap reads the current revision and creates an operation ID.\n",
     "If the response is lost after submission, the diagnostic preserves both values so the\n",
     "state can be inspected and the identical operation retried safely.",
@@ -355,7 +361,7 @@ pub(crate) fn command() -> Command {
                     Arg::new(TARGET)
                         .required(true)
                         .value_name("TARGET")
-                        .help("IP address, DNS alias, http(s) upstream URL, or supgang://<peer>/<service>; on a wildcard, {1} and {2} read the name's labels"),
+                        .help("IP address, DNS alias, http(s) upstream URL, supgang://<peer>/<service>, or supgang://<node-id>?<service>=<port>,...; on a wildcard, {1} and {2} read a peer service's labels"),
                 )
                 .arg(host_policy_argument())
                 .arg(landing_argument()),
@@ -576,7 +582,7 @@ fn set_command() -> Command {
                 .required_unless_present("moved-to")
                 .conflicts_with("moved-to")
                 .value_name("TARGET")
-                .help("IP address, DNS alias, http(s) upstream URL, or supgang://<peer>/<service>; on a wildcard, {1} and {2} read the name's labels"),
+                .help("IP address, DNS alias, http(s) upstream URL, supgang://<peer>/<service>, or supgang://<node-id>?<service>=<port>,...; on a wildcard, {1} and {2} read a peer service's labels"),
         )
         .arg(host_policy_argument())
         .arg(landing_argument())

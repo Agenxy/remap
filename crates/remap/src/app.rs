@@ -37,6 +37,7 @@ pub(crate) struct DoctorReport {
     pub(crate) health: RuntimeHealth,
     pub(crate) native_install: bool,
     pub(crate) system_lookup: SystemLookup,
+    pub(crate) peer_machines: Option<remap_protocol::PeerMachineListeners>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

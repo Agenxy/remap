@@ -3,11 +3,13 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use remap_core::RegistrySnapshot;
+use tokio::sync::watch;
 
 /// Lock-free publication point for complete immutable registry revisions.
 #[derive(Debug, Clone)]
 pub struct SnapshotStore {
     current: Arc<ArcSwap<RegistrySnapshot>>,
+    published: Arc<watch::Sender<u64>>,
 }
 
 impl SnapshotStore {
@@ -16,6 +18,7 @@ impl SnapshotStore {
     pub fn empty() -> Self {
         Self {
             current: Arc::new(ArcSwap::from_pointee(RegistrySnapshot::empty())),
+            published: Arc::new(watch::Sender::new(0)),
         }
     }
 
@@ -33,8 +36,17 @@ impl SnapshotStore {
         if snapshot.revision() < self.current.load().revision() {
             return false;
         }
+        let revision = snapshot.revision();
         self.current.store(Arc::new(snapshot));
+        self.published.send_replace(revision);
         true
+    }
+
+    /// Watches the revision of each published snapshot, for a reader that
+    /// must act when the mappings change rather than when it is asked.
+    #[must_use]
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
+        self.published.subscribe()
     }
 }
 

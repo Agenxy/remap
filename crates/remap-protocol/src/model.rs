@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::Diagnostic;
@@ -14,6 +16,9 @@ pub const MAX_ATOMIC_CHANGE_COUNT: usize = 64;
 
 /// Maximum encoded destination length accepted by the registry.
 pub const MAX_TARGET_BYTES: usize = 4_096;
+
+/// Maximum not-listening peer-machine listeners one status names.
+pub const MAX_LISTENER_FAILURES: usize = 64;
 
 /// Maximum duration of one daemon-backed revision wait.
 pub const MAX_REVISION_WAIT_MS: u32 = 5_000;
@@ -194,6 +199,47 @@ pub struct RegistryStatus {
     /// Retryable retention failure currently blocking new mutations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maintenance: Option<Diagnostic>,
+    /// The gateway's peer-machine listeners (ADR-0033), when it runs any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_machine_listeners: Option<PeerMachineListeners>,
+}
+
+/// How many peer-machine service listeners accept connections, and why the
+/// others do not.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PeerMachineListeners {
+    /// Listeners bound to their mapping's address and accepting.
+    pub listening: u64,
+    /// Listeners that could not bind.
+    pub not_listening: u64,
+    /// The first not-listening listeners, by pattern then port, at most 64.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<PeerMachineListenerFailure>,
+    /// Connections closed without a stream since the daemon started, by
+    /// cause: `endpoint`, `no-supgang`, `refused`, `timeout` or
+    /// `unknown-peer`. Causes not seen are omitted.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refusals: BTreeMap<String, u64>,
+}
+
+/// One peer-machine service listener that could not bind.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PeerMachineListenerFailure {
+    /// Canonical pattern of the mapping.
+    pub pattern: String,
+    /// The exposed service.
+    pub service: String,
+    /// The mapping's allocated address.
+    pub address: String,
+    /// The port listened on for the service.
+    pub port: u16,
+    /// Stable cause: `address-not-reserved`, `port-in-use`,
+    /// `permission-denied` or `other`.
+    pub cause: String,
+    /// What the cause means and what to do.
+    pub detail: String,
 }
 
 /// Stable presentation of one mapping.
