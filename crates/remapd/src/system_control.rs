@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use remap_network::{NetworkError, ResolverPlanStore};
+use remap_network::{NetworkError, ResolverPlanStore, SnapshotStore};
 use remap_protocol::{
     DEFAULT_DAEMON_DRAIN_GRACE, Diagnostic, SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest,
     SystemResponse, SystemResult, read_system_frame, write_system_frame,
@@ -35,6 +35,7 @@ pub(crate) struct SystemControlRuntime {
 #[derive(Debug, Clone)]
 struct SystemController {
     plans: ResolverPlanStore,
+    snapshots: SnapshotStore,
     state: Arc<Mutex<ControllerState>>,
 }
 
@@ -51,7 +52,11 @@ struct SystemSocketGuard {
 }
 
 impl SystemControlRuntime {
-    pub(crate) async fn bind(path: &Path, plans: ResolverPlanStore) -> Result<Self, Diagnostic> {
+    pub(crate) async fn bind(
+        path: &Path,
+        plans: ResolverPlanStore,
+        snapshots: SnapshotStore,
+    ) -> Result<Self, Diagnostic> {
         prepare_socket_target(path).await?;
         let listener = UnixListener::bind(path).map_err(listener_error)?;
         std::fs::set_permissions(path, Permissions::from_mode(0o600)).map_err(path_error)?;
@@ -59,20 +64,21 @@ impl SystemControlRuntime {
         Ok(Self {
             listener,
             guard: Some(guard),
-            controller: SystemController::new(plans),
+            controller: SystemController::new(plans, snapshots),
         })
     }
 
     pub(crate) fn adopt(
         listener: StdUnixListener,
         plans: ResolverPlanStore,
+        snapshots: SnapshotStore,
     ) -> Result<Self, Diagnostic> {
         listener.set_nonblocking(true).map_err(listener_error)?;
         let listener = UnixListener::from_std(listener).map_err(listener_error)?;
         Ok(Self {
             listener,
             guard: None,
-            controller: SystemController::new(plans),
+            controller: SystemController::new(plans, snapshots),
         })
     }
 
@@ -119,9 +125,10 @@ impl SystemControlRuntime {
 }
 
 impl SystemController {
-    fn new(plans: ResolverPlanStore) -> Self {
+    fn new(plans: ResolverPlanStore, snapshots: SnapshotStore) -> Self {
         Self {
             plans,
+            snapshots,
             state: Arc::new(Mutex::new(ControllerState::default())),
         }
     }
@@ -155,6 +162,10 @@ impl SystemController {
                 generation,
             } => self.invalidate(state, activation_id, generation),
             SystemCommand::ResolverHealth => Ok(system_result(state, &self.plans)),
+            // The root supervisor learns addresses only, never which name or
+            // peer each one serves (ADR-0033).
+            SystemCommand::LoopbackReservations => Ok(system_result(state, &self.plans)
+                .with_loopback_reservations(self.snapshots.load().peer_machine_addresses())),
         }
     }
 
@@ -374,7 +385,8 @@ mod tests {
     use std::io;
     use std::net::{Ipv4Addr, SocketAddr};
 
-    use remap_network::ResolverPlanStore;
+    use remap_core::{Mapping, RegistrySnapshot};
+    use remap_network::{ResolverPlanStore, SnapshotStore};
     use remap_protocol::{SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest};
     use uuid::Uuid;
 
@@ -388,7 +400,7 @@ mod tests {
     async fn controller_binds_one_activation_and_never_exposes_addresses()
     -> Result<(), Box<dyn Error>> {
         let plans = ResolverPlanStore::initial(vec![endpoint(1)])?;
-        let controller = SystemController::new(plans);
+        let controller = SystemController::new(plans, SnapshotStore::empty());
         let activation_id = Uuid::new_v4();
         let response = controller
             .execute(SystemRequest {
@@ -415,7 +427,10 @@ mod tests {
     #[tokio::test]
     async fn controller_rejects_activation_and_generation_confusion() -> Result<(), Box<dyn Error>>
     {
-        let controller = SystemController::new(ResolverPlanStore::initial(vec![endpoint(1)])?);
+        let controller = SystemController::new(
+            ResolverPlanStore::initial(vec![endpoint(1)])?,
+            SnapshotStore::empty(),
+        );
         let activation_id = Uuid::new_v4();
         let publish = SystemRequest {
             protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
@@ -443,7 +458,8 @@ mod tests {
     async fn dormant_controller_supports_first_publish_update_and_daemon_restart()
     -> Result<(), Box<dyn Error>> {
         let activation_id = Uuid::new_v4();
-        let controller = SystemController::new(ResolverPlanStore::dormant());
+        let controller =
+            SystemController::new(ResolverPlanStore::dormant(), SnapshotStore::empty());
         let health = controller
             .execute(SystemRequest {
                 protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
@@ -516,7 +532,7 @@ mod tests {
                 .and_then(|result| result.highest_accepted_generation),
             Some(8)
         );
-        let restarted = SystemController::new(ResolverPlanStore::dormant());
+        let restarted = SystemController::new(ResolverPlanStore::dormant(), SnapshotStore::empty());
         let response = restarted
             .execute(SystemRequest {
                 protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
@@ -538,7 +554,8 @@ mod tests {
     #[tokio::test]
     async fn health_after_invalidation_reports_the_generation_a_new_supervisor_must_exceed()
     -> Result<(), Box<dyn Error>> {
-        let controller = SystemController::new(ResolverPlanStore::dormant());
+        let controller =
+            SystemController::new(ResolverPlanStore::dormant(), SnapshotStore::empty());
         let first = Uuid::new_v4();
         for generation in 1..=3 {
             let published = controller.execute(publish(first, generation)).await;
@@ -588,6 +605,58 @@ mod tests {
             .ok_or_else(|| io::Error::other("publication returned no result"))?;
         assert_eq!(rearmed.activation_id, Some(second));
         assert_eq!(rearmed.active_generation, Some(4));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn loopback_reservations_carry_only_enabled_peer_machine_addresses()
+    -> Result<(), Box<dyn Error>> {
+        let node = "a8a37e32c37cdf4fb7634de622bc3f84ccb4636580d1ea26af3fe8ac31d1f152";
+        let peer =
+            |pattern: &str, address: [u8; 4], enabled: bool| -> Result<Mapping, Box<dyn Error>> {
+                Ok(Mapping::new(
+                    pattern.parse()?,
+                    format!("supgang://{node}?ssh=22").parse()?,
+                )
+                .with_enabled(enabled)
+                .with_peer_address(Some(Ipv4Addr::from(address))))
+            };
+        let snapshots = SnapshotStore::empty();
+        let _published = snapshots.publish(RegistrySnapshot::new(
+            1,
+            vec![
+                peer("pro.agenxy.internal", [127, 77, 0, 2], true)?,
+                peer("solis.agenxy.internal", [127, 77, 0, 1], true)?,
+                peer("old.agenxy.internal", [127, 77, 0, 3], false)?,
+                Mapping::new("app.test".parse()?, "http://127.0.0.1:5173".parse()?),
+            ],
+        )?);
+        let controller = SystemController::new(ResolverPlanStore::dormant(), snapshots);
+        let response = controller
+            .execute(SystemRequest {
+                protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
+                request_id: Uuid::new_v4(),
+                command: SystemCommand::LoopbackReservations,
+            })
+            .await;
+        let result = response
+            .result
+            .ok_or_else(|| io::Error::other("the request returned no result"))?;
+        assert_eq!(
+            result.loopback_reservations,
+            Some(vec![
+                Ipv4Addr::new(127, 77, 0, 1),
+                Ipv4Addr::new(127, 77, 0, 2)
+            ])
+        );
+        // Health answers stay byte-identical to v1: no reservations field.
+        let health = controller.execute(health()).await;
+        assert_eq!(
+            health
+                .result
+                .and_then(|result| result.loopback_reservations),
+            None
+        );
         Ok(())
     }
 

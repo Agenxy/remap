@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::io;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -48,6 +48,10 @@ pub enum SystemCommand {
     },
     /// Reads non-sensitive resolver generation state.
     ResolverHealth,
+    /// Reads the loopback addresses that enabled peer-machine names answer
+    /// with (ADR-0033), so the root supervisor can hold them on `lo0`. Only
+    /// addresses cross: never a name, a peer, or a service.
+    LoopbackReservations,
 }
 
 /// One bounded response from `remapd` to the native supervisor.
@@ -85,6 +89,11 @@ pub struct SystemResult {
     /// steady-state responses byte-identical to the original v1 contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub highest_accepted_generation: Option<u64>,
+    /// Present only in the answer to [`SystemCommand::LoopbackReservations`],
+    /// so every other response stays byte-identical to the original v1
+    /// contract. The root side validates each address before acting on any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loopback_reservations: Option<Vec<Ipv4Addr>>,
 }
 
 impl SystemResult {
@@ -101,7 +110,21 @@ impl SystemResult {
             activation_id,
             active_generation,
             highest_accepted_generation,
+            loopback_reservations: None,
         }
+    }
+
+    /// Adds the answer to [`SystemCommand::LoopbackReservations`], in
+    /// ascending order.
+    #[must_use]
+    pub fn with_loopback_reservations(
+        mut self,
+        reservations: impl IntoIterator<Item = Ipv4Addr>,
+    ) -> Self {
+        let mut reservations: Vec<Ipv4Addr> = reservations.into_iter().collect();
+        reservations.sort_unstable();
+        self.loopback_reservations = Some(reservations);
+        self
     }
 }
 
@@ -230,6 +253,53 @@ mod tests {
             r#"{"activation_id":null,"active_generation":null,"highest_accepted_generation":3}"#,
         )?;
         assert_eq!(current.highest_accepted_generation, Some(3));
+        Ok(())
+    }
+
+    #[test]
+    fn loopback_reservations_have_their_own_kind_and_field() -> Result<(), Box<dyn Error>> {
+        let request: SystemRequest = serde_json::from_value(serde_json::json!({
+            "protocol": SYSTEM_PROTOCOL_VERSION,
+            "request_id": Uuid::nil(),
+            "command": {"kind": "loopback_reservations"},
+        }))?;
+        assert_eq!(request.command, SystemCommand::LoopbackReservations);
+        let result = SystemResult::new(None, None, None).with_loopback_reservations([
+            Ipv4Addr::new(127, 77, 0, 2),
+            Ipv4Addr::new(127, 77, 0, 1),
+        ]);
+        assert_eq!(
+            serde_json::to_value(&result)?,
+            serde_json::json!({
+                "activation_id": null,
+                "active_generation": null,
+                "loopback_reservations": ["127.77.0.1", "127.77.0.2"],
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_largest_reservation_answer_fits_one_frame() -> Result<(), Box<dyn Error>> {
+        let result = SystemResult::new(Some(Uuid::new_v4()), Some(u64::MAX), Some(u64::MAX))
+            .with_loopback_reservations((0..256u16).map(|index| {
+                let [high, low] = (0xFF00 + index).to_be_bytes();
+                Ipv4Addr::new(127, 77, high, low)
+            }));
+        let (mut writer, mut reader) = duplex(32 * 1024);
+        write_system_frame(
+            &mut writer,
+            &super::SystemResponse::success(Uuid::new_v4(), result),
+        )
+        .await?;
+        let decoded: super::SystemResponse = read_system_frame(&mut reader).await?;
+        assert_eq!(
+            decoded
+                .result
+                .and_then(|result| result.loopback_reservations)
+                .map(|list| list.len()),
+            Some(256)
+        );
         Ok(())
     }
 

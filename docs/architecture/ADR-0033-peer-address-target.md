@@ -68,12 +68,26 @@ peer's address.
 
 ### What reaches the peer
 
-- **A reserved loopback address.** The privileged helper makes the mapping's
-  address an `lo0` alias on macOS. Linux already routes all of `127.0.0.0/8` to
-  loopback. The reservation is the one new privileged operation. It lives
-  behind the platform adapter like every other lifecycle effect, it is
-  restored on boot, and it is removed exactly on disable, removal and
-  uninstall.
+- **A reserved loopback address.** On macOS the root resolver supervisor makes
+  the mapping's address an `lo0` alias. Linux already routes all of
+  `127.0.0.0/8` to loopback, so nothing is reserved there. The reservation is
+  the one new privileged operation, held as follows:
+  - It runs as its own task in the root process, beside the resolver
+    supervisor. Nothing it does can bypass, suspend or restore DNS.
+  - Every 5 seconds it asks `remapd` over the existing `remap.system/v1`
+    socket with one additive request, `loopback_reservations`. The answer
+    carries addresses only, never a name, peer or service, and every other
+    response is unchanged byte for byte.
+  - Root refuses the whole answer if any address is outside
+    `127.77.0.0/16`, duplicated, or beyond 256. It acts only inside that
+    range, and removes only aliases it recorded in the root-owned
+    `loopback-reservations-v1.json` beside the activation record.
+  - An address is recorded before it is added and forgotten only after it
+    is removed, so a crash never leaves an alias nobody owns.
+  - Aliases are held while a DNS activation exists, including while DNS is
+    suspended, so a flap never drops connections. An unreachable daemon
+    leaves them as they are. Deactivation and uninstall release them all,
+    and boot restores them through the same reconciliation.
 - **Listeners bound only to that address.** The gateway listens on the
   mapping's address at each pair's port, never on a non-loopback address and
   never on `127.0.0.1`. Each accepted TCP connection is carried through
