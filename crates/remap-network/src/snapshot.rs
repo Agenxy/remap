@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+use std::collections::BTreeSet;
+use std::net::SocketAddrV4;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -10,6 +12,7 @@ use tokio::sync::watch;
 pub struct SnapshotStore {
     current: Arc<ArcSwap<RegistrySnapshot>>,
     published: Arc<watch::Sender<u64>>,
+    held: Arc<ArcSwap<BTreeSet<SocketAddrV4>>>,
 }
 
 impl SnapshotStore {
@@ -19,6 +22,7 @@ impl SnapshotStore {
         Self {
             current: Arc::new(ArcSwap::from_pointee(RegistrySnapshot::empty())),
             published: Arc::new(watch::Sender::new(0)),
+            held: Arc::new(ArcSwap::from_pointee(BTreeSet::new())),
         }
     }
 
@@ -40,6 +44,19 @@ impl SnapshotStore {
         self.current.store(Arc::new(snapshot));
         self.published.send_replace(revision);
         true
+    }
+
+    /// Publishes the peer-machine ports whose listeners `remapd` holds now
+    /// (ADR-0033). DNS answers a peer-machine name only while every one of
+    /// its ports is in this set.
+    pub fn publish_held(&self, held: BTreeSet<SocketAddrV4>) {
+        self.held.store(Arc::new(held));
+    }
+
+    /// Returns whether a live listener holds `endpoint`, without locking.
+    #[must_use]
+    pub fn holds(&self, endpoint: SocketAddrV4) -> bool {
+        self.held.load().contains(&endpoint)
     }
 
     /// Watches the revision of each published snapshot, for a reader that

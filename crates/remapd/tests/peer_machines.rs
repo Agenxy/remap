@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! A peer-machine mapping through a live daemon (ADR-0033): its allocated
-//! address reaches the DNS answer through the runtime snapshot, and status
-//! reports its listener, which binds only the reserved address.
+//! A peer-machine mapping through a live daemon (ADR-0033): status reports
+//! its listener, and the name answers its allocated address only while that
+//! listener is held. On macOS only a root-created socket can hold it, so
+//! there the name fails until one is handed over; on Linux `remapd` binds
+//! the reserved address itself.
 
 use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use hickory_proto::op::{Message, Query};
+use hickory_proto::op::{Message, Query, ResponseCode};
 use hickory_proto::rr::rdata::A;
 use hickory_proto::rr::{Name, RData, RecordType};
 use remap_network::{DnsRuntimeConfig, GatewayRuntimeConfig};
@@ -82,7 +84,7 @@ async fn the_daemon_answers_the_address_and_reports_the_listener() -> TestResult
         .await?
         .local_addr()?
         .port();
-    let bindable = std::net::TcpListener::bind((address, port)).is_ok();
+    let holds = !cfg!(target_os = "macos") && std::net::TcpListener::bind((address, port)).is_ok();
     client
         .execute(Command::Apply {
             expected_revision: 0,
@@ -97,25 +99,24 @@ async fn the_daemon_answers_the_address_and_reports_the_listener() -> TestResult
         })
         .await?;
 
-    let mut answered = None;
-    for _attempt in 0..200 {
-        let message = answer(dns, "pro.test.", RecordType::A).await?;
-        if let Some(RData::A(A(found))) = message.answers.first().map(|record| &record.data) {
-            answered = Some(*found);
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(answered, Some(address));
-    assert_eq!(
-        answer(dns, "pro.test.", RecordType::AAAA).await?.answers,
-        Vec::new()
-    );
-
     let listeners = listeners(&client).await?;
     assert_eq!(listeners.listening + listeners.not_listening, 1);
-    if bindable {
+    if holds {
         assert_eq!(listeners.listening, 1, "{listeners:?}");
+        let mut answered = None;
+        for _attempt in 0..200 {
+            let message = answer(dns, "pro.test.", RecordType::A).await?;
+            if let Some(RData::A(A(found))) = message.answers.first().map(|record| &record.data) {
+                answered = Some(*found);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(answered, Some(address));
+        assert_eq!(
+            answer(dns, "pro.test.", RecordType::AAAA).await?.answers,
+            Vec::new()
+        );
     } else {
         let [failure] = listeners.failures.as_slice() else {
             return Err(format!("expected one failure: {listeners:?}").into());
@@ -124,7 +125,15 @@ async fn the_daemon_answers_the_address_and_reports_the_listener() -> TestResult
         assert_eq!(failure.service, "ssh");
         assert_eq!(failure.address, "127.77.0.1");
         assert_eq!(failure.port, port);
-        assert_eq!(failure.cause, "address-not-reserved");
+        let expected = if cfg!(target_os = "macos") {
+            "awaiting-socket"
+        } else {
+            "address-not-reserved"
+        };
+        assert_eq!(failure.cause, expected);
+        let failed = answer(dns, "pro.test.", RecordType::A).await?;
+        assert_eq!(failed.response_code, ResponseCode::ServFail);
+        assert_eq!(failed.answers, Vec::new());
     }
 
     let _sent = stop.send(());

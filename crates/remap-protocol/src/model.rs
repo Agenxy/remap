@@ -160,7 +160,6 @@ pub enum Command {
 
 /// Result of one bounded wait for a later registry revision.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct RevisionNotice {
     /// Latest authoritative revision at return time.
     pub revision: u64,
@@ -170,7 +169,6 @@ pub struct RevisionNotice {
 
 /// Authenticated runtime-listener expectations for one fresh challenge.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct HealthChallengeResult {
     /// Opaque identifier regenerated for each daemon runtime.
     pub instance_id: String,
@@ -184,7 +182,6 @@ pub struct HealthChallengeResult {
 
 /// Current authoritative registry status.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct RegistryStatus {
     /// Monotonic registry revision.
     pub revision: u64,
@@ -207,7 +204,6 @@ pub struct RegistryStatus {
 /// How many peer-machine service listeners accept connections, and why the
 /// others do not.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct PeerMachineListeners {
     /// Listeners bound to their mapping's address and accepting.
     pub listening: u64,
@@ -225,7 +221,6 @@ pub struct PeerMachineListeners {
 
 /// One peer-machine service listener that could not bind.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct PeerMachineListenerFailure {
     /// Canonical pattern of the mapping.
     pub pattern: String,
@@ -244,7 +239,6 @@ pub struct PeerMachineListenerFailure {
 
 /// Stable presentation of one mapping.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct MappingView {
     /// Optional same-origin landing path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -269,7 +263,6 @@ pub struct MappingView {
 
 /// One bounded page from the registry.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ListResult {
     /// Registry revision observed by this page.
     pub revision: u64,
@@ -281,7 +274,6 @@ pub struct ListResult {
 
 /// Resolution explanation for one lookup name.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ResolutionResult {
     /// Canonical lookup name.
     pub name: String,
@@ -293,7 +285,6 @@ pub struct ResolutionResult {
 
 /// Canonical result of side-effect-free mapping validation.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ValidationResult {
     /// Advisory guidance that never changes validation or mutation success.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -313,7 +304,6 @@ pub struct ValidationResult {
 
 /// One projected effect in an ordered change set.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ChangeEffect {
     /// Canonical mapping pattern.
     pub pattern: String,
@@ -327,7 +317,6 @@ pub struct ChangeEffect {
 
 /// Side-effect-free projection of proposed changes.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct PreviewResult {
     /// Advisory guidance that never blocks the owner's explicit target,
     /// including reachability of loopback HTTP targets observed now.
@@ -343,7 +332,6 @@ pub struct PreviewResult {
 
 /// Receipt for an idempotent committed change set.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ApplyResult {
     /// Advisory guidance retained in the exact idempotent receipt, followed
     /// by reachability of loopback HTTP targets observed when answering.

@@ -193,28 +193,59 @@ displays canonically: `ssh=022` is stored as `ssh=22`.
   each `{pattern, service, address, port, cause, detail}`. `refusals` maps
   each carriage cause seen since the daemon started to its count, so it
   holds at most five entries.
+- Replies decode tolerantly. `ControlResponse` and every type reached from
+  it no longer refuse unknown fields, so a client one release older reads a
+  newer daemon's replies; `ControlRequest`, `Command` and `Change` still do.
+  `crates/remap-protocol/tests/tolerant_replies.rs` pins both.
 
 ### DNS
 
 DNS answers A for an enabled peer-machine mapping with its address, at the
-TTL every synthesized answer uses. AAAA, like any type with no address, is
-NOERROR with no answer. A disabled mapping is not resolved, so its name is
+TTL every synthesized answer uses, only while every one of its ports is held
+(amendment point 2). The listener runtime publishes the held ports through a
+lock-free set beside the snapshot (`SnapshotStore::publish_held`), and DNS
+reads it for every query. While any port is not held, every query for the
+name gets SERVFAIL. When all are held, AAAA, like any type with no address,
+is NOERROR with no answer. A disabled mapping is not resolved, so its name is
 forwarded like any unmapped name. Through the HTTP gateway the kind is
 `421 E_GATEWAY_DIRECT_TARGET`.
+
+The forwarder refuses an upstream response with an A record inside
+`127.77.0.0/16`, or an IPv4-mapped AAAA inside it, in its answers or
+additionals (amendment point 4). It answers SERVFAIL rather than an answer
+with the record removed. Removing the record would hand the client an answer
+the upstream did not give, which it would cache as true, and an empty
+NOERROR is cached as the name having no address. SERVFAIL says only that
+this resolution failed.
 
 ### Listeners
 
 The listener runtime runs beside the HTTP gateway whenever the gateway is
-configured. It follows every published snapshot, plus a five-second retry of
-listeners that could not bind. For each service of each enabled mapping it
-binds `<address>:<port>` with address reuse, and nothing else.
+configured. It follows every published snapshot, every adopted socket, and
+a five-second retry. It holds one listener per `<address>:<port>` of each
+enabled mapping, and nothing else.
 
-- An address outside the range is never bound.
-- A listener that cannot bind is reported with a cause and never moved to
-  another address. The causes are `address-not-reserved` (the alias does not
-  exist yet), `port-in-use`, `permission-denied` and `other`.
-- Changing any field of a listener, or disabling or removing its mapping,
-  closes it and the connections it carries before a new one binds.
+- **Where listeners come from** (`ListenerSource::platform_default`). On
+  macOS a listener is only ever a socket root created and handed over
+  (amendment point 1). `PeerMachineListeners::adopt(&self, address, port,
+  std::net::TcpListener)` accepts one only if it is bound to exactly that
+  address and port and is listening, and it then replaces any listener held
+  there. Until one arrives, the cause is `awaiting-socket`. On Linux
+  `remapd` binds `<address>:<port>` itself, with address reuse.
+  `PeerMachineListeners::is_held` answers whether a live listener holds an
+  endpoint now, so root creates sockets only for ports that are not held.
+- **Handles.** `PeerMachineListeners` is a cloneable handle, created in
+  `network_bootstrap.rs` before the system control channel so the channel
+  can adopt through a clone.
+- An address outside the range is never bound or adopted, and a port that
+  is not held is reported with a cause and never moved to another address.
+  The causes are `awaiting-socket`, `address-not-reserved`, `port-in-use`,
+  `permission-denied` and `other`.
+- A target edit that keeps the address and port retargets the listener:
+  new connections take the new route and established ones keep theirs.
+  Disabling or removing the mapping closes the listener and the connections
+  it carries. An adopted socket that no mapping wants within 30 seconds is
+  closed.
 
 Each accepted connection is carried as follows:
 
@@ -223,8 +254,17 @@ Each accepted connection is carried as follows:
 - One version-1 stream is opened through this user's endpoint, with
   ADR-0026's ownership checks, and bytes are copied both ways until each side
   closes.
-- At most 256 connections are carried at once.
-- A stream must open within 10 seconds.
+- Supgang's endpoint and binary are looked up for every connection, so
+  Supgang started after `remapd` is found without a restart. The HTTP
+  gateway likewise looks again on each connection when it found no Supgang
+  at start.
+- At most 32 connections are carried at once per listener, below Supgang's
+  per-peer stream limit, and 256 overall. Past either bound a connection is
+  closed at once.
+- A stream must open within 10 seconds, and a carried connection closes
+  after two hours with no byte in either direction. Two hours outlasts a
+  long break in an ssh session and matches the TCP keepalive default, yet
+  still reclaims a connection whose peer vanished without closing.
 
 A connection that is not carried is closed, and the daemon logs:
 
@@ -238,21 +278,20 @@ mapping: PRIVACY.md's rule that routine logs carry no mapped name stands, so
 the line carries no pattern, address, port or selector. The owner learns
 which mapping is affected from `remap status` and `remap doctor`, which only
 the owner can read. They name each listener that cannot bind, and they count
-the connections not carried since the daemon started, by cause.
+the connections not carried since the daemon started, by cause. The line
+is written at most once per cause every ten seconds; when one was held back,
+the next says how many, and the counters keep every total.
 
 ### What step 2 provides
 
-The listeners need each enabled mapping's address to be an interface address
-on macOS. Linux already routes all of `127.0.0.0/8`. The reservation reads
-the addresses from the same snapshot that DNS and the listeners read:
-`RegistrySnapshot::peer_machine_addresses()`, the set of enabled mappings'
-addresses. Every one of them lies inside `PEER_MACHINE_LOOPBACK`, and there
-are at most 256.
-
-The listener runtime reads no reservation state of its own. It retries a
-listener that could not bind every five seconds, so an alias reserved later
-starts listening within that interval, without a restart and without telling
-the gateway.
+On macOS, step 2 makes each enabled mapping's address an `lo0` alias and,
+as root, creates the listening socket for each of its ports and hands it to
+`remapd` through `adopt`. Linux already routes all of `127.0.0.0/8`. The
+reservation reads the addresses from the same snapshot that DNS and the
+listeners read: `RegistrySnapshot::peer_machine_addresses()`, the set of
+enabled mappings' addresses. Every one of them lies inside
+`PEER_MACHINE_LOOPBACK`, and there are at most 256. Root asks `is_held` for
+each listed port and creates sockets only for those not held.
 
 ### Acceptance
 
@@ -265,17 +304,28 @@ the gateway.
   is freed on removal and on retargeting, shows in preview, and has the cap
   and tampered rows. A unit test proves exhaustion.
 - `crates/remap-registry/tests/schema_snapshots.rs`: 3 to 4 with its copy.
-- `crates/remap-network/src/dns.rs`: the A, AAAA and disabled answers.
+- `crates/remap-network/src/dns.rs`: the A, AAAA and disabled answers, and
+  SERVFAIL while any port is not held.
+- `crates/remap-network/src/forward.rs`: an upstream answer inside the range
+  is refused.
+- `crates/remap-network/src/machine_listen.rs`, `machine_idle.rs` and
+  `machine_carry.rs`: adoption validation, the idle deadline, and log
+  pacing.
 - `crates/remap-network/tests/peer_machine_listeners.rs`: these run against
   a stand-in version-1 endpoint. They cover a round trip in both directions
   by node ID and by fingerprint, and refusal for an unexposed service, an
   unknown fingerprint and a missing Supgang. Each logs the service and cause
-  with no mapped name or address, and each is counted by cause in status. They also cover following add, disable,
-  enable and remove, binding the reserved address or reporting
-  `address-not-reserved` without falling back, and refusing a substitute
-  address off loopback.
-- `crates/remapd/tests/peer_machines.rs`: through a live daemon, the DNS
-  answer and the listener in status.
+  with no mapped name or address, and each is counted by cause in status.
+  They also cover following add, disable, enable and remove, binding the
+  reserved address or reporting its cause without falling back, and refusing
+  a substitute address off loopback. Beyond those, they cover adoption, from
+  `awaiting-socket` and SERVFAIL to held and answering, with replacement and
+  refusal of a socket on another endpoint. They also cover a bind failure
+  making the name SERVFAIL, the idle deadline, the per-listener cap, log
+  pacing, and Supgang started after the runtime.
+- `crates/remapd/tests/peer_machines.rs`: through a live daemon, the
+  listener in status, with the name answering where `remapd` holds the port
+  and failing with `awaiting-socket` on macOS until a socket is handed over.
 
 ## Amendment after review, 30 October
 

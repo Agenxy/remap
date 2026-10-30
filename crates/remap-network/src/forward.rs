@@ -4,6 +4,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
 use hickory_proto::op::{Message, MessageType};
+use hickory_proto::rr::RData;
+use remap_core::PEER_MACHINE_LOOPBACK;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::timeout;
@@ -39,12 +41,12 @@ impl Forwarder {
             }
             let truncated = Message::from_vec(&response).is_ok_and(|message| message.truncation);
             if !truncated {
-                return Ok(response);
+                return refuse_rebinding(response);
             }
             if let Ok(response) = self.exchange_tcp(&plan, upstream, packet).await
                 && related_response(request.as_ref(), &response)
             {
-                return Ok(response);
+                return refuse_rebinding(response);
             }
         }
         Err(NetworkError::UpstreamUnavailable)
@@ -160,6 +162,44 @@ async fn plan_io<T>(
     Ok(value)
 }
 
+/// Refuses an upstream answer that points into the peer-machine network
+/// (ADR-0033), so a remote name cannot be made to reach a reserved port
+/// through Remap's resolver.
+///
+/// The whole response fails as SERVFAIL rather than losing the record.
+/// Dropping only the address would hand the client a different answer than
+/// the upstream gave, which it would cache as true, and a `NOERROR` with no
+/// data is cached as the name having no address. SERVFAIL says only that
+/// this resolution failed, is barely cached, and keeps the forwarder from
+/// rewriting answers.
+fn refuse_rebinding(response: Vec<u8>) -> Result<Vec<u8>, NetworkError> {
+    let Ok(message) = Message::from_vec(&response) else {
+        return Ok(response);
+    };
+    let rebinding = message
+        .answers
+        .iter()
+        .chain(message.additionals.iter())
+        .any(|record| match &record.data {
+            RData::A(address) => in_peer_machine_network(address.0),
+            RData::AAAA(address) => address
+                .0
+                .to_ipv4_mapped()
+                .is_some_and(in_peer_machine_network),
+            _ => false,
+        });
+    if rebinding {
+        return Err(NetworkError::UpstreamUnavailable);
+    }
+    Ok(response)
+}
+
+fn in_peer_machine_network(address: Ipv4Addr) -> bool {
+    let (network, prefix) = PEER_MACHINE_LOOPBACK;
+    let mask = u32::MAX << (32 - u32::from(prefix));
+    u32::from(address) & mask == u32::from(network)
+}
+
 fn related_response(request: Option<&Message>, packet: &[u8]) -> bool {
     let (Some(request), Ok(response)) = (request, Message::from_vec(packet)) else {
         return false;
@@ -177,4 +217,46 @@ pub(crate) fn eof(error: &io::Error) -> bool {
             | io::ErrorKind::ConnectionReset
             | io::ErrorKind::ConnectionAborted
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    use hickory_proto::op::{Message, OpCode, Query};
+    use hickory_proto::rr::rdata::{A, AAAA};
+    use hickory_proto::rr::{Name, RData, Record, RecordType};
+
+    use super::refuse_rebinding;
+
+    fn answer(data: RData) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let name = Name::from_ascii("evil.example.")?;
+        let mut message = Message::response(7, OpCode::Query);
+        message.add_query(Query::query(name.clone(), RecordType::A));
+        message.add_answer(Record::from_rdata(name, 60, data));
+        Ok(message.to_vec()?)
+    }
+
+    #[test]
+    fn an_upstream_answer_inside_the_peer_machine_network_fails()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for inside in [
+            RData::A(A(Ipv4Addr::new(127, 77, 0, 1))),
+            RData::A(A(Ipv4Addr::new(127, 77, 255, 255))),
+            RData::AAAA(AAAA(Ipv4Addr::new(127, 77, 0, 9).to_ipv6_mapped())),
+        ] {
+            assert!(refuse_rebinding(answer(inside)?).is_err());
+        }
+        for outside in [
+            RData::A(A(Ipv4Addr::LOCALHOST)),
+            RData::A(A(Ipv4Addr::new(127, 78, 0, 1))),
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 7))),
+            RData::AAAA(AAAA(Ipv6Addr::LOCALHOST)),
+        ] {
+            let packet = answer(outside)?;
+            assert_eq!(refuse_rebinding(packet.clone()).ok(), Some(packet));
+        }
+        let _parsed = Message::from_vec(&answer(RData::A(A(Ipv4Addr::LOCALHOST)))?)?;
+        Ok(())
+    }
 }

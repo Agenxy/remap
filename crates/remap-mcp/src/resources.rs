@@ -72,11 +72,19 @@ machine one name that works on any network. Example: `pro.agenxy.internal` mappe
   target, with 1 through 16 pairs. Templates do not apply to this target.
 - The name answers A with one loopback address in `127.77.0.0/16` that the daemon
   allocates and keeps while the mapping exists, and answers no AAAA. `remap_get`,
-  `remap_list` and `remap_preview` show it as `peer_address`.
+  `remap_list` and `remap_preview` show it as `peer_address`. It answers only while
+  Remap holds every listed port; otherwise it fails with SERVFAIL, and `remap_status`
+  names each port not held and why in `peer_machine_listeners`.
 - Each connection to that address and a listed port is carried through Supgang's local
   stream to the peer's exposed service. TCP only: UDP and services the owner has not
-  exposed are not reachable, and Supgang decides whether each stream opens. Listening
-  needs the installed helper to reserve the address on this machine.
+  exposed are not reachable, and Supgang decides whether each stream opens.
+- Every listed port is reachable from anything on this Mac that can open a loopback TCP
+  connection, including other accounts and web pages, and is carried with this user's
+  Supgang identity. List only services the peer protects itself, such as ssh.
+- On macOS the installed helper reserves the address and creates the listening sockets as
+  root, so `ssh=22` works beside Remote Login. On Linux `remapd` binds them itself: ports
+  below 1024 need `CAP_NET_BIND_SERVICE`, and a port another service holds on every
+  address cannot be held, so the name fails instead.
 
 ## Choosing names
 
@@ -305,6 +313,10 @@ mod tests {
             "TCP only",
             "127.77.0.0/16",
             "peer_address",
+            "SERVFAIL",
+            "reachable from anything on this Mac that can open a loopback TCP",
+            "protects itself",
+            "CAP_NET_BIND_SERVICE",
         ] {
             assert!(HELP.contains(fact), "help omits {fact}");
         }
