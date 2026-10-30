@@ -36,8 +36,12 @@ pub struct ControlRequest {
 }
 
 /// One response returned by `remapd`.
+///
+/// Replies, and every type reached from one, decode tolerantly: a field a
+/// newer daemon adds is ignored, so a client one release older still reads
+/// them. Requests keep refusing unknown fields, because a daemon must never
+/// act on part of a request it did not understand.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ControlResponse {
     /// Wire contract used by the daemon.
     pub protocol: String,
