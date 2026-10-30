@@ -34,6 +34,7 @@ class MacOSInstallerSigningTests(unittest.TestCase):
         configuration = remap_macos_installer_signing.openssl_configuration()
 
         self.assertIn("CN = Remap Local Installer", configuration)
+        self.assertIn("\nO = Remap\n", configuration)
         self.assertIn(remap_macos_installer_signing.INSTALLER_EKU, configuration)
         self.assertNotIn("codeSigning", configuration)
         self.assertIn("CA:TRUE,pathlen:0", configuration)

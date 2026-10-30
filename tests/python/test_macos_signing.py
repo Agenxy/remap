@@ -155,6 +155,8 @@ class MacOSSigningTests(unittest.TestCase):
         configuration = remap_macos_signing.openssl_configuration()
 
         self.assertIn("CN = Remap Build Signing", configuration)
+        # macOS names the developer in Login Items after the organisation.
+        self.assertIn("\nO = Remap\n", configuration)
         self.assertIn("rsa:3072", _creation_arguments())
         self.assertIn("extendedKeyUsage = critical,codeSigning", configuration)
         self.assertIn("basicConstraints = critical,CA:TRUE,pathlen:0", configuration)

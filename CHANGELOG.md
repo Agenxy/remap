@@ -6,6 +6,15 @@ platform claims separate.
 
 ## Unreleased
 
+- Login Items and Background Items list Remap's services under the developer
+  "Remap" instead of "Agenxy Local". macOS takes that name from the
+  organisation of the self-signed certificate that signed them, and the
+  identities Remap creates (`Remap Local Codesign` on a receiving Mac,
+  `Remap Build Signing` and `Remap Local Installer` on a building one) now
+  carry it. An identity that already exists keeps the name it was created
+  with until it is recreated, so a Mac set up before this release goes on
+  showing "Agenxy Local" until then.
+
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
   without restoring anything. The activation record is now written active

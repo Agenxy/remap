@@ -598,7 +598,7 @@ x509_extensions = codesign
 
 [ dn ]
 CN = {IDENTITY_NAME}
-O = Agenxy Local
+O = Remap
 OU = Remap Signing
 
 [ codesign ]

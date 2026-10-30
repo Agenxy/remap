@@ -265,7 +265,7 @@ x509_extensions = installer
 
 [ dn ]
 CN = {IDENTITY_NAME}
-O = Agenxy Local
+O = Remap
 OU = Remap Installer Signing
 
 [ installer ]
