@@ -383,35 +383,56 @@ def task_package_macos() -> None:
 
     The kind of package is chosen once, here, and never mixed: a development package
     (`REMAP_DEVELOPMENT_PACKAGE=1`) is signed by the development file key named by
-    `REMAP_RELEASE_SIGNING_KEY`; a release package is signed by the Secure Enclave key
-    whose blob `REMAP_RELEASE_SE_KEY` names, and by nothing else.
+    `REMAP_RELEASE_SIGNING_KEY`; a rehearsal package (`REMAP_REHEARSAL_PACKAGE=1`) by the
+    rehearsal Secure Enclave key whose blob `REMAP_REHEARSAL_SE_KEY` names; a release
+    package by the Secure Enclave key whose blob `REMAP_RELEASE_SE_KEY` names, and by
+    nothing else.
     """
     require_macos()
     signing = selected_signing(os.environ)
     # Refuse a mismatched key or pin before asking the keychain for anything.
     preflight(ROOT, signing)
-    development = signing.kind is PackageKind.DEVELOPMENT
-    suffix = "-development" if development else ""
-    output = ROOT / "dist" / f"Remap-{PRODUCT_VERSION}-{platform.machine()}{suffix}.pkg"
+    kind = signing.kind
+    output = package_output(kind)
     package = build_portable_macos_package(
         ROOT,
         product_version=PRODUCT_VERSION,
         output=output,
         signing=signing,
-        # A development package is installed on the machine that built it, so it needs
-        # no Apple installer signature and therefore no keychain and no person.
+        # A development or rehearsal package carries no Apple installer signature, so it
+        # needs no keychain and no person; only a release does.
         installer_identity=(
-            None if development else ensure_release_installer_identity(ROOT)
+            ensure_release_installer_identity(ROOT)
+            if kind is PackageKind.RELEASE
+            else None
         ),
     )
     print(f"Built {package.path} (SHA-256 {package.sha256})")
     print(f"Signed {package.signature_path} " + f"(SHA-256 {package.signature_sha256})")
-    if development:
-        print(
-            "This package is signed by a development key held in a file, not by "
-            + "hardware. Its signature establishes that these bytes came from this "
-            + "machine and nothing more. Do not distribute it."
-        )
+    note = PACKAGE_NOTES.get(kind)
+    if note:
+        print(note)
+
+
+PACKAGE_NOTES = {
+    PackageKind.DEVELOPMENT: (
+        "This package is signed by a development key held in a file, not by "
+        + "hardware. Its signature establishes that these bytes came from this "
+        + "machine and nothing more. Do not distribute it."
+    ),
+    PackageKind.REHEARSAL: (
+        "This is a rehearsal package, not a release. It is signed by the rehearsal "
+        + "key, which no release installer accepts, and it carries no Apple Installer "
+        + "signature. Publish it only to a rehearsal root, and do not install it as a "
+        + "release."
+    ),
+}
+
+
+def package_output(kind: PackageKind) -> Path:
+    """`dist/Remap-<version>-<arch>[-<kind>].pkg`: a release alone has no suffix."""
+    suffix = "" if kind is PackageKind.RELEASE else f"-{kind.value}"
+    return ROOT / "dist" / f"Remap-{PRODUCT_VERSION}-{platform.machine()}{suffix}.pkg"
 
 
 def task_install_package_macos() -> None:

@@ -46,6 +46,7 @@ from tools.remap_release_signing import (
     PackageSigning,
     Signer,
     canonical_public_key,
+    generated_rehearsal_pin,
     open_signer,
     pinned_public_key,
     preflight,
@@ -84,10 +85,11 @@ def build(
     """Build and verify one no-shell portable package without a paid identity.
 
     `signing` says which kind of package this is and which key signs it: the development
-    file key, or the release key in the Secure Enclave. The kind also selects the one pin
-    compiled into the package's installer, and the pin both signatures are checked against.
+    file key, the release key in the Secure Enclave, or the rehearsal key in the Secure
+    Enclave. The kind also selects the one pin compiled into the package's installer, and
+    the pin both signatures are checked against.
 
-    `installer_identity` is `None` for a development package. Apple's installer
+    `installer_identity` is `None` for a development or rehearsal package. Apple's installer
     signature is what lets another Mac accept the package, so it is required for
     anything distributed; producing one needs a private key in a keychain, and macOS
     asks a human for the keychain password when the key's access list does not name the
@@ -270,19 +272,22 @@ def _build_products(
         root=root,
         environment=rust_environment,
     )
-    _run(
-        (
-            "xcrun",
-            "swift",
-            "build",
-            "--configuration",
-            "release",
-            "--package-path",
-            "platforms/macos",
-            *swift_build_arguments(kind),
-        ),
-        root=root,
-    )
+    # A rehearsal installer's pin is compiled from a build-only source generated from the
+    # committed rehearsal pin; it exists only for this build (ADR-0035).
+    with generated_rehearsal_pin(root, kind):
+        _run(
+            (
+                "xcrun",
+                "swift",
+                "build",
+                "--configuration",
+                "release",
+                "--package-path",
+                "platforms/macos",
+                *swift_build_arguments(kind),
+            ),
+            root=root,
+        )
     swift_bin = Path(
         _capture(
             (

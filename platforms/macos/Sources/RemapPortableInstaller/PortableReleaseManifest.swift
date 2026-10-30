@@ -128,15 +128,23 @@ struct PortableReleaseVerifier: Sendable {
     static let signingNamespace = "remap-release"
     // Exactly one pin is compiled into an installer, so a package can only ever accept the key
     // of its own kind. The package builder passes `-D REMAP_DEVELOPMENT_PACKAGE` when, and only
-    // when, it builds a development package. Each literal, once its backslash-continued lines
-    // are joined, is byte-identical to its file under `docs/release`, and a test keeps them so.
-    // A P-256 line is longer than a source line may be, hence the continuations.
+    // when, it builds a development package, and `-D REMAP_REHEARSAL_PACKAGE` when, and only
+    // when, it builds a rehearsal package. Each literal, once its backslash-continued lines are
+    // joined, is byte-identical to its file under `docs/release`, and a test keeps them so.
+    // A P-256 line is longer than a source line may be, hence the continuations. The rehearsal
+    // literal is generated from its pin for each rehearsal build and never committed, because
+    // that pin exists only once the owner approves the rehearsal signer (ADR-0035).
+    #if REMAP_DEVELOPMENT_PACKAGE && REMAP_REHEARSAL_PACKAGE
+        #error("a package is exactly one kind: development or rehearsal, never both")
+    #endif
     #if REMAP_DEVELOPMENT_PACKAGE
         static let releasePublicKey = """
         ssh-ed25519 \
         AAAAC3NzaC1lZDI1NTE5AAAAIDz/2DGz1HxwE5JHhxzabvtiXAKvV5W8tsBzGV3R15xg \
         remap-release-development-only
         """
+    #elseif REMAP_REHEARSAL_PACKAGE
+        static let releasePublicKey = RehearsalSigningPin.publicKey
     #else
         static let releasePublicKey = """
         ecdsa-sha2-nistp256 \

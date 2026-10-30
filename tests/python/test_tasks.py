@@ -27,7 +27,11 @@ from tools.remap_macos_release_installer_signing import (
 )
 from tools.remap_macos_signing import LocalCodeSigningIdentity
 from tools.remap_release_model import ArtifactSpec
-from tools.remap_release_signing import DevelopmentSigning, ReleaseSigning
+from tools.remap_release_signing import (
+    DevelopmentSigning,
+    RehearsalSigning,
+    ReleaseSigning,
+)
 from tools.remap_tasks import (
     task_build_macos_app,
     task_help,
@@ -472,6 +476,62 @@ class NativeProductTaskTests(unittest.TestCase):
         output = keywords["output"]
         self.assertIsInstance(output, Path)
         self.assertIn("-development", Path(str(output)).name)
+
+    def test_a_rehearsal_package_is_named_and_announced_as_one(self) -> None:
+        """No Apple installer identity, its own key and name, and a note saying so."""
+        blob = "/private/rehearsal/remap-rehearsal.key"
+        printed = io.StringIO()
+        with (
+            patch.dict(
+                "tools.remap_tasks.os.environ",
+                {"REMAP_REHEARSAL_PACKAGE": "1", "REMAP_REHEARSAL_SE_KEY": blob},
+                clear=True,
+            ),
+            patch("tools.remap_tasks.require_macos"),
+            patch("tools.remap_tasks.platform.machine", return_value="arm64"),
+            patch("tools.remap_tasks.preflight") as preflight,
+            patch(
+                "tools.remap_tasks.ensure_release_installer_identity"
+            ) as installer_identity,
+            patch("tools.remap_tasks.build_portable_macos_package") as build,
+            contextlib.redirect_stdout(printed),
+        ):
+            build.return_value = self._package_fixture()
+            task_package_macos()
+        installer_identity.assert_not_called()
+        keywords = cast("dict[str, object]", build.call_args.kwargs)
+        self.assertIsNone(keywords["installer_identity"])
+        self.assertEqual(keywords["signing"], RehearsalSigning(Path(blob)))
+        preflight.assert_called_once_with(
+            remap_tasks.ROOT, RehearsalSigning(Path(blob))
+        )
+        self.assertEqual(
+            keywords["output"],
+            remap_tasks.ROOT
+            / "dist"
+            / f"Remap-{remap_tasks.PRODUCT_VERSION}-arm64-rehearsal.pkg",
+        )
+        note = printed.getvalue()
+        self.assertIn("This is a rehearsal package, not a release.", note)
+        self.assertIn("do not install it as a release", note)
+
+    def test_a_missing_rehearsal_pin_stops_the_build_before_anything_runs(self) -> None:
+        with (
+            patch.dict(
+                "tools.remap_tasks.os.environ",
+                {
+                    "REMAP_REHEARSAL_PACKAGE": "1",
+                    "REMAP_REHEARSAL_SE_KEY": "/private/remap-rehearsal.key",
+                },
+                clear=True,
+            ),
+            patch("tools.remap_tasks.require_macos"),
+            patch("tools.remap_tasks.build_portable_macos_package") as build,
+            patch.object(remap_tasks, "ROOT", Path("/nonexistent/remap")),
+            self.assertRaisesRegex(RuntimeError, "has not been committed"),
+        ):
+            task_package_macos()
+        build.assert_not_called()
 
     def test_a_release_package_is_signed_only_by_the_enclave_key(self) -> None:
         release_key = "/private/release/remap-release.key"
