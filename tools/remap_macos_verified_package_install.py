@@ -14,11 +14,28 @@ from tools.remap_macos_portable_package import verify_detached_package_signature
 from tools.remap_macos_release_installer_signing import verify_package_signature
 from tools.remap_release_signing import (
     DEVELOPMENT_PACKAGE_VARIABLE,
+    REHEARSAL_KEY_MARKER,
+    REHEARSAL_PACKAGE_VARIABLE,
+    REHEARSAL_PIN,
     RELEASE_PIN,
     PackageKind,
     is_development_marked,
+    is_rehearsal_marked,
     pinned_public_key,
 )
+
+# What is printed before an unsigned kind is handed to Apple's installer.
+INSTALL_NOTES = {
+    PackageKind.DEVELOPMENT: (
+        "Installing a development package: no Apple installer signature, and a "
+        + "signing key held in a file rather than in hardware."
+    ),
+    PackageKind.REHEARSAL: (
+        "Installing a rehearsal package, not a release: it is verified against the "
+        + "rehearsal pin, carries no Apple installer signature, and a production "
+        + "release replaces it as an ordinary update. Do not keep it as a release."
+    ),
+}
 
 STAGING_PARENT = Path("/private/var/tmp")
 STAGING_PREFIX = "org.agenxy.Remap.install-"
@@ -28,19 +45,18 @@ def install_verified_package(root: Path, package: Path, signature: Path) -> None
     """Reverify exact root-owned bytes before invoking Apple's installer."""
     kind = selected_package_kind(root, package)
     public_key = pinned_public_key(root, kind)
-    development = kind is PackageKind.DEVELOPMENT
+    # Only a release carries an Apple installer signature.
+    unsigned = kind is not PackageKind.RELEASE
     installer_certificate = root / "docs/release/remap-release-installer.pem"
-    # A development package carries no Apple installer signature, because producing one
-    # needs a key in a keychain and a person to release it. Apple's installer accepts an
-    # unsigned package, unlike one signed by a certificate the machine does not trust,
-    # which it refuses in preflight. What still has to hold is the detached signature over
-    # the exact root-owned bytes, checked below against its own kind's pin either way.
+    # A development or rehearsal package carries no Apple installer signature, because
+    # producing one needs a key in a keychain and a person to release it. Apple's
+    # installer accepts an unsigned package, unlike one signed by a certificate the machine
+    # does not trust, which it refuses in preflight. What still has to hold is the
+    # detached signature over the exact root-owned bytes, checked below against its own
+    # kind's pin either way.
     verify_detached_package_signature(package, signature, public_key=public_key)
-    if development:
-        print(
-            "Installing a development package: no Apple installer signature, and a "
-            + "signing key held in a file rather than in hardware."
-        )
+    if unsigned:
+        print(INSTALL_NOTES[kind])
     else:
         verify_package_signature(package, installer_certificate)
     staging = STAGING_PARENT / f"{STAGING_PREFIX}{uuid.uuid4()}"
@@ -68,7 +84,7 @@ def install_verified_package(root: Path, package: Path, signature: Path) -> None
             public_key=public_key,
             expected_package_owner_uid=0,
         )
-        if not development:
+        if not unsigned:
             verify_package_signature(staged_package, installer_certificate)
         verify_staging(staging, staged_package)
         _run(
@@ -86,13 +102,23 @@ def install_verified_package(root: Path, package: Path, signature: Path) -> None
 
 
 def selected_package_kind(root: Path, package: Path) -> PackageKind:
-    """A development package only on request; otherwise the release pin, which must be real.
+    """A development or rehearsal package only on request; otherwise a real release pin.
 
-    Each kind verifies against its own pin. The release pin is refused while it still
-    carries the development marker, because a key held in a file would then pass as the
-    release key.
+    Each kind verifies against its own pin. A rehearsal is never installed as a release:
+    its file name says what it is, and it is accepted only when asked for by name. The
+    release pin is refused while it carries either non-release marker, because another
+    kind's key would then pass as the release key.
     """
-    if os.environ.get(DEVELOPMENT_PACKAGE_VARIABLE):
+    development = bool(os.environ.get(DEVELOPMENT_PACKAGE_VARIABLE))
+    rehearsal = bool(os.environ.get(REHEARSAL_PACKAGE_VARIABLE))
+    if development and rehearsal:
+        raise RuntimeError(
+            f"{DEVELOPMENT_PACKAGE_VARIABLE} and {REHEARSAL_PACKAGE_VARIABLE} select two "
+            + "kinds of package at once; a package is exactly one kind"
+        )
+    if rehearsal:
+        return _rehearsal_kind(root, package)
+    if development:
         return PackageKind.DEVELOPMENT
     if package.name.endswith("-development.pkg"):
         raise RuntimeError(
@@ -100,13 +126,38 @@ def selected_package_kind(root: Path, package: Path) -> PackageKind:
             + "came from the machine that built it. Set "
             + f"{DEVELOPMENT_PACKAGE_VARIABLE}=1 to install one deliberately."
         )
-    if is_development_marked(pinned_public_key(root, PackageKind.RELEASE)):
+    if package.name.endswith("-rehearsal.pkg"):
         raise RuntimeError(
-            f"the release pin {RELEASE_PIN} is still the development key, so no package "
-            + "can be verified as a release. Set "
-            + f"{DEVELOPMENT_PACKAGE_VARIABLE}=1 to install a development package."
+            f"{package.name} is a rehearsal package, and a rehearsal is never installed "
+            + f"as a release. Set {REHEARSAL_PACKAGE_VARIABLE}=1 to install it as the "
+            + "rehearsal it is."
         )
+    release = pinned_public_key(root, PackageKind.RELEASE)
+    for marked, other in (
+        (is_development_marked(release), "development"),
+        (is_rehearsal_marked(release), "rehearsal"),
+    ):
+        if marked:
+            raise RuntimeError(
+                f"the release pin {RELEASE_PIN} is still the {other} key, so no "
+                + "package can be verified as a release"
+            )
     return PackageKind.RELEASE
+
+
+def _rehearsal_kind(root: Path, package: Path) -> PackageKind:
+    if not package.name.endswith("-rehearsal.pkg"):
+        raise RuntimeError(
+            f"{REHEARSAL_PACKAGE_VARIABLE}=1 installs only a package named "
+            + f"Remap-<version>-<arch>-rehearsal.pkg, and {package.name} is not one"
+        )
+    pin = pinned_public_key(root, PackageKind.REHEARSAL)
+    if not is_rehearsal_marked(pin) or is_development_marked(pin):
+        raise RuntimeError(
+            f"the rehearsal pin {REHEARSAL_PIN} must carry {REHEARSAL_KEY_MARKER}, and "
+            + "only that marker"
+        )
+    return PackageKind.REHEARSAL
 
 
 def verify_staging(directory: Path, package: Path) -> None:

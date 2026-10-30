@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import tempfile
 import unittest
@@ -13,9 +15,13 @@ from tools import remap_macos_verified_package_install as verified_install
 
 RELEASE_PIN = "ecdsa-sha2-nistp256 release-key remap-release-v2\n"
 DEVELOPMENT_PIN = "ssh-ed25519 development-key remap-release-development-only\n"
+REHEARSAL_PIN = "ecdsa-sha2-nistp256 rehearsal-key remap-release-rehearsal-only\n"
+REHEARSAL_PACKAGE = "Remap-0.2.0-arm64-rehearsal.pkg"
 
 
-def _pinned_root(directory: str, *, release: str = RELEASE_PIN) -> Path:
+def _pinned_root(
+    directory: str, *, release: str = RELEASE_PIN, rehearsal: str | None = None
+) -> Path:
     root = Path(directory)
     pins = root / "docs/release"
     pins.mkdir(parents=True)
@@ -23,6 +29,10 @@ def _pinned_root(directory: str, *, release: str = RELEASE_PIN) -> Path:
     _ = (pins / "remap-development-signing-key.pub").write_text(
         DEVELOPMENT_PIN, encoding="utf-8"
     )
+    if rehearsal is not None:
+        _ = (pins / "remap-rehearsal-signing-key.pub").write_text(
+            rehearsal, encoding="utf-8"
+        )
     return root
 
 
@@ -93,6 +103,57 @@ class MacOSVerifiedPackageInstallTests(unittest.TestCase):
             self.assertEqual(installer_checks, [])
             with self.assertRaisesRegex(RuntimeError, "REMAP_DEVELOPMENT_PACKAGE=1"):
                 _ = self._install(root, "Remap-0.2.0-arm64-development.pkg", {})
+
+    def test_a_rehearsal_package_verifies_only_as_a_rehearsal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = _pinned_root(directory, rehearsal=REHEARSAL_PIN)
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                pins, installer_checks, commands = self._install(
+                    root, REHEARSAL_PACKAGE, {"REMAP_REHEARSAL_PACKAGE": "1"}
+                )
+            self.assertEqual(pins, [REHEARSAL_PIN, REHEARSAL_PIN])
+            self.assertEqual(installer_checks, [])
+            self.assertTrue(any("/usr/sbin/installer" in c for c in commands))
+            self.assertIn(
+                "Installing a rehearsal package, not a release", printed.getvalue()
+            )
+            # Never as a release, whatever the release pin says.
+            with self.assertRaisesRegex(RuntimeError, "never installed as a release"):
+                _ = self._install(root, REHEARSAL_PACKAGE, {})
+            for refused, environment, message in (
+                ("Remap.pkg", {"REMAP_REHEARSAL_PACKAGE": "1"}, "is not one"),
+                (
+                    REHEARSAL_PACKAGE,
+                    {"REMAP_REHEARSAL_PACKAGE": "1", "REMAP_DEVELOPMENT_PACKAGE": "1"},
+                    "two kinds of package at once",
+                ),
+            ):
+                with (
+                    self.subTest(package=refused, environment=environment),
+                    self.assertRaisesRegex(RuntimeError, message),
+                ):
+                    _ = self._install(root, refused, environment)
+
+    def test_a_rehearsal_needs_its_committed_and_marked_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = _pinned_root(directory)
+            with self.assertRaisesRegex(RuntimeError, "has not been committed"):
+                _ = self._install(
+                    root, REHEARSAL_PACKAGE, {"REMAP_REHEARSAL_PACKAGE": "1"}
+                )
+        with tempfile.TemporaryDirectory() as directory:
+            root = _pinned_root(directory, rehearsal=RELEASE_PIN)
+            with self.assertRaisesRegex(RuntimeError, "remap-release-rehearsal-only"):
+                _ = self._install(
+                    root, REHEARSAL_PACKAGE, {"REMAP_REHEARSAL_PACKAGE": "1"}
+                )
+
+    def test_a_rehearsal_marked_release_pin_verifies_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = _pinned_root(directory, release=REHEARSAL_PIN)
+            with self.assertRaisesRegex(RuntimeError, "still the rehearsal key"):
+                _ = self._install(root, "Remap.pkg", {})
 
     def test_a_development_marked_release_pin_verifies_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
