@@ -37,6 +37,10 @@ platform claims separate.
   identity, the build says which certificate the dialog is about, what the
   trust lets it do, and what to choose. The dialog itself names neither, and
   the administrator dialog for the installer identity names only `security`.
+- `remapd` and `remap daemon` tell you to press Control-C only when they are
+  running in a terminal. Under launchd or systemd they say which manager
+  started them, and the systemd journal no longer records an instruction
+  nobody there can follow.
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
