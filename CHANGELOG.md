@@ -41,6 +41,11 @@ platform claims separate.
   running in a terminal. Under launchd or systemd they say which manager
   started them, and the systemd journal no longer records an instruction
   nobody there can follow.
+- On Linux, `systemctl status` and the journal name every Remap unit for what
+  it is. The sockets read "Remap DNS over UDP on 127.0.0.1:53" and so on
+  instead of "Remap dns-udp socket"; the resolver supervisor is "Remap DNS
+  resolver supervisor" and logs as `remap-resolver` rather than as its
+  executable, `remap-linux-system`; `remapd` logs as `remapd`.
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
