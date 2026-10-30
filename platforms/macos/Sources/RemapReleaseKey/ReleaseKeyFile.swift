@@ -12,12 +12,12 @@ enum ReleaseKeyFile {
 
     /// Creates the file before any key exists, so an existing file is refused without the
     /// Secure Enclave ever being asked for a key that would then be thrown away.
-    static func createExclusively(at path: String) throws -> Int32 {
+    static func createExclusively(at path: String, kind: ReleaseKeyKind) throws -> Int32 {
         let descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else {
             let code = errno
             if code == EEXIST {
-                throw ReleaseKeyError.keyFile("\(path) already exists; a release key is never overwritten")
+                throw ReleaseKeyError.keyFile("\(path) already exists; a \(kind.rawValue) key is never overwritten")
             }
             throw ReleaseKeyError.keyFile("cannot create \(path): \(String(cString: strerror(code)))")
         }
