@@ -4,6 +4,7 @@
 mod app;
 mod cli;
 mod diagnostic;
+mod installed_package;
 #[cfg(target_os = "linux")]
 mod linux_lifecycle;
 mod output;

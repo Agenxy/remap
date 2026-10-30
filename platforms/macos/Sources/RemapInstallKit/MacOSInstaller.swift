@@ -287,7 +287,8 @@ public struct MacOSInstaller: Sendable {
         let generations = manifests.map {
             MacOSInstallerGenerationStatus(
                 generationID: $0.generationID,
-                productVersion: $0.productVersion
+                productVersion: $0.productVersion,
+                packageKind: $0.packageKind
             )
         }
         let transactions: [MacOSInstallerTransactionStatus] = try layout.journals

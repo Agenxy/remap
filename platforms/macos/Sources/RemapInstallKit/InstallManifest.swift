@@ -325,6 +325,24 @@ public struct InstallPublication: Codable, Equatable, Sendable {
     }
 }
 
+/// Which kind of package a generation was installed from, when it was not a release.
+///
+/// A release, and a build from source, record nothing, so their manifests are byte-identical to
+/// those written before the kind existed. The kind is a fact the installer knows because it was
+/// compiled for it; it is not read from the signed release manifest (ADR-0035).
+public enum InstallPackageKind: String, Codable, Equatable, Sendable {
+    case development
+    case rehearsal
+
+    /// How `remap system status` and `remap doctor` name an install of this kind.
+    public var installDescription: String {
+        switch self {
+        case .development: "development install, built and signed on its own Mac"
+        case .rehearsal: "rehearsal install, not a release"
+        }
+    }
+}
+
 /// Canonical integrity boundary for one immutable Remap installation generation.
 public struct InstallManifest: Codable, Equatable, Sendable {
     public let schemaVersion: UInt32
@@ -332,6 +350,7 @@ public struct InstallManifest: Codable, Equatable, Sendable {
     public let generationID: String
     public let productVersion: String
     public let previousGenerationID: String?
+    public let packageKind: InstallPackageKind?
     public let entries: [InstallEntry]
     public let publications: [InstallPublication]
 
@@ -340,6 +359,7 @@ public struct InstallManifest: Codable, Equatable, Sendable {
         generationID: String,
         productVersion: String,
         previousGenerationID: String?,
+        packageKind: InstallPackageKind? = nil,
         entries: [InstallEntry],
         publications: [InstallPublication]
     ) throws {
@@ -364,6 +384,7 @@ public struct InstallManifest: Codable, Equatable, Sendable {
         self.generationID = generationID
         self.productVersion = productVersion
         self.previousGenerationID = previousGenerationID
+        self.packageKind = packageKind
         self.entries = orderedEntries
         self.publications = orderedPublications
     }
@@ -407,6 +428,7 @@ public struct InstallManifest: Codable, Equatable, Sendable {
             generationID: generationID,
             productVersion: productVersion,
             previousGenerationID: previousGenerationID,
+            packageKind: packageKind,
             entries: entries,
             publications: publications
         )

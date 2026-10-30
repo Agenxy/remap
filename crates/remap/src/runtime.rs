@@ -186,6 +186,7 @@ async fn doctor(data_dir: Option<&Path>) -> Result<Report, Diagnostic> {
         mapping_count,
         health,
         native_install,
+        installed_package: crate::installed_package::active(),
         system_lookup,
     }))
 }

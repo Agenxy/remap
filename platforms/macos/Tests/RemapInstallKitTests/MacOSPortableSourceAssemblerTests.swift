@@ -45,6 +45,49 @@ struct MacOSPortableSourceAssemblerTests {
         }
     }
 
+    @Test("a rehearsal generation records its kind; a release generation records nothing")
+    func rehearsalGenerationRecordsItsKind() throws {
+        try withTemporaryDirectory { root in
+            let product = root.appendingPathComponent("product", isDirectory: true)
+            try createProduct(at: product)
+            let sources = root.appendingPathComponent("sources", isDirectory: true)
+            try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: false)
+            try setMode(sources, 0o700)
+            func descriptor(_ kind: InstallPackageKind?) throws -> MacOSPortableProduct {
+                try MacOSPortableProduct(
+                    rootPath: product.path,
+                    productVersion: "0.2.0",
+                    ownerUID: geteuid(),
+                    signingCertificateSHA256: InstallDigest(String(repeating: "a", count: 64)),
+                    previousGenerationID: nil,
+                    packageKind: kind
+                )
+            }
+            let release = try assemble(descriptor(nil), destination: sources.appendingPathComponent("release"))
+            let rehearsal = try assemble(
+                descriptor(.rehearsal),
+                destination: sources.appendingPathComponent("rehearsal")
+            )
+            func manifest(_ package: MacOSPortableSourcePackage) throws -> (InstallManifest, String) {
+                let data = try Data(
+                    contentsOf: URL(fileURLWithPath: package.rootPath).appendingPathComponent("manifest.json")
+                )
+                let manifest = try InstallManifest.decodeCanonical(data, expectedDigest: package.manifestDigest)
+                return (manifest, String(decoding: data, as: UTF8.self))
+            }
+            let (releaseManifest, releaseText) = try manifest(release)
+            let (rehearsalManifest, rehearsalText) = try manifest(rehearsal)
+            #expect(releaseManifest.packageKind == nil)
+            #expect(!releaseText.contains("packageKind"))
+            #expect(rehearsalManifest.packageKind == .rehearsal)
+            #expect(rehearsalText.contains(#""packageKind":"rehearsal""#))
+            // Identical payloads, different kinds: a release replaces a rehearsal as an update.
+            #expect(release.generationID != rehearsal.generationID)
+            #expect(rehearsalManifest.entries.map(\.path) == releaseManifest.entries.map(\.path))
+            #expect(InstallPackageKind.rehearsal.installDescription == "rehearsal install, not a release")
+        }
+    }
+
     @Test("native validation rejects every surplus system publication")
     func rejectsSurplusPublication() throws {
         try withTemporaryDirectory { root in

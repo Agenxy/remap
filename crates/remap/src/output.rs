@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::app::{DoctorReport, Report, ValidationReport};
 use crate::diagnostic::Diagnostic;
+use crate::installed_package::InstalledPackage;
 use remap_mcp::system_lookup::SystemLookup;
 
 const SCHEMA: &str = "remap.cli/v1";
@@ -108,6 +109,9 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
     }
     writeln!(writer, "  MCP        2026-07-28 + 2025-11-25")?;
     writeln!(writer, "  Native     {}", readiness(report.native_install))?;
+    if let Some(package) = report.installed_package {
+        writeln!(writer, "  Package    {}", package.description())?;
+    }
     writeln!(writer, "  DNS        {}", readiness(report.health.dns))?;
     writeln!(
         writer,
@@ -434,6 +438,7 @@ fn report_json(report: &Report) -> Value {
                 "mapping_count": report.mapping_count,
                 "mcp_versions": ["2026-07-28", "2025-11-25"],
                 "native_install": report.native_install,
+                "installed_package": report.installed_package.map(InstalledPackage::as_str),
                 "dns_listener": report.health.dns,
                 "dns_forwarding": report.health.forwarding,
                 "http_gateway": report.health.http,
@@ -482,9 +487,62 @@ mod tests {
     };
     use serde_json::Value;
 
+    use remap_mcp::system_lookup::SystemLookup;
+
     use super::{write_diagnostic, write_report};
-    use crate::app::{Report, ValidationReport};
+    use crate::app::{DoctorReport, Report, ValidationReport};
     use crate::diagnostic::Diagnostic;
+    use crate::installed_package::InstalledPackage;
+    use crate::runtime_health::RuntimeHealth;
+
+    fn doctor(installed_package: Option<InstalledPackage>) -> Report {
+        Report::Doctor(DoctorReport {
+            version: "0.2.0",
+            operating_system: "macos",
+            architecture: "aarch64",
+            authority: "ready".to_owned(),
+            revision: Some(3),
+            mapping_count: Some(1),
+            health: RuntimeHealth {
+                dns: true,
+                forwarding: true,
+                http: true,
+            },
+            native_install: true,
+            installed_package,
+            system_lookup: SystemLookup::NotChecked,
+        })
+    }
+
+    #[test]
+    fn doctor_reports_a_rehearsal_install_as_one() -> Result<(), Box<dyn Error>> {
+        let mut human = Vec::new();
+        write_report(
+            &mut human,
+            &doctor(Some(InstalledPackage::Rehearsal)),
+            false,
+        )?;
+        let text = String::from_utf8(human)?;
+        assert!(text.contains("  Package    rehearsal install, not a release\n"));
+
+        let mut machine = Vec::new();
+        write_report(
+            &mut machine,
+            &doctor(Some(InstalledPackage::Rehearsal)),
+            true,
+        )?;
+        let value: Value = serde_json::from_slice(&machine)?;
+        assert_eq!(value["result"]["installed_package"], "rehearsal");
+
+        let mut release = Vec::new();
+        write_report(&mut release, &doctor(None), false)?;
+        assert!(!String::from_utf8(release)?.contains("Package"));
+        let mut release_json = Vec::new();
+        write_report(&mut release_json, &doctor(None), true)?;
+        let value: Value = serde_json::from_slice(&release_json)?;
+        assert!(value["result"]["installed_package"].is_null());
+        Ok(())
+    }
 
     #[test]
     fn validation_json_has_stable_envelope() -> Result<(), Box<dyn Error>> {

@@ -67,6 +67,7 @@ public enum MacOSPortableSourceAssembler {
         let initialEntries = try MacOSPortableFileTree.entries(payloadPath: payload.path)
         let generationID = try MacOSPortableManifestBuilder.generationID(
             productVersion: product.productVersion,
+            packageKind: product.packageKind,
             entries: initialEntries,
             account: account,
             ownerUID: product.ownerUID,
@@ -87,6 +88,7 @@ public enum MacOSPortableSourceAssembler {
             generationID: generationID,
             productVersion: product.productVersion,
             previousGenerationID: product.previousGenerationID,
+            packageKind: product.packageKind,
             entries: entries,
             publications: MacOSPortableManifestBuilder.publications(
                 generationID: generationID,

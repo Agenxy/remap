@@ -4,6 +4,7 @@ use remap_protocol::CommandResult;
 
 use crate::cli::Action;
 use crate::diagnostic::Diagnostic;
+use crate::installed_package::InstalledPackage;
 use crate::runtime_health::RuntimeHealth;
 use remap_mcp::system_lookup::SystemLookup;
 
@@ -36,6 +37,8 @@ pub(crate) struct DoctorReport {
     pub(crate) mapping_count: Option<u64>,
     pub(crate) health: RuntimeHealth,
     pub(crate) native_install: bool,
+    /// `None` for a release, a source build, or no native installation.
+    pub(crate) installed_package: Option<InstalledPackage>,
     pub(crate) system_lookup: SystemLookup,
 }
 

@@ -8,13 +8,16 @@ public struct MacOSPortableProduct: Sendable {
     public let ownerUID: UInt32
     public let signingCertificateSHA256: InstallDigest
     public let previousGenerationID: String?
+    /// `nil` for a release; otherwise the kind the portable installer was compiled for.
+    public let packageKind: InstallPackageKind?
 
     public init(
         rootPath: String,
         productVersion: String,
         ownerUID: UInt32,
         signingCertificateSHA256: InstallDigest,
-        previousGenerationID: String?
+        previousGenerationID: String?,
+        packageKind: InstallPackageKind? = nil
     ) throws {
         guard rootPath.hasPrefix("/"), !rootPath.contains("\0") else {
             throw InstallError.invalidPath(rootPath)
@@ -34,6 +37,7 @@ public struct MacOSPortableProduct: Sendable {
         self.ownerUID = ownerUID
         self.signingCertificateSHA256 = signingCertificateSHA256
         self.previousGenerationID = previousGenerationID
+        self.packageKind = packageKind
     }
 }
 
