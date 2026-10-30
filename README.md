@@ -126,7 +126,7 @@ request a fresh install, update, or uninstall preview.
 ### macOS source build
 
 The native macOS source installation requires macOS 15 or later, GNU Make,
-`mise` 2026.10.21, and the full Xcode version at one of the reviewed builds
+`mise` 2026.10.23, and the full Xcode version at one of the reviewed builds
 recorded in [`platforms/macos/XCODE_VERSION`](platforms/macos/XCODE_VERSION). Xcode's
 command-line-tools-only package is insufficient because Remap builds and signs
 native Swift products. The Xcode IDE does not need to be opened.

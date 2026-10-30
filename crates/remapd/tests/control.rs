@@ -25,7 +25,7 @@ async fn sigterm_drains_and_removes_the_control_socket() -> Result<(), Box<dyn s
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()?;
-    wait_for_socket(paths.socket()).await?;
+    wait_for_spawned_socket(&mut child, paths.socket()).await?;
     let process_id = child
         .id()
         .ok_or_else(|| std::io::Error::other("spawned daemon had no process identifier"))?;
@@ -218,4 +218,25 @@ async fn wait_for_socket(path: &std::path::Path) -> Result<(), Box<dyn std::erro
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     Err("daemon socket did not appear within one second".into())
+}
+
+/// A freshly linked `remapd` is assessed by macOS before its first instruction
+/// runs, and on a loaded Mac that alone can take seconds. The test is about
+/// draining, not start-up latency, so a spawned daemon gets a generous wall
+/// clock and fails at once if it exits before listening.
+async fn wait_for_spawned_socket(
+    child: &mut tokio::process::Child,
+    path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while tokio::time::Instant::now() < deadline {
+        if path.exists() {
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait()? {
+            return Err(format!("remapd exited before listening: {status}").into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    Err("spawned remapd did not listen within 30 seconds".into())
 }

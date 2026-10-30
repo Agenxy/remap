@@ -43,8 +43,14 @@ class MacOSInstallerSigningTests(unittest.TestCase):
         certificate = _pem("CERTIFICATE", b"certificate")
         private_key = _pem("PRIVATE KEY", b"private")
 
+        imported_names: list[str] = []
+
         def run_binary(arguments: tuple[str, ...], input_bytes: bytes) -> bytes:
             calls.append((arguments, input_bytes))
+            if "import" in arguments:
+                source = Path(arguments[arguments.index("import") + 1])
+                imported_names.append(source.name)
+                self.assertEqual(source.read_bytes(), b"archive")
             return certificate + private_key if "req" in arguments else b""
 
         with (
@@ -61,13 +67,16 @@ class MacOSInstallerSigningTests(unittest.TestCase):
                 Path("/tmp/login.keychain-db")
             )
 
-        imported, archive = next(call for call in calls if "import" in call[0])
+        imported, _ = next(call for call in calls if "import" in call[0])
         trusted = next(call for call in calls if "add-trusted-cert" in call[0])
-        make_archive.assert_called_once_with(certificate, private_key)
+        password = cast(str, make_archive.call_args.args[2])
+        make_archive.assert_called_once_with(certificate, private_key, password)
+        self.assertEqual(imported[imported.index("-P") + 1], password)
         self.assertIn("-x", imported)
         self.assertEqual(imported[imported.index("-T") + 1], "/usr/bin/productsign")
-        self.assertEqual(imported[imported.index("import") + 1], "/dev/stdin")
-        self.assertEqual(archive, b"archive")
+        # macOS names the key's access dialog after the imported file.
+        self.assertEqual(imported_names, ["Remap Local Installer.p12"])
+        self.assertNotIn("-f", imported)
         self.assertIn("basic", trusted[0])
         self.assertNotIn("codeSign", trusted[0])
         self.assertEqual(trusted[1], certificate)
@@ -87,10 +96,10 @@ class MacOSInstallerSigningTests(unittest.TestCase):
             ) as run,
         ):
             make_archive = cast(
-                "Callable[[bytes, bytes], bytes]",
+                "Callable[[bytes, bytes, str], bytes]",
                 vars(remap_macos_installer_signing)["make_archive"],
             )
-            archive = make_archive(b"certificate", b"key")
+            archive = make_archive(b"certificate", b"key", "run-password")
 
         self.assertEqual(archive, b"archive")
         write.assert_has_calls((mock.call(21, b"certificate"), mock.call(23, b"key")))

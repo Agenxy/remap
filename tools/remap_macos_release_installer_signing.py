@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import plistlib
 import re
+import secrets
 import ssl
 import subprocess
 import tempfile
@@ -293,44 +294,21 @@ def _create(keychain: Path) -> None:
     )
     certificate = local_signing.one_pem_block(material, b"CERTIFICATE")
     private_key = local_signing.one_private_key(material)
+    password = secrets.token_urlsafe(32)
     archive = local_signing.make_archive(
         certificate,
         private_key,
+        password,
         identity_name=IDENTITY_NAME,
     )
-    # macOS labels an imported private key after the path it was read from, so importing
-    # through `/dev/stdin` produced a keychain item called `stdin`, and the system asked
-    # the owner to authorise `key "stdin"`: a request nobody can evaluate. The PKCS#12
-    # already carries the product's chosen name and macOS does not use it for the key.
-    # The archive is therefore handed over through a file named for the identity, in a
-    # directory only this user can enter, and removed as soon as the import returns.
-    # `security import` needs to seek, so a pipe cannot carry it.
-    with tempfile.TemporaryDirectory(prefix="remap-installer-identity-") as raw:
-        transport_directory = Path(raw)
-        transport_directory.chmod(0o700)
-        transport = transport_directory / f"{IDENTITY_NAME}.p12"
-        transport.touch(mode=0o600)
-        _ = transport.write_bytes(archive)
-        try:
-            _ = local_signing.run_binary(
-                (
-                    "/usr/bin/security",
-                    "import",
-                    str(transport),
-                    "-k",
-                    str(keychain),
-                    "-P",
-                    local_signing.ARCHIVE_TRANSPORT_PASSWORD,
-                    "-x",
-                    "-T",
-                    "/usr/bin/productsign",
-                    "-f",
-                    "pkcs12",
-                ),
-                b"",
-            )
-        finally:
-            transport.unlink(missing_ok=True)
+    codesigning.import_identity_archive(
+        keychain,
+        name=IDENTITY_NAME,
+        archive=archive,
+        password=password,
+        tool="/usr/bin/productsign",
+        run=local_signing.run_binary,
+    )
 
 
 def _capture(arguments: tuple[str, ...]) -> str:

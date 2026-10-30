@@ -217,8 +217,20 @@ class MacOSSigningTests(unittest.TestCase):
         certificate = _pem("CERTIFICATE", b"certificate")
         private_key = _pem("PRIVATE KEY", b"private")
 
+        imported_files: list[tuple[Path, bytes, int, int]] = []
+
         def run_binary(arguments: tuple[str, ...], input_bytes: bytes) -> bytes:
             calls.append((arguments, input_bytes))
+            if "import" in arguments:
+                source = Path(arguments[arguments.index("import") + 1])
+                imported_files.append(
+                    (
+                        source,
+                        source.read_bytes(),
+                        source.stat().st_mode & 0o777,
+                        source.parent.stat().st_mode & 0o777,
+                    )
+                )
             return certificate + private_key if "req" in arguments else b""
 
         with (
@@ -229,13 +241,23 @@ class MacOSSigningTests(unittest.TestCase):
         ):
             remap_macos_signing.create_identity(Path("/tmp/login.keychain-db"))
 
-        imported, archive = next(call for call in calls if "import" in call[0])
+        imported, _ = next(call for call in calls if "import" in call[0])
         trusted = next(call for call in calls if "add-trusted-cert" in call[0])
-        make_archive.assert_called_once_with(certificate, private_key)
+        password = cast(str, make_archive.call_args.args[2])
+        make_archive.assert_called_once_with(certificate, private_key, password)
+        self.assertGreaterEqual(len(password), 32)
+        self.assertEqual(imported[imported.index("-P") + 1], password)
         self.assertIn("-x", imported)
         self.assertEqual(imported[imported.index("-T") + 1], "/usr/bin/codesign")
-        self.assertEqual(imported[imported.index("import") + 1], "/dev/stdin")
+        # macOS names the key's access dialog after the imported file, so the
+        # file carries the identity's name, never "stdin".
+        [(source, archive, mode, directory_mode)] = imported_files
+        self.assertEqual(source.name, "Remap Build Signing.p12")
+        # An explicit `-f pkcs12` makes macOS label the key "Imported Private Key".
+        self.assertNotIn("-f", imported)
         self.assertEqual(archive, b"archive")
+        self.assertEqual((mode, directory_mode), (0o600, 0o700))
+        self.assertFalse(source.exists(), "the archive outlives its import")
         self.assertIn("codeSign", trusted[0])
         self.assertNotIn("-d", trusted[0])
         self.assertEqual(trusted[1], certificate)
@@ -255,10 +277,10 @@ class MacOSSigningTests(unittest.TestCase):
             ) as run,
         ):
             make_archive = cast(
-                "Callable[[bytes, bytes], bytes]",
+                "Callable[[bytes, bytes, str], bytes]",
                 vars(remap_macos_signing)["_make_archive"],
             )
-            archive = make_archive(b"certificate", b"key")
+            archive = make_archive(b"certificate", b"key", "run-password")
 
         self.assertEqual(archive, b"archive")
         write.assert_has_calls((mock.call(11, b"certificate"), mock.call(13, b"key")))
@@ -269,6 +291,7 @@ class MacOSSigningTests(unittest.TestCase):
         self.assertIn("/dev/fd/10", arguments)
         self.assertIn("/dev/fd/12", arguments)
         self.assertIn("/dev/stdout", arguments)
+        self.assertIn("pass:run-password", arguments)
         self.assertEqual(run.call_args.kwargs["pass_fds"], (10, 12))
 
     def test_artifact_batch_uses_one_codesign_process(self) -> None:
@@ -454,6 +477,25 @@ def _pem(label: str, body: bytes) -> bytes:
         + label.encode()
         + b"-----\n"
     )
+
+
+class TrustDialogTests(unittest.TestCase):
+    def test_an_unanswered_trust_dialog_says_how_to_resume(self) -> None:
+        def run_binary(arguments: tuple[str, ...], _input: bytes) -> bytes:
+            raise subprocess.TimeoutExpired(arguments, 120)
+
+        with self.assertRaises(RuntimeError) as raised:
+            remap_macos_signing.record_trust(
+                Path("/tmp/login.keychain-db"),
+                b"certificate",
+                policy="codeSign",
+                name="Remap Build Signing",
+                run=run_binary,
+            )
+        message = str(raised.exception)
+        self.assertIn('"Remap Build Signing"', message)
+        self.assertIn("Run the same command again", message)
+        self.assertIsNone(raised.exception.__cause__)
 
 
 if __name__ == "__main__":

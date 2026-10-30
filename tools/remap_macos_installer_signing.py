@@ -7,6 +7,7 @@ import hashlib
 import os
 import plistlib
 import re
+import secrets
 import ssl
 import stat
 import subprocess
@@ -21,7 +22,6 @@ from tools.remap_macos_signing import login_keychain
 IDENTITY_NAME = "Remap Local Installer"
 SYSTEM_KEYCHAIN = Path("/Library/Keychains/System.keychain")
 CERTIFICATE_LIFETIME_DAYS = 3_650
-ARCHIVE_TRANSPORT_PASSWORD = "remap-ephemeral-pipe"
 INSTALLER_EKU = "1.2.840.113635.100.4.13"
 ADMIN_BASIC_POLICY = {
     "kSecTrustSettingsPolicy": bytes.fromhex("2A864886F763640102"),
@@ -239,26 +239,20 @@ def create_identity(keychain: Path) -> None:
     )
     certificate = one_pem_block(material, b"CERTIFICATE")
     private_key = one_private_key(material)
-    archive = make_archive(certificate, private_key)
-    _ = run_binary(
-        (
-            "/usr/bin/security",
-            "import",
-            "/dev/stdin",
-            "-k",
-            str(keychain),
-            "-P",
-            ARCHIVE_TRANSPORT_PASSWORD,
-            "-x",
-            "-T",
-            "/usr/bin/productsign",
-            "-f",
-            "pkcs12",
-        ),
-        archive,
+    password = secrets.token_urlsafe(32)
+    archive = make_archive(certificate, private_key, password)
+    codesigning.import_identity_archive(
+        keychain,
+        name=IDENTITY_NAME,
+        archive=archive,
+        password=password,
+        tool="/usr/bin/productsign",
+        run=run_binary,
     )
     codesigning.allow_apple_tools(keychain, run_binary)
-    _ = run_binary(codesigning.trust_arguments(keychain, "basic"), certificate)
+    codesigning.record_trust(
+        keychain, certificate, policy="basic", name=IDENTITY_NAME, run=run_binary
+    )
 
 
 def openssl_configuration() -> str:
@@ -440,6 +434,7 @@ def run_binary(arguments: tuple[str, ...], input_bytes: bytes) -> bytes:
 def make_archive(
     certificate: bytes,
     private_key: bytes,
+    password: str,
     identity_name: str = IDENTITY_NAME,
 ) -> bytes:
     certificate_reader, certificate_writer = os.pipe()
@@ -466,7 +461,7 @@ def make_archive(
                 "-out",
                 "/dev/stdout",
                 "-passout",
-                f"pass:{ARCHIVE_TRANSPORT_PASSWORD}",
+                f"pass:{password}",
             ),
             check=False,
             capture_output=True,
