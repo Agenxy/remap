@@ -46,6 +46,8 @@ platform claims separate.
   instead of "Remap dns-udp socket"; the resolver supervisor is "Remap DNS
   resolver supervisor" and logs as `remap-resolver` rather than as its
   executable, `remap-linux-system`; `remapd` logs as `remapd`.
+- The `remap(1)` manual pages are dated as the changelog dates this release,
+  and a test keeps them so; they carried a date three days before it.
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
