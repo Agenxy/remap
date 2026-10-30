@@ -1,4 +1,4 @@
-# ADR-0034: Every Remap release is rehearsed on its own channel first
+# ADR-0035: Every Remap release is rehearsed on its own channel first
 
 ## Status
 
