@@ -33,6 +33,10 @@ platform claims separate.
   administrator approval to install its DNS service. Password for <you>:",
   and likewise for update, repair and removal on macOS and Linux, and for
   `make install-package-macos`. It was a bare "Password:".
+- Before macOS asks to change certificate trust settings for a Remap signing
+  identity, the build says which certificate the dialog is about, what the
+  trust lets it do, and what to choose. The dialog itself names neither, and
+  the administrator dialog for the installer identity names only `security`.
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
