@@ -100,6 +100,27 @@ Use `remap system recover` after an interrupted lifecycle operation, and
 `remap system uninstall` to remove the native product. The private mapping
 database is preserved so reinstalling does not lose mappings.
 
+### Installing a rehearsal
+
+Every release is first published to a rehearsal channel and installed on a
+clean Mac before it reaches GitHub
+([ADR-0035](docs/architecture/ADR-0035-release-rehearsal-channel.md)). A
+rehearsal installs with exactly the commands above, with two differences:
+
+- Download from the rehearsal root's `releases/Agenxy/remap/download/v0.2.0/`
+  instead of the GitHub release. The files are
+  `Remap-0.2.0-arm64-rehearsal.pkg`, its `.sig`, and
+  `remap-rehearsal-signing-key.pub`.
+- Verify against `remap-rehearsal-signing-key.pub` instead of the release key.
+  Its comment is `remap-release-rehearsal-only`.
+
+A rehearsal package is signed by a separate rehearsal key, not the Secure
+Enclave release key. Its installer accepts only that key, and a release
+installer never accepts it. It says it is a rehearsal when it installs, and
+`remap doctor` reports it as one. A later release replaces it as an ordinary
+update. A rehearsal carries no Apple Installer signature. Use rehearsals to
+test a release, not as a release.
+
 ## Build and install from source
 
 The same lifecycle commands are used on each supported host:
