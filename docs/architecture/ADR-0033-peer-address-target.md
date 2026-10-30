@@ -9,6 +9,10 @@ ADR-0026, which route a peer's advertised HTTP services, to a peer's exposed
 TCP services. It adds one privileged operation, a loopback address
 reservation, so it is recorded here before that lands.
 
+Steps 1 and 3 are implemented for review on `feature/peer-machine-names`, as
+recorded under "Implementation of steps 1 and 3". Step 2, the reservation, is
+built separately. Installing and choosing mappings stay with the owner.
+
 ## Context
 
 On 30 October a new MacBook Pro joined the fleet. The owner asked for a stable
@@ -117,6 +121,141 @@ The onboarding acceptance runs from MacMarine and Solis:
 - `ssh` through the MBP's name connects at home;
 - it connects again after the MBP takes a new address;
 - with the MBP on a phone hotspot, it still connects through the same name.
+
+## Implementation of steps 1 and 3
+
+### The target
+
+`supgang://<selector>?<service>=<port>[,<service>=<port>...]`, target kind
+`peer-machine`, is told apart from `supgang://<peer>/<service>` by having no
+path segment. The selector is exactly 64 or 8 lowercase hex characters. Any
+other selector is refused, and the error tells the owner to use the node ID
+or fingerprint and that `supgang resolve <name>` shows both. Uppercase hex is
+refused separately.
+
+Two points differ from the decision above. Registry validation is pure and
+never runs Supgang, so the refusal cannot show the matching fingerprint.
+`remap get` does not show the peer's signed name either, because only a
+Supgang subprocess could supply it. Both can be added when Supgang offers a
+cheap local lookup.
+
+The target holds 1 to 16 pairs. Each pair is a Supgang service name and a
+decimal port from 1 to 65535, with unique names and unique ports. Templates
+(`{1}`, `{2}`) are refused. The pairs keep the owner's order, and the target
+displays canonically: `ssh=022` is stored as `ssh=22`.
+
+### Allocation and the registry
+
+- **Schema 4** adds the column `mappings.peer_address TEXT`, NULL for every
+  other kind, and the partial unique index `mappings_peer_address` on it
+  `WHERE peer_address IS NOT NULL`. Migration from 3 runs behind ADR-0032's
+  pre-migration copy. No schema-3 registry can hold a peer-machine mapping,
+  so no row is backfilled, and a schema-3 daemon refuses a schema-4 registry
+  with `E_REGISTRY_SCHEMA_NEWER`.
+- **Allocation.** The registry writer allocates an address when a set creates
+  a peer-machine mapping, or retargets another kind to one. It takes the
+  lowest address from `127.77.0.1` that no other mapping holds, disabled
+  mappings included. The address is kept across restarts, target edits,
+  disable and enable. It is freed when the mapping is removed or retargeted
+  to another kind. 127.77.0.0 and 127.77.255.255 are never allocated
+  (`remap_core::PEER_MACHINE_LOOPBACK`, `is_peer_machine_address`). An
+  address freed by one change in an atomic set may be taken by a later one.
+- **Bounds.** A registry holds at most 256 peer-machine mappings, enabled or
+  not (`MAX_PEER_MACHINE_MAPPINGS`); the 257th is `E_PEER_MACHINE_CAPACITY`.
+  A full range would be `E_PEER_ADDRESS_EXHAUSTED`, which the cap keeps out
+  of reach.
+- **Loading.** A stored address that is missing, out of range, not canonical,
+  duplicated, or on another kind makes the registry `E_REGISTRY_CORRUPT`.
+
+### Wire
+
+- `MappingView.peer_address`: the allocated address, omitted for every other
+  kind. Get, list, resolve, preview, apply receipts and the MCP tools carry
+  it, and older receipts are unchanged.
+- `RegistryStatus.peer_machine_listeners`: `{listening, not_listening,
+  failures}`, present only while the daemon runs at least one peer-machine
+  listener. `failures` lists at most 64 entries, each
+  `{pattern, service, address, port, cause, detail}`.
+
+### DNS
+
+DNS answers A for an enabled peer-machine mapping with its address, at the
+TTL every synthesized answer uses. AAAA, like any type with no address, is
+NOERROR with no answer. A disabled mapping is not resolved, so its name is
+forwarded like any unmapped name. Through the HTTP gateway the kind is
+`421 E_GATEWAY_DIRECT_TARGET`.
+
+### Listeners
+
+The listener runtime runs beside the HTTP gateway whenever the gateway is
+configured. It follows every published snapshot, plus a five-second retry of
+listeners that could not bind. For each service of each enabled mapping it
+binds `<address>:<port>` with address reuse, and nothing else.
+
+- An address outside the range is never bound.
+- A listener that cannot bind is reported with a cause and never moved to
+  another address. The causes are `address-not-reserved` (the alias does not
+  exist yet), `port-in-use`, `permission-denied` and `other`.
+- Changing any field of a listener, or disabling or removing its mapping,
+  closes it and the connections it carries before a new one binds.
+
+Each accepted connection is carried as follows:
+
+- A node ID selector is used as it is. A fingerprint is resolved through
+  `supgang resolve` for every connection.
+- One version-1 stream is opened through this user's endpoint, with
+  ADR-0026's ownership checks, and bytes are copied both ways until each side
+  closes.
+- At most 256 connections are carried at once.
+- A stream must open within 10 seconds.
+
+A connection that is not carried is closed, and the daemon logs:
+
+```text
+remap gateway: peer machine connection closed. Mapping: PATTERN Service: NAME Cause: TOKEN (reason)
+```
+
+The tokens are `no-supgang`, `refused`, `unknown-peer`, `endpoint` and
+`timeout`. The line never carries an address, port or selector. It is the
+one exception to the rule that routine logs name no mapping, and PRIVACY.md
+and the threat model record it.
+
+### What step 2 provides
+
+The listeners need each enabled mapping's address to be an interface address
+on macOS. Linux already routes all of `127.0.0.0/8`. The reservation reads
+the addresses from the same snapshot that DNS and the listeners read:
+`RegistrySnapshot::peer_machine_addresses()`, the set of enabled mappings'
+addresses. Every one of them lies inside `PEER_MACHINE_LOOPBACK`, and there
+are at most 256.
+
+The listener runtime reads no reservation state of its own. It retries a
+listener that could not bind every five seconds, so an alias reserved later
+starts listening within that interval, without a restart and without telling
+the gateway.
+
+### Acceptance
+
+- `crates/remap-core/tests/peer_machine_targets.rs`: the grammar. It covers a
+  name selector, 8 and 64 hex characters, uppercase, duplicate ports and
+  names, an oversized name, empty and overlong lists, placeholders,
+  canonical round trip, and the snapshot's address rules.
+- `crates/remap-registry/tests/peer_machine_addresses.rs`: allocation. It is
+  lowest-first and unique, survives a restart, is kept on edit and disable,
+  is freed on removal and on retargeting, shows in preview, and has the cap
+  and tampered rows. A unit test proves exhaustion.
+- `crates/remap-registry/tests/schema_snapshots.rs`: 3 to 4 with its copy.
+- `crates/remap-network/src/dns.rs`: the A, AAAA and disabled answers.
+- `crates/remap-network/tests/peer_machine_listeners.rs`: these run against
+  a stand-in version-1 endpoint. They cover a round trip in both directions
+  by node ID and by fingerprint, and refusal for an unexposed service, an
+  unknown fingerprint and a missing Supgang, each naming the mapping,
+  service and cause with no address. They also cover following add, disable,
+  enable and remove, binding the reserved address or reporting
+  `address-not-reserved` without falling back, and refusing a substitute
+  address off loopback.
+- `crates/remapd/tests/peer_machines.rs`: through a live daemon, the DNS
+  answer and the listener in status.
 
 ## Consequences
 

@@ -171,6 +171,23 @@ key; an expired or unbounded record names nothing. No peer mapping is ever
 dialled unverified or in plaintext, and a peer that cannot be resolved is a
 gateway error that names the step, not a fallback.
 
+A peer-machine target (`supgang://<node-id>?<service>=<port>`, ADR-0033) is
+selected by node ID or fingerprint, never by a Supgang name, which may repeat
+or change. The registry writer allocates its address in `127.77.0.0/16`, and
+the gateway listens only there, at the ports the owner listed: never on
+`127.0.0.1`, the wildcard address, or off loopback, and an address that cannot
+be bound is reported, never replaced. Each accepted connection is carried only
+through this user's Supgang stream endpoint, after the same socket-owner and
+peer-credential checks as ADR-0026; Remap never dials the peer and adds no
+authority, so whether a stream opens is the peer owner's exposure, judged by
+Supgang. Any local process can connect to a listener, exactly as it could run
+`supgang connect` as this user; the listeners confer nothing beyond that. A
+connection that is not carried closes and logs one line with the mapping's
+pattern, the service name and a cause token, never an address, port or peer
+identity. If another local service listens on every address at a listed port,
+a listener that cannot bind would leave connections reaching that service, so
+status and `remap doctor` name the `port-in-use` cause.
+
 ### Certificate and key boundary
 
 Creating, trusting, untrusting, rotating, exporting, or destroying a local CA is
@@ -241,7 +258,9 @@ uninstall.
 Remap has no telemetry, analytics, account, remote control plane, forced update,
 or usage-reporting channel. Routine logs never contain mapped hostnames, targets,
 peer addresses, traffic metadata, request bodies, certificate subjects, or
-private keys. Local diagnostics disclose only the minimum needed and are
+private keys. The one named exception is a peer-machine connection Supgang did
+not carry, whose log line names the owner's mapping pattern and service so the
+failure can be acted on (ADR-0033). Local diagnostics disclose only the minimum needed and are
 inspectable before export.
 
 Authoritative mappings necessarily exist on enrolled devices. Zero knowledge
