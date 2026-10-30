@@ -144,6 +144,7 @@ mod tests {
             enabled,
             updated_revision: 1,
             landing: None,
+            peer_address: None,
         }
     }
 

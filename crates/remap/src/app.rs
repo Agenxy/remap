@@ -213,7 +213,10 @@ fn validate(
     let policy = match &target {
         MappingTarget::Http(upstream) => Some(upstream.host_header_policy().as_str()),
         MappingTarget::Peer(service) => Some(service.host_header_policy().as_str()),
-        MappingTarget::Moved(_) | MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => None,
+        MappingTarget::Moved(_)
+        | MappingTarget::DnsAddress(_)
+        | MappingTarget::DnsAlias(_)
+        | MappingTarget::PeerMachine(_) => None,
     };
     Ok(ValidationReport {
         warnings: remap_core::target_advisories(&target),

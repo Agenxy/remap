@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Migrating an existing registry keeps a copy at its old schema, and putting
-//! that copy back is a complete rollback (ADR-0032).
+//! that copy back is a complete rollback (ADR-0032). Schema 4 adds each
+//! peer-machine mapping's address (ADR-0033).
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -55,8 +56,9 @@ fn snapshots(directory: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error
     Ok(found)
 }
 
-/// Writes a registry as a schema-2 daemon left it.
-fn schema_two_registry(path: &Path) -> TestResult {
+/// Writes a registry as a daemon at `schema` (2 or 3) left it: version 3
+/// added no column, and version 4 added the peer-machine address.
+fn older_registry(path: &Path, schema: u32) -> TestResult {
     let mut registry = Registry::open(path)?;
     set(
         &mut registry,
@@ -65,7 +67,87 @@ fn schema_two_registry(path: &Path) -> TestResult {
         "old.test",
     )?;
     drop(registry);
-    rusqlite::Connection::open(path)?.pragma_update(None, "user_version", 2)?;
+    let connection = rusqlite::Connection::open(path)?;
+    connection.execute_batch(
+        "DROP INDEX mappings_peer_address;
+         ALTER TABLE mappings DROP COLUMN peer_address;",
+    )?;
+    connection.pragma_update(None, "user_version", schema)?;
+    Ok(())
+}
+
+fn schema_two_registry(path: &Path) -> TestResult {
+    older_registry(path, 2)
+}
+
+fn columns(path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let connection = rusqlite::Connection::open(path)?;
+    let mut statement = connection.prepare("SELECT name FROM pragma_table_info('mappings')")?;
+    let names = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(names)
+}
+
+#[test]
+fn schema_three_migrates_to_four_with_a_copy_and_then_allocates() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("registry.sqlite3");
+    older_registry(&path, 3)?;
+    assert!(!columns(&path)?.contains(&"peer_address".to_owned()));
+
+    let mut registry = Registry::open(&path)?;
+    assert_eq!(user_version(&path)?, 4);
+    assert!(columns(&path)?.contains(&"peer_address".to_owned()));
+    let copies = snapshots(directory.path())?;
+    let [copy] = copies.as_slice() else {
+        return Err(format!("expected one copy, found {copies:?}").into());
+    };
+    assert!(
+        copy.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("registry.schema-3.")),
+        "{copy:?}"
+    );
+    assert_eq!(user_version(copy)?, 3);
+    assert!(!columns(copy)?.contains(&"peer_address".to_owned()));
+    assert_eq!(std::fs::metadata(copy)?.permissions().mode() & 0o777, 0o600);
+    assert_eq!(names(&mut registry)?, vec!["old.test".to_owned()]);
+
+    let command: Command = serde_json::from_value(json!({
+        "kind": "apply", "expected_revision": 1,
+        "operation_id": "7f0c1c55-0a64-4d39-9d1e-0fd5b4c58e2b",
+        "changes": [{"kind": "set", "pattern": "pro.test",
+            "target": "supgang://a8a37e32?ssh=22", "host_policy": "use-upstream",
+            "enabled": null}]
+    }))?;
+    registry.execute(command, Surface::Probe)?;
+    let CommandResult::Mapping(Some(view)) = registry.execute(
+        Command::Get {
+            pattern: "pro.test".to_owned(),
+        },
+        Surface::Probe,
+    )?
+    else {
+        return Err("the peer machine was not stored".into());
+    };
+    assert_eq!(view.peer_address.as_deref(), Some("127.77.0.1"));
+    Ok(())
+}
+
+#[test]
+fn a_schema_four_registry_is_refused_by_a_schema_three_reader() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("registry.sqlite3");
+    drop(Registry::open(&path)?);
+    rusqlite::Connection::open(&path)?.pragma_update(None, "user_version", 5)?;
+    assert_eq!(
+        Registry::open(&path)
+            .err()
+            .ok_or("a newer schema was opened")?
+            .code,
+        "E_REGISTRY_SCHEMA_NEWER"
+    );
     Ok(())
 }
 
@@ -77,7 +159,7 @@ fn migrating_keeps_a_private_copy_at_the_old_schema() -> TestResult {
     assert_eq!(snapshots(directory.path())?, Vec::<PathBuf>::new());
 
     let mut registry = Registry::open(&path)?;
-    assert_eq!(user_version(&path)?, 3);
+    assert_eq!(user_version(&path)?, 4);
     let copies = snapshots(directory.path())?;
     let [copy] = copies.as_slice() else {
         return Err(format!("expected one copy, found {copies:?}").into());

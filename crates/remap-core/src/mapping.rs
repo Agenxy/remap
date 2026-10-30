@@ -2,11 +2,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::net::Ipv4Addr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     LandingPath, LandingPathError, MappingTarget, NamePattern, RemapName, TemplateNameError,
-    captured_labels,
+    captured_labels, is_peer_machine_address,
 };
 
 /// One user-directed name mapping in an immutable registry revision.
@@ -16,6 +17,7 @@ pub struct Mapping {
     target: MappingTarget,
     enabled: bool,
     landing: Option<LandingPath>,
+    peer_address: Option<Ipv4Addr>,
 }
 
 impl Mapping {
@@ -27,6 +29,7 @@ impl Mapping {
             target,
             enabled: true,
             landing: None,
+            peer_address: None,
         }
     }
 
@@ -78,6 +81,20 @@ impl Mapping {
         service.instantiate(&captures).map(MappingTarget::Peer)
     }
 
+    /// Returns the loopback address the registry allocated to a peer-machine
+    /// mapping (ADR-0033), kept while the mapping exists.
+    #[must_use]
+    pub const fn peer_address(&self) -> Option<Ipv4Addr> {
+        self.peer_address
+    }
+
+    /// Returns a copy carrying the registry's allocated peer-machine address.
+    #[must_use]
+    pub const fn with_peer_address(mut self, address: Option<Ipv4Addr>) -> Self {
+        self.peer_address = address;
+        self
+    }
+
     /// Returns whether the mapping participates in resolution.
     #[must_use]
     pub const fn is_enabled(&self) -> bool {
@@ -104,6 +121,11 @@ pub enum SnapshotError {
     /// A target template is attached to an exact name, which has no labels
     /// to fill it.
     TemplateNeedsWildcard(NamePattern),
+    /// A peer-machine mapping has no allocated address, or another kind of
+    /// mapping has one, or the address is outside the peer-machine range.
+    PeerAddress(NamePattern),
+    /// Two mappings hold the same peer-machine address.
+    DuplicatePeerAddress(Ipv4Addr),
 }
 
 impl Display for SnapshotError {
@@ -120,6 +142,14 @@ impl Display for SnapshotError {
             Self::TemplateNeedsWildcard(pattern) => write!(
                 formatter,
                 "'{pattern}' is an exact name, so its target cannot read labels from it; use a wildcard such as '*.{pattern}'"
+            ),
+            Self::PeerAddress(pattern) => write!(
+                formatter,
+                "'{pattern}' does not hold exactly one peer-machine address inside 127.77.0.0/16"
+            ),
+            Self::DuplicatePeerAddress(address) => write!(
+                formatter,
+                "registry revision allocates peer-machine address {address} twice"
             ),
             Self::DuplicatePattern(pattern) => {
                 write!(
@@ -158,12 +188,19 @@ impl RegistrySnapshot {
     /// same canonical exact or wildcard pattern.
     pub fn new(revision: u64, mut mappings: Vec<Mapping>) -> Result<Self, SnapshotError> {
         let mut patterns = BTreeSet::new();
+        let mut addresses = BTreeSet::new();
         for mapping in &mappings {
             if !patterns.insert(mapping.pattern().clone()) {
                 return Err(SnapshotError::DuplicatePattern(mapping.pattern().clone()));
             }
             if let Some(error) = template_error(mapping) {
                 return Err(error);
+            }
+            check_peer_address(mapping)?;
+            if let Some(address) = mapping.peer_address()
+                && !addresses.insert(address)
+            {
+                return Err(SnapshotError::DuplicatePeerAddress(address));
             }
         }
 
@@ -187,6 +224,18 @@ impl RegistrySnapshot {
     #[must_use]
     pub fn mappings(&self) -> &[Mapping] {
         &self.mappings
+    }
+
+    /// Returns the allocated addresses of the enabled peer-machine mappings,
+    /// the loopback aliases this revision needs reserved (ADR-0033). A
+    /// disabled mapping keeps its allocation but is not in this set.
+    #[must_use]
+    pub fn peer_machine_addresses(&self) -> BTreeSet<Ipv4Addr> {
+        self.mappings
+            .iter()
+            .filter(|mapping| mapping.is_enabled())
+            .filter_map(Mapping::peer_address)
+            .collect()
     }
 
     /// Resolves with exact-first, most-specific-wildcard precedence.
@@ -220,6 +269,17 @@ fn template_error(mapping: &Mapping) -> Option<SnapshotError> {
     (matches!(mapping.pattern(), NamePattern::Exact(_))
         && mapping.target().template_arity().is_some())
     .then(|| SnapshotError::TemplateNeedsWildcard(mapping.pattern().clone()))
+}
+
+/// A peer-machine mapping holds exactly one address in the range, and no
+/// other mapping holds one (ADR-0033).
+fn check_peer_address(mapping: &Mapping) -> Result<(), SnapshotError> {
+    let expected = matches!(mapping.target(), MappingTarget::PeerMachine(_));
+    match mapping.peer_address() {
+        Some(address) if expected && is_peer_machine_address(address) => Ok(()),
+        None if !expected => Ok(()),
+        _ => Err(SnapshotError::PeerAddress(mapping.pattern().clone())),
+    }
 }
 
 fn validate_moves(mappings: &[Mapping]) -> Result<(), SnapshotError> {

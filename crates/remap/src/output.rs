@@ -635,6 +635,7 @@ mod tests {
             host_policy,
             enabled: true,
             updated_revision: 8,
+            peer_address: None,
         }
     }
 }

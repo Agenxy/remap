@@ -4,7 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use hickory_proto::op::{Message, MessageType, Metadata, OpCode, ResponseCode};
 use hickory_proto::rr::rdata::{A, AAAA, CNAME, TXT};
 use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
-use remap_core::{MappingTarget, RemapName};
+use remap_core::{Mapping, MappingTarget, RemapName};
 
 use crate::{NetworkError, RuntimeIdentity, SnapshotStore};
 
@@ -104,7 +104,7 @@ impl DnsEngine {
             &mut response,
             query.name(),
             query.query_type(),
-            mapping.target(),
+            mapping,
             self.policy,
         )?;
         encode(&response)
@@ -189,10 +189,10 @@ fn add_mapping_answers(
     response: &mut Message,
     owner: &Name,
     query_type: RecordType,
-    target: &MappingTarget,
+    mapping: &Mapping,
     policy: DnsPolicy,
 ) -> Result<(), NetworkError> {
-    match target {
+    match mapping.target() {
         MappingTarget::DnsAddress(address) => {
             add_address(response, owner, query_type, *address, policy.answer_ttl);
         }
@@ -204,6 +204,19 @@ fn add_mapping_answers(
                 policy.answer_ttl,
                 RData::CNAME(CNAME(target)),
             ));
+        }
+        // A peer machine's name answers its own reserved loopback address
+        // and no AAAA (ADR-0033); the snapshot guarantees it holds one.
+        MappingTarget::PeerMachine(_) => {
+            if let Some(address) = mapping.peer_address() {
+                add_address(
+                    response,
+                    owner,
+                    query_type,
+                    IpAddr::V4(address),
+                    policy.answer_ttl,
+                );
+            }
         }
         MappingTarget::Http(_) | MappingTarget::Peer(_) | MappingTarget::Moved(_) => {
             if let Some(address) = policy.routed_ipv4 {
@@ -355,6 +368,52 @@ mod tests {
         let answers = Message::from_vec(&bytes)?.answers;
         assert_eq!(answers.len(), 1);
         assert!(answers[0].to_string().contains("127.0.0.1"));
+        Ok(())
+    }
+
+    // A peer machine's name answers only its reserved address: A carries it
+    // at the ordinary TTL, AAAA is NOERROR with no data, and disabling the
+    // mapping hands the name back to the network.
+    #[test]
+    fn peer_machine_answers_its_reserved_address_and_no_aaaa()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let reserved = Ipv4Addr::new(127, 77, 0, 3);
+        let mapping = Mapping::new(
+            NamePattern::parse("pro.agenxy.internal")?,
+            "supgang://a8a37e32?ssh=22,k7=7443".parse()?,
+        )
+        .with_peer_address(Some(reserved));
+        let store = SnapshotStore::empty();
+        assert!(store.publish(RegistrySnapshot::new(4, vec![mapping.clone()])?));
+        let engine = DnsEngine::new(store.clone(), DnsPolicy::default());
+
+        let DnsDecision::Respond(bytes) =
+            engine.decide(&query("pro.agenxy.internal.", RecordType::A)?)?
+        else {
+            return Err("peer machine was forwarded".into());
+        };
+        let answers = Message::from_vec(&bytes)?.answers;
+        assert_eq!(answers.len(), 1);
+        assert!(matches!(answers[0].data, RData::A(address) if address.0 == reserved));
+        assert_eq!(answers[0].ttl, DnsPolicy::default().answer_ttl);
+
+        let DnsDecision::Respond(bytes) =
+            engine.decide(&query("pro.agenxy.internal.", RecordType::AAAA)?)?
+        else {
+            return Err("peer machine AAAA was forwarded".into());
+        };
+        let response = Message::from_vec(&bytes)?;
+        assert_eq!(
+            response.response_code,
+            hickory_proto::op::ResponseCode::NoError
+        );
+        assert_eq!(response.answers, Vec::new());
+
+        assert!(store.publish(RegistrySnapshot::new(5, vec![mapping.with_enabled(false)])?));
+        assert_eq!(
+            engine.decide(&query("pro.agenxy.internal.", RecordType::A)?)?,
+            DnsDecision::Forward
+        );
         Ok(())
     }
 

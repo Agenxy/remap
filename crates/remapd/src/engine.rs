@@ -346,8 +346,15 @@ fn mapping_from_view(view: &MappingView) -> Result<Mapping, Diagnostic> {
     };
     let target = MappingTarget::parse_with_http_policy(&view.target, policy)
         .map_err(|error| snapshot_error(&error.to_string()))?;
+    let peer_address = view
+        .peer_address
+        .as_deref()
+        .map(str::parse::<std::net::Ipv4Addr>)
+        .transpose()
+        .map_err(|_| snapshot_error("a peer-machine address is not an IPv4 address"))?;
     Mapping::new(pattern, target)
         .with_enabled(view.enabled)
+        .with_peer_address(peer_address)
         .with_landing(
             view.landing
                 .as_deref()

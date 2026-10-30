@@ -72,23 +72,27 @@ fn landing_schema_migrates_v1_without_changing_old_receipts() -> TestResult {
     let old_receipt = original.execute(old_command.clone(), Surface::Probe)?;
     drop(original);
     let connection = rusqlite::Connection::open(&path)?;
-    connection
-        .execute_batch("ALTER TABLE mappings DROP COLUMN landing; PRAGMA user_version = 1;")?;
+    connection.execute_batch(
+        "DROP INDEX mappings_peer_address;
+         ALTER TABLE mappings DROP COLUMN peer_address;
+         ALTER TABLE mappings DROP COLUMN landing;
+         PRAGMA user_version = 1;",
+    )?;
     drop(connection);
     let mut registry = Registry::open(&path)?;
     assert_eq!(registry.execute(old_command, Surface::Probe)?, old_receipt);
     let CommandResult::Status(status) = registry.execute(Command::Status, Surface::Probe)? else {
         return Err("wrong status result".into());
     };
-    assert_eq!(status.schema_version, 3);
+    assert_eq!(status.schema_version, 4);
     let connection = rusqlite::Connection::open(&path)?;
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     assert_eq!(
-        version, 3,
+        version, 4,
         "older daemons must see a newer schema before reading records"
     );
     drop(registry);
-    connection.pragma_update(None, "user_version", 4)?;
+    connection.pragma_update(None, "user_version", 5)?;
     assert_eq!(
         Registry::open(&path)
             .err()
