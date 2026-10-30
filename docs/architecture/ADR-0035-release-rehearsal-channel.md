@@ -8,6 +8,11 @@ K7 deck on Solis, reachable over Supgang, as the rehearsal host. This ADR is
 how Remap adopts that contract without weakening ADR-0014, ADR-0029 or
 ADR-0031.
 
+Amended 2026-10-30: the interim rehearsal signer, its custody and rotation,
+and the interim hosting below. The pipeline is built; the key is not. The
+interim signer is proposed and waits for the owner's approval, and until then
+no rehearsal pin is committed and every rehearsal build refuses, saying so.
+
 ## Context
 
 No Remap release since 0.1.0 has been installed the way an outside user would
@@ -44,30 +49,62 @@ package is meant only for the machine that built it ("Do not distribute
 it"). A distributed package whose key anyone with that file could use would
 let them sign what every rehearsal-installed Mac accepts. So:
 
-- **The rehearsal kind has its own key.** It is a dedicated Ed25519 rehearsal
-  signer, never the development key, the owner's key or the Enclave key.
-  Its public half is pinned at `docs/release/remap-rehearsal-signing-key.pub`
-  and marked `remap-release-rehearsal-only`. A release pin carrying either
-  non-release marker is refused, as the development marker already is.
+- **The rehearsal kind has its own key.** It is a dedicated rehearsal signer,
+  never the development key, the owner's key or the release key. Its public
+  half is pinned at `docs/release/remap-rehearsal-signing-key.pub` and marked
+  `remap-release-rehearsal-only`. A release pin carrying either non-release
+  marker is refused, as the development marker already is, and so is a
+  rehearsal pin without its marker or with the development one. The key is
+  P-256 for now and may become Ed25519 at rotation, so the pipeline accepts
+  either type for this pin and verifies by the pin file's own type.
 - **Mixed cases cannot be expressed.** Each installer compiles in exactly one
   of the three pins (`-D REMAP_REHEARSAL_PACKAGE` selects this one). A
   production installer has no code path that accepts a rehearsal manifest,
   and none of the three accepts another kind's. Nothing at runtime chooses
-  between them.
+  between them. Selecting two kinds at once is refused before anything
+  builds.
+- **The rehearsal literal is generated, never committed.** The pin exists
+  only once the owner approves the signer, so the installer's rehearsal
+  branch names `RehearsalSigningPin.publicKey`, which the package build
+  generates from the committed pin into
+  `platforms/macos/Sources/RemapPortableInstaller/Generated/RehearsalSigningPin.swift`
+  for the length of the rehearsal Swift build and then removes. The path is
+  ignored, the file states its provenance, and it compiles to nothing outside
+  a rehearsal build, so release and development builds neither read nor need
+  it. This is the one generated source inside a first-party path; it is there
+  because a Swift target compiles only files under its own directory, and it
+  never exists at rest. A test proves the generated literal equals a fixture
+  pin byte for byte, as the committed literals equal theirs.
 - **The production verification code is not modified.**
 - **A rehearsal says what it is.**
-  - The package file is named `Remap-<version>-<arch>-rehearsal.pkg`.
+  - The package file is named `Remap-<version>-<arch>-rehearsal.pkg`, and
+    `make package-macos` says it is a rehearsal and not to install it as a
+    release.
   - The installer prints that it is installing a rehearsal, not a release.
-  - The installed release manifest records the kind.
+  - The installed generation records the kind as `packageKind` in its
+    install manifest, `.remap-install-manifest.json`. The installer knows the
+    kind because it was compiled for it. The signed release manifest is not
+    touched, and its format is unchanged. A release and a source build record
+    nothing, so their install manifests and generation IDs are byte-identical
+    to before. A rehearsal's kind joins its generation seed, so a release of
+    the same version replaces it as an update instead of finding it current.
   - `remap doctor` and `remap system status` report a rehearsal install as
-    one.
+    one: `rehearsal install, not a release`.
+  - `make install-package-macos` takes a `-rehearsal.pkg` only with
+    `REMAP_REHEARSAL_PACKAGE=1`, verifies it against the rehearsal pin, and
+    never as a release.
 - **Like a development package, it touches no keychain on the build machine**
   and carries no Apple Installer signature, so building it needs no person.
+  Its Enclave key is a CryptoKit blob, not a keychain item, and it signs
+  without Touch ID.
 
 ### The rehearsal root has the production layout
 
-`make rehearsal-publish REMAP_REHEARSAL_ROOT=<directory>` runs the package
-build, then writes:
+`make rehearsal-publish REMAP_REHEARSAL_ROOT=<directory>
+REMAP_REHEARSAL_URL=<url>` checks the root, the URL, that the version is not
+yet published there, and that the working tree has nothing HEAD lacks. It then
+runs the rehearsal package build, archives HEAD with `git archive`, and
+writes:
 
 - `releases/Agenxy/remap/download/v<version>/`, holding the rehearsal
   package, its detached signature, `remap-rehearsal-signing-key.pub` and a
@@ -95,15 +132,74 @@ validator only.
 
 ### Custody of the rehearsal signer
 
-The rehearsal key is created in, and stays in, the rehearsal deck's K7
-keystore (K7 ADR 0099). It is used only inside the clean build guest and is
-short-lived: it is rotated by a new pin commit, and a rotation makes every
-older rehearsal install refuse the newer rehearsal until it is reinstalled.
+#### The interim signer: a Secure Enclave key without user presence
 
-A Mac installed from a rehearsal trusts that key for its updates until a
-production release replaces it. That is the exposure the owner accepts by
-onboarding a fleet machine from a rehearsal. It is bounded by the deck
-keystore's custody, and it ends at the first production update.
+Until the deck keystore can hold it, the rehearsal key is a P-256 key in the
+Secure Enclave of the release-building Mac, created by `remap-release-key
+create --kind rehearsal`:
+
+- Its access control is `.privateKeyUsage` alone, accessible only while that
+  Mac is unlocked. There is no `.userPresence`, so signing a rehearsal asks
+  for no Touch ID and a rehearsal builds unattended. The release key keeps
+  `.userPresence` (ADR-0029); only the kind differs.
+- It never leaves the Enclave. The file the helper writes is the Enclave's
+  device-bound blob, mode 0600, usable only on that Mac.
+- It cannot be mistaken for the release key. CryptoKit Enclave keys carry no
+  keychain application tag, so the label lives in the blob: a rehearsal blob
+  begins with `remap-release-rehearsal-key-v1`, and a release blob is the bare
+  representation ADR-0029 wrote. The helper refuses to load either blob as the
+  other kind, and to create, read or sign with a rehearsal key at a path whose
+  file name lacks `rehearsal`, or a release key at one that has it. Its prompt
+  reason and creation notice name the kind. The Python build checks the label
+  again before it signs.
+- It is selected by `REMAP_REHEARSAL_PACKAGE=1` with `REMAP_REHEARSAL_SE_KEY`
+  naming the blob. Once the helper is built, and before anything is signed,
+  the build requires the blob's public key to equal the rehearsal pin.
+
+The exposure is the one a missing presence requirement implies: **any process
+running as the owner on that Mac, while it is unlocked, can sign a
+rehearsal.** That signature is accepted only by rehearsal installers, never by
+a release installer, and only by Macs that installed a rehearsal. A Mac
+installed from a rehearsal trusts that key for its updates until a production
+release replaces it. That is the exposure the owner accepts by onboarding a
+fleet machine from a rehearsal, and it ends at the first production update.
+
+The creation itself is one command and one commit, written out in
+[`docs/release/REHEARSAL.md`](../release/REHEARSAL.md). It is run only after
+the owner approves this signer.
+
+#### Rotation to the deck keystore
+
+The rehearsal key moves to the rehearsal deck's K7 keystore (K7 ADR 0099,
+kassettes/kassette#2359) once that keystore can sign for Remap. That key may
+be Ed25519. The rotation is:
+
+1. Create the new key in the deck keystore and export only its public line,
+   with the comment `remap-release-rehearsal-only`.
+2. In one commit, replace `docs/release/remap-rehearsal-signing-key.pub` with
+   that line. Nothing else in the pipeline changes for the key type: the pin
+   decides it, and the build refuses any signer whose public key is not the
+   pin.
+3. Build and publish the next rehearsal with the deck's signer.
+4. Every Mac installed from an older rehearsal refuses the new one, because
+   its installer compiled in the old pin. Each reinstalls once, from the new
+   rehearsal or from a production release.
+5. Delete the interim Enclave blob on the release-building Mac. The old pin
+   stays in history beside the rehearsals it signed.
+
+Any rotation, including one forced by losing the release-building Mac, takes
+the same steps.
+
+### Interim hosting
+
+K7 ADR 0167 §6 allows an interim host while the deck is not ready. Until it
+is, the rehearsal root is staged on a LAN host, Solis, as static files served
+over HTTP to the LAN, and the first clean target is a stock Mac rather than a
+deck macOS guest. Each substitution is recorded in that rehearsal's evidence:
+which host served the root, which Mac was the target and how it was made
+clean, and that the guest gate below ran on that Mac instead. A rehearsal run
+this way proves the same six steps; it does not prove anything about the
+deck, and does not say it does.
 
 ### The gate
 
@@ -125,9 +221,10 @@ answer in place of the current "macOS-impossible" entry.
 
 ### What a rehearsal cannot prove
 
-- the Secure Enclave signature and the release pin, because the rehearsal
-  installer compiles in the rehearsal pin instead, the one difference in its
-  bytes;
+- the release key's signature, its presence requirement and the release pin,
+  because the rehearsal installer compiles in the rehearsal pin instead, the
+  one difference in its bytes. The interim rehearsal key does exercise the
+  same Enclave signing path, `remap-release-key sign`, without Touch ID;
 - the Apple Installer signature from `Remap Release Installer`.
 
 Both stay proven at production time: by `make release-check`, by the package

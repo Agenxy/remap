@@ -10,6 +10,7 @@ said below.
 | Secret | Where it lives | What protects it | Used for |
 | --- | --- | --- | --- |
 | Release package signing key (P-256) | The release-building Mac's **Secure Enclave**. The owner keeps a blob file, mode 0600, that only that Enclave can use | The Enclave, which will not export it, and **user presence on every signature**: Touch ID or the login password | The detached `.pkg.sig` of a release package and its inner `release-manifest.json.sig` |
+| Rehearsal package signing key (P-256), interim | The release-building Mac's **Secure Enclave**, once the owner approves it. The owner keeps a blob file, mode 0600, labelled as the rehearsal key, that only that Enclave can use | The Enclave, which will not export it. **No user presence**: any process running as the owner on that Mac, while it is unlocked, can sign a rehearsal | The detached `.pkg.sig` of a rehearsal package and its inner `release-manifest.json.sig`, accepted only by rehearsal installers (ADR-0035) |
 | Development package signing key (Ed25519) | `~/.ssh/remap_release_dev_ed25519`, an ordinary file, mode 0600 | File permissions and whole-disk encryption. **No passphrase.** | The same two signatures on a development package, and nothing else |
 | `Remap Release Installer` (RSA and certificate) | The building Mac's **login keychain** | The login keychain, plus a per-key access list naming which programs may use it | `productsign`, which is what lets another Mac's Installer accept the package |
 | `Remap Build Signing` | The building Mac's **login keychain** | The login keychain | Signing products on a release build |
@@ -19,11 +20,14 @@ said below.
 Two things in the package are not secrets and deserve saying so. The products inside a
 portable package are **ad hoc signed**, which involves no key at all; the installing Mac
 gives them a real identity. And the public half of each signing key is pinned, and the
-two pins are never mixed. The release key is pinned in
+pins are never mixed. The release key is pinned in
 `docs/release/remap-release-signing-key.pub`, in the release branch of the Swift verifier
 in `PortableReleaseManifest.swift`, and by fingerprint in the macOS tutorial, the README,
 and `docs/release/EVIDENCE.md`. The development key is pinned in
 `docs/release/remap-development-signing-key.pub` and in the verifier's development branch.
+The rehearsal key, once created, is pinned in `docs/release/remap-rehearsal-signing-key.pub`,
+marked `remap-release-rehearsal-only`, and compiled into a rehearsal installer from a source
+generated from that pin for each rehearsal build.
 
 The verifier copy ships **inside** every package, because the portable installer that
 runs on the target verifies the release manifest with its own embedded copy, and exactly
@@ -74,8 +78,15 @@ macOS 27 and its public key read back from the blob; a signature from it, which 
 person to answer Touch ID, was not exercised in that change, and is the first thing the
 owner's first release build proves.
 
-That is the only row that meets it, and only the detached signatures may be described as
-hardware backed. The rest of the table does not:
+The interim rehearsal key, once the owner approves it, is held in the same hardware by the
+same helper, `remap-release-key create --kind rehearsal`, but without the presence
+requirement, so that a rehearsal builds with no one at the Mac. It cannot be copied, but any
+process running as the owner on that Mac can use it while the Mac is unlocked. That is
+accepted because only rehearsal installers accept its signatures, and it is bounded by
+rotation to the rehearsal deck's keystore (ADR-0035).
+
+The release key is the only row that meets the standard in full, and only the detached
+signatures may be described as hardware backed. The rest of the table does not:
 
 - `Remap Release Installer` stays an RSA identity in the login keychain. The Secure
   Enclave holds only P-256 keys, and Apple's installer signature requires RSA, so this

@@ -111,15 +111,19 @@ rehearsal installs with exactly the commands above, with two differences:
   instead of the GitHub release. The files are
   `Remap-0.2.0-arm64-rehearsal.pkg`, its `.sig`, and
   `remap-rehearsal-signing-key.pub`.
-- Verify against `remap-rehearsal-signing-key.pub` instead of the release key.
-  Its comment is `remap-release-rehearsal-only`.
+- Verify against the pin file `remap-rehearsal-signing-key.pub` instead of the
+  release key. Its comment is `remap-release-rehearsal-only`.
 
-A rehearsal package is signed by a separate rehearsal key, not the Secure
-Enclave release key. Its installer accepts only that key, and a release
-installer never accepts it. It says it is a rehearsal when it installs, and
-`remap doctor` reports it as one. A later release replaces it as an ordinary
-update. A rehearsal carries no Apple Installer signature. Use rehearsals to
-test a release, not as a release.
+A rehearsal package is signed by a separate rehearsal key, not the release
+key. For now that key is a P-256 key in the Secure Enclave of the
+release-building Mac, which signs without Touch ID; it will later move to the
+rehearsal host's keystore and may become Ed25519. Its installer accepts only
+that key, and a release installer never accepts it. It says it is a rehearsal
+when it installs, and `remap doctor` and `remap system status` report a
+rehearsal install. A later release replaces it as an ordinary update. A
+rehearsal carries no Apple Installer signature. Use rehearsals to test a
+release, not as a release. [`docs/release/REHEARSAL.md`](docs/release/REHEARSAL.md)
+is the procedure.
 
 ## Build and install from source
 

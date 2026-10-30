@@ -87,6 +87,15 @@ installer embeds that key and not the other. `make install-package-macos` checks
 a development package against the development pin only when
 `REMAP_DEVELOPMENT_PACKAGE=1` is set, and anything else against the release pin.
 
+A rehearsal package, `dist/Remap-0.2.0-arm64-rehearsal.pkg`, is a third kind
+(ADR-0035), built with `REMAP_REHEARSAL_PACKAGE=1` and signed by the rehearsal
+Enclave key named by `REMAP_REHEARSAL_SE_KEY`, against its own pin,
+`docs/release/remap-rehearsal-signing-key.pub`. That pin is not committed yet:
+it waits for the owner's approval of the interim signer, and until then every
+rehearsal build refuses. Its installer compiles in only the rehearsal pin,
+selected by `REMAP_REHEARSAL_PACKAGE`, and `make install-package-macos` takes
+it only with `REMAP_REHEARSAL_PACKAGE=1`, never as a release.
+
 The builder refuses to overwrite an existing artifact, verifies the complete
 detached signature after publication, rejects noncanonical and AppleDouble
 members from the unexpanded payload listing, expands the package, checks the

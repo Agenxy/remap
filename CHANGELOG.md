@@ -6,6 +6,27 @@ platform claims separate.
 
 ## Unreleased
 
+- Every release can be rehearsed on its own channel before it ships
+  (ADR-0035). `make package-macos REMAP_REHEARSAL_PACKAGE=1` builds
+  `Remap-<version>-<arch>-rehearsal.pkg`, signed by a rehearsal key named by
+  `REMAP_REHEARSAL_SE_KEY` and verified against
+  `docs/release/remap-rehearsal-signing-key.pub`, which is marked
+  `remap-release-rehearsal-only`. It carries no Apple Installer signature, and
+  its installer compiles in only the rehearsal pin, generated for each
+  rehearsal build and never committed. `remap-release-key create --kind
+  rehearsal` makes the interim key: a Secure Enclave P-256 key that signs
+  without Touch ID, whose blob is labelled so that neither it nor the release
+  key can stand in for the other. The installer says a rehearsal is not a
+  release, the installed generation records the kind outside the signed
+  release manifest, and `remap doctor` and `remap system status` report a
+  rehearsal install. `make install-package-macos` takes a rehearsal only with
+  `REMAP_REHEARSAL_PACKAGE=1`, and never as a release. `make
+  rehearsal-publish` builds a rehearsal of HEAD and publishes it, its
+  signature, the pin and a source archive into a root with the production
+  layout. No rehearsal key or pin exists yet: until the owner approves the
+  signer every rehearsal build refuses, saying so, and
+  `docs/release/REHEARSAL.md` has the one command and one commit that
+  create it.
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
   without restoring anything. The activation record is now written active
