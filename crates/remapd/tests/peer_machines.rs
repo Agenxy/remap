@@ -12,8 +12,8 @@ use hickory_proto::rr::rdata::A;
 use hickory_proto::rr::{Name, RData, RecordType};
 use remap_network::{DnsRuntimeConfig, GatewayRuntimeConfig};
 use remap_protocol::{
-    Change, Command, CommandResult, ControlClient, ControlPaths, HostPolicy,
-    PeerMachineListeners, Surface,
+    Change, Command, CommandResult, ControlClient, ControlPaths, HostPolicy, PeerMachineListeners,
+    Surface,
 };
 use remapd::DaemonConfig;
 use tokio::net::{TcpListener, UdpSocket};
