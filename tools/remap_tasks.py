@@ -127,6 +127,7 @@ PYTHON_PATHS = (
     "tests/python/test_macos_signing.py",
     "tests/python/test_macos_native_setup.py",
     "tests/python/test_macos_portable_package.py",
+    "tests/python/test_macos_product_identity.py",
     "tests/python/test_macos_release_installer_signing.py",
     "tests/python/test_macos_verified_package_install.py",
     "tests/python/test_native_package.py",

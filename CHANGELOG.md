@@ -20,6 +20,11 @@ platform claims separate.
   reason, "Approve the reviewed Remap system changes", landed in it
   capitalised. Signing a release says which of its two signatures each
   prompt is for: the release manifest or the installer package.
+- Every macOS executable Remap builds carries an embedded Info.plist naming
+  it (`Remap Service` for `remapd`, `Remap Installer` for `remap-install`,
+  and so on) under the signing identifier its installers already gave it
+  (ADR-0034). A bare executable had nothing for macOS to name it by but its
+  file name, which is what Login Items and system dialogs showed.
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
