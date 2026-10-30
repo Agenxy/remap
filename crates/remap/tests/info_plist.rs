@@ -17,6 +17,10 @@ fn the_plist_names_the_product_and_its_signing_identifier() {
     ] {
         assert!(PLIST.contains(expected), "Info.plist lacks {expected:?}");
     }
+    // Laid out as plistlib and Xcode write one: entries indented by one tab.
+    assert!(PLIST.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist "));
+    assert!(PLIST.lines().all(|line| !line.starts_with(' ')));
+    assert!(PLIST.ends_with("\n</dict>\n</plist>\n"));
 }
 
 #[cfg(target_os = "macos")]

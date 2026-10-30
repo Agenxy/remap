@@ -32,7 +32,8 @@ platform claims separate.
 - sudo's password prompt says who is asking and for what: "Remap needs
   administrator approval to install its DNS service. Password for <you>:",
   and likewise for update, repair and removal on macOS and Linux, and for
-  `make install-package-macos`. It was a bare "Password:".
+  `make install-package-macos`. It was a bare "Password:". On Linux the
+  prompt is passed only to the original sudo; sudo-rs keeps its own question.
 - Before macOS asks to change certificate trust settings for a Remap signing
   identity, the build says which certificate the dialog is about, what the
   trust lets it do, and what to choose. The dialog itself names neither, and

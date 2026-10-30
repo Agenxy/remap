@@ -17,9 +17,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from tools.remap_lifecycle_approval import SUDO
 from tools.remap_linux_protocol import terminal_text
 
-SUDO = Path("/usr/bin/sudo")
 INSTALL = Path("/usr/bin/install")
 MKDIR = Path("/usr/bin/mkdir")
 UNLINK = Path("/usr/bin/unlink")
@@ -75,6 +75,28 @@ class SealedHelperSource:
 
     path: Path
     descriptor: int
+
+
+def sudo_expands_prompt() -> bool:
+    """Whether this host's sudo is the original one, which expands `-p` escapes.
+
+    Ubuntu now ships sudo-rs as its system sudo. It accepts `-p`, but whether it
+    expands `%p` was not established when this was written, and a prompt that
+    reads "Password for %p:" is worse than sudo's own. So the prompt is passed
+    only to a sudo that names itself the original ("Sudo version ..."); any
+    other, sudo-rs included, keeps its default question.
+    """
+    try:
+        result = subprocess.run(
+            (str(SUDO), "--version"),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and result.stdout.startswith("Sudo version ")
 
 
 def verify_bootstrap_environment() -> None:

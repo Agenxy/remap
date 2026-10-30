@@ -20,9 +20,14 @@ PACKAGE = ROOT / "platforms/macos/Package.swift"
 SWIFT_PRODUCT = re.compile(
     r'\.executable\(name: "([a-z-]+)", targets: \["([A-Za-z]+)"\]\)'
 )
+EXECUTABLE_TARGET = re.compile(
+    r'^        \.executableTarget\(\n            name: "([A-Za-z]+)",\n(.*?)^        \)',
+    re.MULTILINE | re.DOTALL,
+)
+EMBEDDED_PLIST = re.compile(r'embeddedInfoPlist\("([A-Za-z]+)"\)')
 RUST_PRODUCTS = {"remap": "crates/remap/build.rs", "remapd": "crates/remapd/build.rs"}
 RUST_CONSTANT = re.compile(
-    r'^const (IDENTIFIER|NAME): &str = "([^"]+)";$', re.MULTILINE
+    r'^const (IDENTIFIER|NAME|COPYRIGHT): &str = "([^"]+)";$', re.MULTILINE
 )
 
 
@@ -33,6 +38,17 @@ def _swift_helpers() -> dict[str, str]:
     bundle of its own, does not match.
     """
     return dict(SWIFT_PRODUCT.findall(PACKAGE.read_text(encoding="utf-8")))
+
+
+def _embedded_plists() -> dict[str, list[str]]:
+    """Each executable target and the plists its own block embeds."""
+    blocks = EXECUTABLE_TARGET.finditer(PACKAGE.read_text(encoding="utf-8"))
+    return {
+        block.group(1): [
+            plist.group(1) for plist in EMBEDDED_PLIST.finditer(block.group(2))
+        ]
+        for block in blocks
+    }
 
 
 def _swift_plist(target: str) -> dict[str, object]:
@@ -49,7 +65,7 @@ class MacOSProductIdentityTests(unittest.TestCase):
     def test_every_swift_helper_embeds_a_plist_naming_its_signing_identifier(
         self,
     ) -> None:
-        manifest = PACKAGE.read_text(encoding="utf-8")
+        embedded = _embedded_plists()
         helpers = _swift_helpers()
         self.assertEqual(
             set(helpers) | set(RUST_PRODUCTS),
@@ -65,7 +81,15 @@ class MacOSProductIdentityTests(unittest.TestCase):
                 self.assertIsInstance(name, str)
                 self.assertTrue(str(name).startswith("Remap "))
                 self.assertEqual(document["CFBundleDisplayName"], name)
-                self.assertIn(f'embeddedInfoPlist("{target}")', manifest)
+                # Its own target block embeds its own plist, and no other.
+                self.assertEqual(embedded[target], [target])
+
+    def test_no_executable_target_embeds_another_targets_plist(self) -> None:
+        embedded = _embedded_plists()
+        self.assertEqual(embedded.pop("RemapApp"), [])
+        self.assertEqual(
+            embedded, {target: [target] for target in _swift_helpers().values()}
+        )
 
     def test_every_rust_executable_embeds_its_signing_identifier(self) -> None:
         for product, build_script in RUST_PRODUCTS.items():
@@ -89,8 +113,7 @@ class MacOSProductIdentityTests(unittest.TestCase):
                 )
         for build_script in RUST_PRODUCTS.values():
             with self.subTest(build_script=build_script):
-                source = (ROOT / build_script).read_text(encoding="utf-8")
-                self.assertIn(f"<string>{COPYRIGHT}</string>", source)
+                self.assertEqual(_rust_constants(build_script)["COPYRIGHT"], COPYRIGHT)
 
     def test_every_swift_plist_declares_the_product_version(self) -> None:
         verify_native_plist_versions(ROOT, PRODUCT_VERSION)

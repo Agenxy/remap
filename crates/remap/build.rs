@@ -9,6 +9,7 @@
 
 use std::env;
 use std::error::Error;
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -17,6 +18,8 @@ use std::path::PathBuf;
 const IDENTIFIER: &str = "org.agenxy.Remap.cli";
 /// The name macOS shows for this executable.
 const NAME: &str = "Remap CLI";
+/// The copyright every Remap executable and the app state.
+const COPYRIGHT: &str = "Copyright 2026 Agenxy. Licensed under GPL-3.0-or-later.";
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=build.rs");
@@ -38,7 +41,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn info_plist(version: &str) -> io::Result<String> {
-    for value in [IDENTIFIER, NAME, version] {
+    let entries = [
+        ("CFBundleDevelopmentRegion", "en"),
+        ("CFBundleDisplayName", NAME),
+        ("CFBundleIdentifier", IDENTIFIER),
+        ("CFBundleInfoDictionaryVersion", "6.0"),
+        ("CFBundleName", NAME),
+        ("CFBundleShortVersionString", version),
+        ("CFBundleVersion", version),
+        ("NSHumanReadableCopyright", COPYRIGHT),
+    ];
+    let mut plist = String::from(concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" ",
+        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n",
+        "<plist version=\"1.0\">\n",
+        "<dict>\n",
+    ));
+    for (key, value) in entries {
         // Every value is written into XML unescaped, so none may need escaping.
         if !value
             .bytes()
@@ -48,8 +68,9 @@ fn info_plist(version: &str) -> io::Result<String> {
                 "{value:?} cannot be written into Info.plist unescaped"
             )));
         }
+        writeln!(plist, "\t<key>{key}</key>\n\t<string>{value}</string>")
+            .map_err(io::Error::other)?;
     }
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n         <plist version=\"1.0\">\n         <dict>\n         \t<key>CFBundleDevelopmentRegion</key>\n\t<string>en</string>\n         \t<key>CFBundleDisplayName</key>\n\t<string>{NAME}</string>\n         \t<key>CFBundleIdentifier</key>\n\t<string>{IDENTIFIER}</string>\n         \t<key>CFBundleInfoDictionaryVersion</key>\n\t<string>6.0</string>\n         \t<key>CFBundleName</key>\n\t<string>{NAME}</string>\n         \t<key>CFBundleShortVersionString</key>\n\t<string>{version}</string>\n         \t<key>CFBundleVersion</key>\n\t<string>{version}</string>\n         \t<key>NSHumanReadableCopyright</key>\n\t<string>Copyright 2026 Agenxy. Licensed under GPL-3.0-or-later.</string>\n         </dict>\n         </plist>\n"
-    ))
+    plist.push_str("</dict>\n</plist>\n");
+    Ok(plist)
 }

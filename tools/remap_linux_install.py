@@ -15,14 +15,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, cast
 
-from tools.remap_lifecycle_approval import administrator_command, confirm_approval
+from tools.remap_lifecycle_approval import SUDO, administrator_command, confirm_approval
 from tools.remap_linux_bootstrap import (
     BOOTSTRAP_HELPER_NAME,
-    SUDO,
     TrustedHelper,
     bootstrap_helper,
     capture_trusted_helper,
     open_verified_helper,
+    sudo_expands_prompt,
     verify_bootstrap_environment,
     verify_pinned_helper,
     verify_root_owned_ancestry,
@@ -419,7 +419,7 @@ def uninstall(root: Path) -> None:
 
 def authorize_administrator(root: Path, operation: str) -> None:
     """Acquire one visible, time-limited sudo authorization ticket."""
-    _run(administrator_command(operation), root)
+    _run(administrator_command(operation, prompt=sudo_expands_prompt()), root)
 
 
 def _selected_helper(status: LinuxStatus, bootstrap: TrustedHelper) -> TrustedHelper:

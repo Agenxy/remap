@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import re
 import sys
+from pathlib import Path
 from typing import TextIO
 
 APPROVAL_TOKEN_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 APPROVAL_PREFIX_LENGTH = 12
 MAX_APPROVAL_LINE_CHARACTERS = 96
-SUDO = "/usr/bin/sudo"
+# The one sudo every Remap lifecycle tool runs, on macOS and on Linux.
+SUDO = Path("/usr/bin/sudo")
 # What an administrator password approves, for each operation that asks for one.
 ADMINISTRATOR_PURPOSES = {
     "install": "install its DNS service",
@@ -33,9 +35,16 @@ def administrator_prompt(operation: str) -> str:
     )
 
 
-def administrator_command(operation: str, *command: str) -> tuple[str, ...]:
-    """Run `command` through sudo with that prompt, or validate sudo without one."""
-    return (SUDO, "-p", administrator_prompt(operation), *(command or ("-v",)))
+def administrator_command(
+    operation: str, *command: str, prompt: bool = True
+) -> tuple[str, ...]:
+    """Run `command` through sudo with that prompt, or validate sudo without one.
+
+    `prompt=False` leaves sudo's own question in place, for a sudo that might
+    not expand `%p` (see `remap_linux_bootstrap.sudo_expands_prompt`).
+    """
+    question = ("-p", administrator_prompt(operation)) if prompt else ()
+    return (str(SUDO), *question, *(command or ("-v",)))
 
 
 def confirm_approval(
