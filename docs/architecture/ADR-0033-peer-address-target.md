@@ -85,8 +85,9 @@ peer's address.
   to the named service on that peer. The peer is resolved per connection.
 - **Supgang authorizes.** Whether a stream opens is the peer's owner's
   exposure, judged by Supgang. Remap adds no authority. A refused or failed
-  stream closes the connection, and the gateway's log names the mapping, the
-  service and why.
+  stream closes the connection. The gateway's log names only the service and
+  the cause, never a mapped name or address (PRIVACY.md). `remap status` and
+  `remap doctor` show the owner which mapping it was, with a per-cause count.
 - **TCP only.** UDP and unexposed services are not reachable. The help text,
   `remap://help` and the CLI manual say so.
 
