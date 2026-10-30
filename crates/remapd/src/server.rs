@@ -12,7 +12,7 @@ use std::time::Duration;
 use nix::fcntl::{Flock, FlockArg};
 use remap_network::{
     DnsBindings, DnsRuntime, DnsRuntimeConfig, GatewayBindings, GatewayRuntime,
-    GatewayRuntimeConfig, NetworkError, SnapshotStore,
+    GatewayRuntimeConfig, NetworkError, PeerMachineListeners, SnapshotStore,
 };
 use remap_protocol::{
     ControlPaths, ControlRequest, ControlResponse, DEFAULT_DAEMON_DRAIN_GRACE, Diagnostic,
@@ -447,6 +447,17 @@ fn spawn_network_services(
         let runtime_shutdown = shutdown.subscribe();
         services.spawn(async move {
             gateway
+                .serve(runtime_shutdown)
+                .await
+                .map_err(network_diagnostic)
+        });
+        // Peer-machine listeners run beside the HTTP gateway, each bound
+        // only to its mapping's reserved address (ADR-0033).
+        let listeners =
+            PeerMachineListeners::new(network.snapshots.clone(), engine.peer_machine_status());
+        let runtime_shutdown = shutdown.subscribe();
+        services.spawn(async move {
+            listeners
                 .serve(runtime_shutdown)
                 .await
                 .map_err(network_diagnostic)

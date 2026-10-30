@@ -3,11 +3,12 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use remap_core::{HostHeaderPolicy, Mapping, MappingTarget, NamePattern, RegistrySnapshot};
-use remap_network::RuntimeIdentity;
+use remap_network::{ListenerState, PeerMachineStatus, RuntimeIdentity};
 use remap_protocol::{
     CONTROL_PROTOCOL_VERSION, Command, CommandResult, ControlRequest, ControlResponse, Diagnostic,
-    HealthChallengeResult, HostPolicy, MAX_MAPPING_COUNT, MAX_MAPPING_PAGE_SIZE,
-    MAX_REVISION_WAIT_MS, MappingView, RevisionNotice, Surface,
+    HealthChallengeResult, HostPolicy, MAX_LISTENER_FAILURES, MAX_MAPPING_COUNT,
+    MAX_MAPPING_PAGE_SIZE, MAX_REVISION_WAIT_MS, MappingView, PeerMachineListenerFailure,
+    PeerMachineListeners, RevisionNotice, Surface,
 };
 use remap_registry::Registry;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -32,6 +33,7 @@ pub struct Engine {
     state: Arc<EngineState>,
     revision: watch::Receiver<u64>,
     identity: RuntimeIdentity,
+    peer_machines: PeerMachineStatus,
 }
 
 #[derive(Debug)]
@@ -75,6 +77,7 @@ impl Engine {
             }),
             revision,
             identity,
+            peer_machines: PeerMachineStatus::default(),
         })
     }
 
@@ -113,6 +116,9 @@ impl Engine {
         let mut response = response_receiver.await.map_err(|_| writer_unavailable())?;
         if advisable && let Some(result) = response.result.as_mut() {
             crate::reachability::advise(result).await;
+        }
+        if let Some(CommandResult::Status(status)) = response.result.as_mut() {
+            status.peer_machine_listeners = self.peer_machine_summary();
         }
         Ok(response)
     }
@@ -165,6 +171,41 @@ impl Engine {
     #[must_use]
     pub fn subscribe_revision(&self) -> watch::Receiver<u64> {
         self.revision.clone()
+    }
+
+    /// Returns where the peer-machine listeners report, read by status.
+    #[must_use]
+    pub(crate) fn peer_machine_status(&self) -> PeerMachineStatus {
+        self.peer_machines.clone()
+    }
+
+    /// Summarizes the peer-machine listeners for status (ADR-0033), or
+    /// `None` when none run.
+    fn peer_machine_summary(&self) -> Option<PeerMachineListeners> {
+        let reports = self.peer_machines.reports();
+        if reports.is_empty() {
+            return None;
+        }
+        let failures: Vec<PeerMachineListenerFailure> = reports
+            .iter()
+            .filter_map(|report| match report.state {
+                ListenerState::Listening(_) => None,
+                ListenerState::NotListening(cause) => Some(PeerMachineListenerFailure {
+                    pattern: report.pattern.clone(),
+                    service: report.service.clone(),
+                    address: report.address.to_string(),
+                    port: report.port,
+                    cause: cause.token().to_owned(),
+                    detail: cause.explanation().to_owned(),
+                }),
+            })
+            .collect();
+        let not_listening = failures.len();
+        Some(PeerMachineListeners {
+            listening: u64::try_from(reports.len() - not_listening).unwrap_or(u64::MAX),
+            not_listening: u64::try_from(not_listening).unwrap_or(u64::MAX),
+            failures: failures.into_iter().take(MAX_LISTENER_FAILURES).collect(),
+        })
     }
 
     /// Returns the shared identity for this daemon's DNS and HTTP runtimes.

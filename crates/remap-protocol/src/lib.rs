@@ -14,8 +14,9 @@ pub use client::ControlClient;
 pub use diagnostic::Diagnostic;
 pub use model::{
     ApplyResult, Change, ChangeEffect, Command, CommandResult, HealthChallengeResult, HostPolicy,
-    ListResult, MAX_ATOMIC_CHANGE_COUNT, MAX_MAPPING_COUNT, MAX_MAPPING_PAGE_SIZE,
-    MAX_REVISION_WAIT_MS, MAX_TARGET_BYTES, MappingView, PreviewResult, RegistryStatus,
+    ListResult, MAX_ATOMIC_CHANGE_COUNT, MAX_LISTENER_FAILURES, MAX_MAPPING_COUNT,
+    MAX_MAPPING_PAGE_SIZE, MAX_REVISION_WAIT_MS, MAX_TARGET_BYTES, MappingView,
+    PeerMachineListenerFailure, PeerMachineListeners, PreviewResult, RegistryStatus,
     ResolutionResult, RevisionNotice, Surface, ValidationResult,
 };
 pub use paths::ControlPaths;
