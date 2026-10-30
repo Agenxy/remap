@@ -25,6 +25,10 @@ platform claims separate.
   and so on) under the signing identifier its installers already gave it
   (ADR-0034). A bare executable had nothing for macOS to name it by but its
   file name, which is what Login Items and system dialogs showed.
+- The native app's System page no longer calls every installation a
+  "source build" or points at a DNS System Extension that Remap does not
+  have. It says Remap manages one ordinary macOS resolver scope, which is
+  true of source and package installations alike.
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
