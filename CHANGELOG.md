@@ -52,6 +52,9 @@ platform claims separate.
   Resolver" rather than "Agenxy Remap", and every dispatch queue Remap creates
   is labelled under `org.agenxy.Remap`, the identifier family of its launchd
   jobs and signatures.
+- Remap.app's Info.plist carries its copyright, so Finder's Get Info and the
+  About window show "Copyright 2026 Agenxy. Licensed under GPL-3.0-or-later."
+  instead of nothing. Every helper's embedded plist says the same.
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed

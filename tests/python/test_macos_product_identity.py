@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from typing import cast
 
+from tools.remap_app import COPYRIGHT
 from tools.remap_macos_portable_package import PRODUCT_IDENTIFIERS
 from tools.remap_package import verify_native_plist_versions
 from tools.remap_tasks import PRODUCT_VERSION
@@ -79,6 +80,17 @@ class MacOSProductIdentityTests(unittest.TestCase):
         ]
         names.extend(_rust_constants(path)["NAME"] for path in RUST_PRODUCTS.values())
         self.assertEqual(len(names), len(set(names)))
+
+    def test_every_executable_states_the_same_copyright_as_the_app(self) -> None:
+        for target in _swift_helpers().values():
+            with self.subTest(target=target):
+                self.assertEqual(
+                    _swift_plist(target)["NSHumanReadableCopyright"], COPYRIGHT
+                )
+        for build_script in RUST_PRODUCTS.values():
+            with self.subTest(build_script=build_script):
+                source = (ROOT / build_script).read_text(encoding="utf-8")
+                self.assertIn(f"<string>{COPYRIGHT}</string>", source)
 
     def test_every_swift_plist_declares_the_product_version(self) -> None:
         verify_native_plist_versions(ROOT, PRODUCT_VERSION)
