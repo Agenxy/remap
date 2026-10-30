@@ -33,26 +33,36 @@ package-macos`, and keeps them apart at compile time (ADR-0029):
 
 ## Decision
 
-### The rehearsal kind is the development kind, published
+### A third kind: rehearsal
 
-A rehearsal of release *N* is a development package of *N*, built by the same
-`make package-macos` from the same commit, with the release's version. It is
-the only kind of artifact published to a rehearsal root.
+A rehearsal of release *N* is a **rehearsal package** of *N*. It is built by
+the same `make package-macos`, from the same commit, with the release's
+version. It is the only kind of artifact published to a rehearsal root.
 
-- **Mixed cases cannot be expressed.** Each installer compiles in exactly
-  one pin, so a production installer has no code path that accepts a
-  rehearsal manifest, and a rehearsal installer has none that accepts a
-  release one. Nothing at runtime chooses between them.
+The development kind is not reused. Its key is an unprotected file, and its
+package is meant only for the machine that built it ("Do not distribute
+it"). A distributed package whose key anyone with that file could use would
+let them sign what every rehearsal-installed Mac accepts. So:
+
+- **The rehearsal kind has its own key.** It is a dedicated Ed25519 rehearsal
+  signer, never the development key, the owner's key or the Enclave key.
+  Its public half is pinned at `docs/release/remap-rehearsal-signing-key.pub`
+  and marked `remap-release-rehearsal-only`. A release pin carrying either
+  non-release marker is refused, as the development marker already is.
+- **Mixed cases cannot be expressed.** Each installer compiles in exactly one
+  of the three pins (`-D REMAP_REHEARSAL_PACKAGE` selects this one). A
+  production installer has no code path that accepts a rehearsal manifest,
+  and none of the three accepts another kind's. Nothing at runtime chooses
+  between them.
 - **The production verification code is not modified.**
 - **A rehearsal says what it is.**
   - The package file is named `Remap-<version>-<arch>-rehearsal.pkg`.
-  - The installer prints that it is installing a rehearsal, not a release,
-    signed by a key held in a file.
+  - The installer prints that it is installing a rehearsal, not a release.
   - The installed release manifest records the kind.
   - `remap doctor` and `remap system status` report a rehearsal install as
     one.
-  - People only ever see the word *rehearsal*. *Development* stays a word
-    inside the build.
+- **Like a development package, it touches no keychain on the build machine**
+  and carries no Apple Installer signature, so building it needs no person.
 
 ### The rehearsal root has the production layout
 
@@ -60,7 +70,7 @@ the only kind of artifact published to a rehearsal root.
 build, then writes:
 
 - `releases/Agenxy/remap/download/v<version>/`, holding the rehearsal
-  package, its detached signature, `remap-development-signing-key.pub` and a
+  package, its detached signature, `remap-rehearsal-signing-key.pub` and a
   `SHA256SUMS` file. This is the GitHub release asset layout.
 - `api/repos/Agenxy/remap/releases/`: `latest` and `tags/v<version>` JSON in
   GitHub's shape, naming those assets.
@@ -75,7 +85,7 @@ beside K7's, as its own `remap/` root with its own signer.
 
 The README keeps its commands and names one override: replace
 `https://github.com/Agenxy/remap/releases/download` with the rehearsal root's
-`releases/Agenxy/remap/download`, and verify against the development pin
+`releases/Agenxy/remap/download`, and verify against the rehearsal pin
 instead of the release pin. The tap is tapped from the rehearsal root's
 `homebrew/`. With no override, every command is the production command.
 
@@ -85,10 +95,15 @@ validator only.
 
 ### Custody of the rehearsal signer
 
-The Ed25519 key is a file today, in `~/.ssh` on the release-building Mac
-(docs/security/SECRETS.md). On the rehearsal deck it moves into that deck's
-K7 keystore (K7 ADR 0099) and is used only inside the clean build guest. It is
-never the owner's key, never the Enclave key, and never a release identity.
+The rehearsal key is created in, and stays in, the rehearsal deck's K7
+keystore (K7 ADR 0099). It is used only inside the clean build guest and is
+short-lived: it is rotated by a new pin commit, and a rotation makes every
+older rehearsal install refuse the newer rehearsal until it is reinstalled.
+
+A Mac installed from a rehearsal trusts that key for its updates until a
+production release replaces it. That is the exposure the owner accepts by
+onboarding a fleet machine from a rehearsal. It is bounded by the deck
+keystore's custody, and it ends at the first production update.
 
 ### The gate
 
@@ -110,7 +125,9 @@ answer in place of the current "macOS-impossible" entry.
 
 ### What a rehearsal cannot prove
 
-- the Secure Enclave signature and the release pin;
+- the Secure Enclave signature and the release pin, because the rehearsal
+  installer compiles in the rehearsal pin instead, the one difference in its
+  bytes;
 - the Apple Installer signature from `Remap Release Installer`.
 
 Both stay proven at production time: by `make release-check`, by the package
