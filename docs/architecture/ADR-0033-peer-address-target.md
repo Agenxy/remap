@@ -277,6 +277,60 @@ the gateway.
 - `crates/remapd/tests/peer_machines.rs`: through a live daemon, the DNS
   answer and the listener in status.
 
+## Amendment after review, 30 October
+
+An independent review of steps 1–3 found that a user-level listener cannot
+carry the headline case, and that failure sent traffic somewhere else.
+
+- **A non-root process cannot bind a port below 1024 on a specific address.**
+  Measured on macOS 27.2, as uid 501: `127.0.0.1:22` gives EACCES. As root
+  with `SO_REUSEADDR`, the same bind succeeds beside sshd's `*:22`.
+- **A failed bind misdirected traffic.** The name kept answering, and Remote
+  Login's wildcard sshd accepted connections to the alias, so
+  `ssh <name>` reached the local Mac instead of the peer.
+
+Decided:
+
+1. **On macOS, root creates the listening sockets.**
+   - For each reservation, the root supervisor binds every listed port on its
+     alias, with `SO_REUSEADDR`, as soon as it adds the alias.
+   - It passes the listening descriptors to `remapd` over the system socket
+     with `SCM_RIGHTS`. `remapd` adopts a descriptor only if `getsockname`
+     shows exactly the reserved address and port and it is a listening TCP
+     socket.
+   - The `loopback_reservations` answer therefore carries each address with
+     its ports, still never a name, peer or service.
+   - Root binding as soon as the alias exists also closes the window in which
+     another account could bind the address first. If root's bind fails
+     because one already did, that mapping is not held.
+2. **A name answers only while every one of its ports is held by Remap.**
+   Otherwise its A query gets SERVFAIL, and status names the unheld port and
+   why. This holds on every platform. A name never reaches a local service in
+   place of the peer.
+3. **On Linux, `remapd` binds its own listeners.** A port below 1024 needs
+   `CAP_NET_BIND_SERVICE`. A port a wildcard listener already holds cannot be
+   bound, and point 2 then keeps the name from answering.
+4. **Rebinding.** DNS drops any upstream answer inside `127.77.0.0/16`, so a
+   remote name cannot be made to point at a reserved address through Remap's
+   resolver. A client that bypasses the system resolver, such as a browser
+   using its own DNS, can still reach a reserved port from a page. Every
+   listed port is therefore treated as reachable by anything on this Mac that
+   can open a loopback TCP connection, including pages and other accounts.
+   The help text says so, and the owner should list only services the peer
+   protects itself. Checking the caller's account per connection is left for
+   a later decision. It needs a kernel connection-table read, which on macOS
+   is a private structure.
+5. **Robustness.**
+   - The keeper and deactivation serialise on a lock.
+   - Deactivation never fails because a release failed: it logs instead.
+   - The reservation record carries the boot session, so entries from an
+     earlier boot are discarded rather than adopted.
+   - Control-protocol replies are decoded tolerantly, so a client one release
+     older still reads them.
+   - Supgang's socket is looked up per connection, not once at start.
+   - Connections have an idle timeout and a per-listener cap.
+   - The refusal log is rate-limited, and the counters keep the totals.
+
 ## Consequences
 
 - A machine's name works at home and away, and its DNS answer never changes.
