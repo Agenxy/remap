@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import unquote, urlsplit
 
+from tools.remap_package import cargo_target_directory
+
 ROOT = Path(__file__).resolve().parent.parent
 MARKDOWN_EXCLUDED_COMPONENTS = frozenset(
     {
@@ -92,7 +94,13 @@ def check() -> None:
     run(("cargo", "build", "--locked", "--quiet", "-p", "remap"))
     with tempfile.TemporaryDirectory(prefix="remap-manpages-") as directory:
         destination = Path(directory)
-        run((str(ROOT / "target/debug/remap"), "manpages", str(destination)))
+        run(
+            (
+                str(cargo_target_directory(ROOT) / "debug/remap"),
+                "manpages",
+                str(destination),
+            )
+        )
         manpages = sorted(destination.glob("*.1"))
         if len(manpages) != 22:
             raise RuntimeError(f"generated {len(manpages)} manpages; expected 22")

@@ -14,7 +14,7 @@ use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use remap_core::{
     HostHeaderPolicy, HttpScheme, HttpUpstream, LandingPath, MappingTarget, MovedTarget,
-    PeerService, PeerTransport, RemapName,
+    PeerService, PeerTransport, RemapName, TemplateNameError,
 };
 use rustls::pki_types::ServerName;
 use tokio::sync::OwnedSemaphorePermit;
@@ -35,7 +35,9 @@ pub(crate) type ProxyClient = Client<HttpsConnector<SelfRejectingConnector>, Inc
 struct Matched {
     /// The mapping's canonical pattern, which every later error names.
     pattern: String,
-    target: MappingTarget,
+    /// The target this name routes to, or why the name cannot fill the
+    /// mapping's template (ADR-0032), reported with the pattern.
+    target: Result<MappingTarget, TemplateNameError>,
     landing: Option<LandingPath>,
 }
 
@@ -80,7 +82,21 @@ async fn forward(
     matched: Matched,
     router: &Router,
 ) -> Result<Response<ProxyBody>, RouteError> {
-    let (upstream, dialer) = match matched.target {
+    let target = matched.target.map_err(|error| {
+        RouteError::new(
+            StatusCode::NOT_FOUND,
+            "E_GATEWAY_TEMPLATE_NAME",
+            match error {
+                TemplateNameError::LabelCount { .. } => {
+                    "This name has a different number of labels before the mapping's suffix than its target template reads."
+                }
+                TemplateNameError::Field(_) => {
+                    "A label of this name is not a valid Supgang peer or service name where its target template places it."
+                }
+            },
+        )
+    })?;
+    let (upstream, dialer) = match target {
         MappingTarget::Moved(target) => return Ok(moved_response(&request, &target)),
         MappingTarget::Http(upstream) => (upstream, Dialer::Pooled(router.client.clone())),
         MappingTarget::Peer(service) => match service.transport() {
@@ -153,7 +169,7 @@ fn matched_mapping(
     })?;
     Ok(Matched {
         pattern: mapping.pattern().to_string(),
-        target: mapping.target().clone(),
+        target: mapping.target_for(&name),
         landing: mapping.landing().cloned(),
     })
 }
