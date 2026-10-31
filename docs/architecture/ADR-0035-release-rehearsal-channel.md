@@ -304,7 +304,9 @@ these as known gaps and never claims them.
 - Rehearsal builds need no person at all: no Touch ID, no keychain item, no
   trust dialog. The owner's sitting is needed only for production signing.
 - A Mac may run a rehearsal install, for example during onboarding. The
-  production release then replaces it as an ordinary update, verified by the
-  new package's own compiled-in pin.
-- The README gains one documented override. Its production commands are
-  unchanged.
+  production release then replaces it as an ordinary update, trusted because
+  its signature verifies against the published release fingerprint, not
+  because of anything the rehearsal install recorded.
+- The README gains a rehearsal section that publishes the rehearsal
+  fingerprint and links to the written-out rehearsal sequence. Its production
+  commands are unchanged.
