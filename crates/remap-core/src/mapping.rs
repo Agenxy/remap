@@ -4,7 +4,10 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{LandingPath, LandingPathError, MappingTarget, NamePattern, RemapName};
+use crate::{
+    LandingPath, LandingPathError, MappingTarget, NamePattern, RemapName, TemplateNameError,
+    captured_labels,
+};
 
 /// One user-directed name mapping in an immutable registry revision.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -58,6 +61,23 @@ impl Mapping {
         Ok(self)
     }
 
+    /// Returns the target this mapping routes `name` to: the target itself, or
+    /// for a template (ADR-0032) the target filled from the name's labels.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TemplateNameError`] when `name` cannot fill the template.
+    pub fn target_for(&self, name: &RemapName) -> Result<MappingTarget, TemplateNameError> {
+        let MappingTarget::Peer(service) = &self.target else {
+            return Ok(self.target.clone());
+        };
+        if service.template_arity().is_none() {
+            return Ok(self.target.clone());
+        }
+        let captures = captured_labels(&self.pattern, name).unwrap_or_default();
+        service.instantiate(&captures).map(MappingTarget::Peer)
+    }
+
     /// Returns whether the mapping participates in resolution.
     #[must_use]
     pub const fn is_enabled(&self) -> bool {
@@ -81,6 +101,9 @@ pub enum SnapshotError {
     MovedChain(NamePattern),
     /// Two records claim the same exact pattern in one revision.
     DuplicatePattern(NamePattern),
+    /// A target template is attached to an exact name, which has no labels
+    /// to fill it.
+    TemplateNeedsWildcard(NamePattern),
 }
 
 impl Display for SnapshotError {
@@ -93,6 +116,10 @@ impl Display for SnapshotError {
             Self::MovedChain(pattern) => write!(
                 formatter,
                 "moved mapping '{pattern}' cannot point at another moved mapping"
+            ),
+            Self::TemplateNeedsWildcard(pattern) => write!(
+                formatter,
+                "'{pattern}' is an exact name, so its target cannot read labels from it; use a wildcard such as '*.{pattern}'"
             ),
             Self::DuplicatePattern(pattern) => {
                 write!(
@@ -134,6 +161,9 @@ impl RegistrySnapshot {
         for mapping in &mappings {
             if !patterns.insert(mapping.pattern().clone()) {
                 return Err(SnapshotError::DuplicatePattern(mapping.pattern().clone()));
+            }
+            if let Some(error) = template_error(mapping) {
+                return Err(error);
             }
         }
 
@@ -183,6 +213,13 @@ impl RegistrySnapshot {
                 }
         })
     }
+}
+
+/// Refuses a template on an exact pattern (ADR-0032).
+fn template_error(mapping: &Mapping) -> Option<SnapshotError> {
+    (matches!(mapping.pattern(), NamePattern::Exact(_))
+        && mapping.target().template_arity().is_some())
+    .then(|| SnapshotError::TemplateNeedsWildcard(mapping.pattern().clone()))
 }
 
 fn validate_moves(mappings: &[Mapping]) -> Result<(), SnapshotError> {
