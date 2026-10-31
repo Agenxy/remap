@@ -10,7 +10,7 @@ said below.
 | Secret | Where it lives | What protects it | Used for |
 | --- | --- | --- | --- |
 | Release package signing key (P-256) | The release-building Mac's **Secure Enclave**. The owner keeps a blob file, mode 0600, that only that Enclave can use | The Enclave, which will not export it, and **user presence on every signature**: Touch ID or the login password | The detached `.pkg.sig` of a release package and its inner `release-manifest.json.sig` |
-| Rehearsal package signing key (P-256), interim | The release-building Mac's **Secure Enclave**, once the owner approves it. The owner keeps a blob file, mode 0600, labelled as the rehearsal key, that only that Enclave can use | The Enclave, which will not export it. **No user presence**: any process running as the owner on that Mac, while it is unlocked, can sign a rehearsal | The detached `.pkg.sig` of a rehearsal package and its inner `release-manifest.json.sig`, accepted only by rehearsal installers (ADR-0035) |
+| Rehearsal package signing key (P-256), interim | The release-building Mac's **Secure Enclave**, once the owner approves it. The owner keeps a blob file, mode 0600, labelled as the rehearsal key, that only that Enclave can use | The Enclave, which will not export it. **No user presence**: any process running as the owner on that Mac, while it is unlocked, can sign a rehearsal that passes every rehearsal check until its fingerprint is revoked | The detached `.pkg.sig` of a rehearsal package and its inner `release-manifest.json.sig`, accepted only by rehearsal installers (ADR-0035) |
 | Development package signing key (Ed25519) | `~/.ssh/remap_release_dev_ed25519`, an ordinary file, mode 0600 | File permissions and whole-disk encryption. **No passphrase.** | The same two signatures on a development package, and nothing else |
 | `Remap Release Installer` (RSA and certificate) | The building Mac's **login keychain** | The login keychain, plus a per-key access list naming which programs may use it | `productsign`, which is what lets another Mac's Installer accept the package |
 | `Remap Build Signing` | The building Mac's **login keychain** | The login keychain | Signing products on a release build |
@@ -26,8 +26,10 @@ in `PortableReleaseManifest.swift`, and by fingerprint in the macOS tutorial, th
 and `docs/release/EVIDENCE.md`. The development key is pinned in
 `docs/release/remap-development-signing-key.pub` and in the verifier's development branch.
 The rehearsal key, once created, is pinned in `docs/release/remap-rehearsal-signing-key.pub`,
-marked `remap-release-rehearsal-only`, and compiled into a rehearsal installer from a source
-generated from that pin for each rehearsal build.
+marked `remap-release-rehearsal-only`, in the verifier's rehearsal branch, and by fingerprint
+in the README and `docs/release/REHEARSAL.md`; a rotated one is listed in
+`docs/release/remap-rehearsal-revoked-fingerprints.txt`. A compiled-in pin only keeps a
+package self-consistent; the published fingerprint is what an installing Mac trusts.
 
 The verifier copy ships **inside** every package, because the portable installer that
 runs on the target verifies the release manifest with its own embedded copy, and exactly
@@ -81,9 +83,10 @@ owner's first release build proves.
 The interim rehearsal key, once the owner approves it, is held in the same hardware by the
 same helper, `remap-release-key create --kind rehearsal`, but without the presence
 requirement, so that a rehearsal builds with no one at the Mac. It cannot be copied, but any
-process running as the owner on that Mac can use it while the Mac is unlocked. That is
-accepted because only rehearsal installers accept its signatures, and it is bounded by
-rotation to the rehearsal deck's keystore (ADR-0035).
+process running as the owner on that Mac can use it while the Mac is unlocked, and a package
+it signs passes every rehearsal check for as long as its fingerprint is published and not
+revoked. Only a revocation ends that, because an installed Remap pins nothing a later
+package reads (ADR-0035).
 
 The release key is the only row that meets the standard in full, and only the detached
 signatures may be described as hardware backed. The rest of the table does not:

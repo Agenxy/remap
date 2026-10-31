@@ -8,8 +8,9 @@ K7 deck on Solis, reachable over Supgang, as the rehearsal host. This ADR is
 how Remap adopts that contract without weakening ADR-0014, ADR-0029 or
 ADR-0031.
 
-Amended 2026-10-30: the interim rehearsal signer, its custody and rotation,
-and the interim hosting below. The pipeline is built; the key is not. The
+Amended 2026-10-30: where trust comes from, the interim rehearsal signer, its
+custody, rotation and revocation, the rehearsal's own install sequence, and
+the interim hosting below. The pipeline is built; the key is not. The
 interim signer is proposed and waits for the owner's approval, and until then
 no rehearsal pin is committed and every rehearsal build refuses, saying so.
 
@@ -47,7 +48,7 @@ version. It is the only kind of artifact published to a rehearsal root.
 The development kind is not reused. Its key is an unprotected file, and its
 package is meant only for the machine that built it ("Do not distribute
 it"). A distributed package whose key anyone with that file could use would
-let them sign what every rehearsal-installed Mac accepts. So:
+let them sign what passes every rehearsal check. So:
 
 - **The rehearsal kind has its own key.** It is a dedicated rehearsal signer,
   never the development key, the owner's key or the release key. Its public
@@ -62,19 +63,16 @@ let them sign what every rehearsal-installed Mac accepts. So:
   production installer has no code path that accepts a rehearsal manifest,
   and none of the three accepts another kind's. Nothing at runtime chooses
   between them. Selecting two kinds at once is refused before anything
-  builds.
-- **The rehearsal literal is generated, never committed.** The pin exists
-  only once the owner approves the signer, so the installer's rehearsal
-  branch names `RehearsalSigningPin.publicKey`, which the package build
-  generates from the committed pin into
-  `platforms/macos/Sources/RemapPortableInstaller/Generated/RehearsalSigningPin.swift`
-  for the length of the rehearsal Swift build and then removes. The path is
-  ignored, the file states its provenance, and it compiles to nothing outside
-  a rehearsal build, so release and development builds neither read nor need
-  it. This is the one generated source inside a first-party path; it is there
-  because a Swift target compiles only files under its own directory, and it
-  never exists at rest. A test proves the generated literal equals a fixture
-  pin byte for byte, as the committed literals equal theirs.
+  builds. This keeps the kinds apart inside the pipeline; it is not where
+  trust comes from (see "Where trust comes from").
+- **The rehearsal literal is committed with its pin.** Until the owner
+  approves the signer there is no pin, and the installer's rehearsal branch is
+  `#error("The rehearsal signing pin is not committed yet (ADR-0035).")`, so a
+  rehearsal cannot even compile. `make rehearsal-key` replaces that branch with
+  the literal, written exactly as the release and development literals are, in
+  the same commit as the pin and its published fingerprint. The existing
+  pin-consistency test then keeps the literal equal to the pin file, and a
+  rehearsal build refuses if they differ.
 - **The production verification code is not modified.**
 - **A rehearsal says what it is.**
   - The package file is named `Remap-<version>-<arch>-rehearsal.pkg`, and
@@ -85,9 +83,15 @@ let them sign what every rehearsal-installed Mac accepts. So:
     install manifest, `.remap-install-manifest.json`. The installer knows the
     kind because it was compiled for it. The signed release manifest is not
     touched, and its format is unchanged. A release and a source build record
-    nothing, so their install manifests and generation IDs are byte-identical
-    to before. A rehearsal's kind joins its generation seed, so a release of
-    the same version replaces it as an update instead of finding it current.
+    nothing, so their install manifests stay schema version 1 and, with their
+    generation IDs, byte-identical to before. A manifest that records a kind
+    is schema version 2, so an installer from before this change refuses it at
+    its schema check instead of misreading it, and this installer names any
+    version it does not know. In practice that means installing an older
+    package over a rehearsal install is refused until the rehearsal is
+    uninstalled or replaced by a current release. A rehearsal's kind joins its
+    generation seed, so a release of the same version replaces it as an update
+    instead of finding it current.
   - `remap doctor` and `remap system status` report a rehearsal install as
     one: `rehearsal install, not a release`.
   - `make install-package-macos` takes a `-rehearsal.pkg` only with
@@ -118,17 +122,52 @@ writes:
 The root is static files. Remap's channel lives on the Solis rehearsal deck,
 beside K7's, as its own `remap/` root with its own signer.
 
-### One documented override
+The root is served only over HTTPS, or over plain HTTP to a loopback address
+(`127.0.0.0/8` or `[::1]`), which is how a Supgang `forward` or `connect`
+delivers it after authenticating the peer. `make rehearsal-publish` refuses
+any other URL. Nothing in the root is a trust anchor, and the publisher never
+writes through a symbolic link in it.
 
-The README keeps its commands and names one override: replace
-`https://github.com/Agenxy/remap/releases/download` with the rehearsal root's
-`releases/Agenxy/remap/download`, and verify against the rehearsal pin
-instead of the release pin. The tap is tapped from the rehearsal root's
-`homebrew/`. With no override, every command is the production command.
+### The rehearsal's own install sequence
+
+A rehearsal cannot use the README's release commands unchanged: its package
+has no Apple Installer signature, the root serves no installer certificate,
+and the pin it serves is not trusted. `docs/release/REHEARSAL.md` writes the
+sequence out, and the README links to it:
+
+1. download the package, its `.sig`, the served pin and `SHA256SUMS`, and
+   check `SHA256SUMS`;
+2. fetch the committed pin and the revoked list from GitHub over HTTPS; the
+   committed pin must have the published fingerprint, the fingerprint must not
+   be revoked, and the served pin must equal the committed pin;
+3. verify the `.sig` against the committed pin only;
+4. copy the package root-owned, verify that copy again, and run Apple
+   Installer on it.
+
+The tap is tapped from the rehearsal root's `homebrew/`.
 
 `cargo install remap` is withdrawn from the README rather than rehearsed. The
 0.2.0 product is a native package, not a crate, and crates.io keeps the 0.1.0
 validator only.
+
+### Where trust comes from
+
+Every package carries its own installer, and that installer checks the
+package against the pin compiled into it. Whoever builds a package chooses
+that pin, so the check proves the package is self-consistent and nothing about
+who built it. An installed generation pins nothing that a later package's
+installer reads: each package brings its own. So no installed Remap, release
+or rehearsal, constrains what a later package may be signed by.
+
+Trust comes only from verification outside the package: the published
+fingerprint of the pin. For a release that is the release pin's fingerprint in
+the README, the macOS tutorial and `docs/release/EVIDENCE.md`. For a
+rehearsal it is the rehearsal pin's fingerprint in the README and
+`docs/release/REHEARSAL.md`, read over HTTPS from GitHub, checked against the
+committed pin, and checked against
+`docs/release/remap-rehearsal-revoked-fingerprints.txt`. `make
+install-package-macos` checks against the committed pin in the checkout it
+runs from.
 
 ### Custody of the rehearsal signer
 
@@ -156,57 +195,83 @@ create --kind rehearsal`:
   naming the blob. Once the helper is built, and before anything is signed,
   the build requires the blob's public key to equal the rehearsal pin.
 
-The exposure is the one a missing presence requirement implies: **any process
-running as the owner on that Mac, while it is unlocked, can sign a
-rehearsal.** That signature is accepted only by rehearsal installers, never by
-a release installer, and only by Macs that installed a rehearsal. A Mac
-installed from a rehearsal trusts that key for its updates until a production
-release replaces it. That is the exposure the owner accepts by onboarding a
-fleet machine from a rehearsal, and it ends at the first production update.
+The exposure is the one a missing presence requirement implies, stated
+against where trust actually comes from. **Any process running as the owner on
+the release-building Mac, while it is unlocked, can sign a package that passes
+every rehearsal check**: the published fingerprint, the committed pin and the
+revoked list all accept it. A Mac that installs that package runs it as root.
+This lasts for as long as the key's fingerprint is published and not revoked.
+It is not bounded by any production update, because an installed Remap pins
+nothing a later package's installer reads, and a production release on a Mac
+does not stop a rehearsal signed by this key from installing there later. A
+release installer never accepts a rehearsal manifest, and a release is checked
+against the release fingerprint, so the key cannot pass as a release.
+
+Because a package signed by this key keeps verifying against its fingerprint
+until that fingerprint is revoked, the key without presence is kept where its
+reach is smallest. It is device-bound: it never leaves the Enclave, it exists
+only on the release-building Mac, and copying its blob elsewhere yields
+nothing that can sign. Its reach is exactly the owner's account on that one
+Mac, and revocation is how that reach ends.
 
 The creation itself is one command and one commit, written out in
 [`docs/release/REHEARSAL.md`](../release/REHEARSAL.md). It is run only after
 the owner approves this signer.
 
-#### Rotation to the deck keystore
+#### Rotation and revocation
 
 The rehearsal key moves to the rehearsal deck's K7 keystore (K7 ADR 0099,
 kassettes/kassette#2359) once that keystore can sign for Remap. That key may
-be Ed25519. The rotation is:
+be Ed25519. A rotation publishes the new fingerprint and marks the old one
+revoked. It changes nothing on a Mac that already installed a rehearsal, and a
+package signed by the old key still passes its own installer's check and still
+verifies against the old fingerprint. A rotation works only because the
+documented steps refuse a revoked fingerprint, and because `make
+install-package-macos` checks against whatever pin is committed now. In one
+commit:
 
-1. Create the new key in the deck keystore and export only its public line,
-   with the comment `remap-release-rehearsal-only`.
-2. In one commit, replace `docs/release/remap-rehearsal-signing-key.pub` with
-   that line. Nothing else in the pipeline changes for the key type: the pin
-   decides it, and the build refuses any signer whose public key is not the
-   pin.
-3. Build and publish the next rehearsal with the deck's signer.
-4. Every Mac installed from an older rehearsal refuses the new one, because
-   its installer compiled in the old pin. Each reinstalls once, from the new
-   rehearsal or from a production release.
-5. Delete the interim Enclave blob on the release-building Mac. The old pin
-   stays in history beside the rehearsals it signed.
+1. Add the old fingerprint, the date and the reason to
+   `docs/release/remap-rehearsal-revoked-fingerprints.txt`.
+2. Replace `docs/release/remap-rehearsal-signing-key.pub` with the new key's
+   line, comment `remap-release-rehearsal-only`; replace the verifier's
+   rehearsal literal with it; and publish its fingerprint in the README and
+   `docs/release/REHEARSAL.md`. `make rehearsal-key` does all three for a new
+   Enclave key once the old pin is removed. Nothing else changes for the key
+   type: the pin decides it, and the build refuses any signer whose public key
+   is not the pin.
 
-Any rotation, including one forced by losing the release-building Mac, takes
-the same steps.
+Then build and publish the next rehearsal with the new signer, and delete the
+interim Enclave blob on the release-building Mac. A Mac that installed an
+older rehearsal needs nothing done to it: the next package, rehearsal or
+release, brings its own installer. A rehearsal build refuses a committed pin
+that is in the revoked list.
+
+Any rotation, including one forced by losing the release-building Mac or by a
+suspected compromise of the owner's account on it, takes the same steps, and
+the revocation is the part that matters.
 
 ### Interim hosting
 
 K7 ADR 0167 §6 allows an interim host while the deck is not ready. Until it
-is, the rehearsal root is staged on a LAN host, Solis, as static files served
-over HTTP to the LAN, and the first clean target is a stock Mac rather than a
+is, the rehearsal root is staged on a LAN host, Solis, as static files on its
+loopback address, exposed to the hive with `supgang expose` and read by each
+consumer through `supgang forward` to `http://127.0.0.1:<port>/`, never as
+plain HTTP across the LAN. The first clean target is a stock Mac rather than a
 deck macOS guest. Each substitution is recorded in that rehearsal's evidence:
-which host served the root, which Mac was the target and how it was made
-clean, and that the guest gate below ran on that Mac instead. A rehearsal run
-this way proves the same six steps; it does not prove anything about the
-deck, and does not say it does.
+which host served the root and how it was reached, which Mac was the target
+and how it was made clean, and that the gate below ran on that Mac instead. A
+rehearsal run this way proves the same six steps; it does not prove anything
+about the deck, and does not say it does.
 
 ### The gate
 
 A rehearsal passes only when a clean macOS guest on the deck completes all of
-the following, using the documented commands with the one override:
+the following, using the documented rehearsal sequence:
 
-1. Download and verify the four files.
+1. Download the package, its `.sig`, the served pin and `SHA256SUMS`; check
+   `SHA256SUMS`; check that the committed pin has the published fingerprint,
+   is not revoked and equals the served pin; and verify the `.sig` against the
+   committed pin.
 2. Install the package.
 3. Run `remap doctor`, which must report a rehearsal install.
 4. Map a name and resolve it through the operating system's resolver.
