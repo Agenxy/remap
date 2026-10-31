@@ -355,7 +355,7 @@ pub(crate) fn command() -> Command {
                     Arg::new(TARGET)
                         .required(true)
                         .value_name("TARGET")
-                        .help("IP address, DNS alias, http(s) upstream URL, or supgang://<peer>/<service>"),
+                        .help("IP address, DNS alias, http(s) upstream URL, or supgang://<peer>/<service>; on a wildcard, {1} and {2} read the name's labels"),
                 )
                 .arg(host_policy_argument())
                 .arg(landing_argument()),
@@ -576,7 +576,7 @@ fn set_command() -> Command {
                 .required_unless_present("moved-to")
                 .conflicts_with("moved-to")
                 .value_name("TARGET")
-                .help("IP address, DNS alias, http(s) upstream URL, or supgang://<peer>/<service>"),
+                .help("IP address, DNS alias, http(s) upstream URL, or supgang://<peer>/<service>; on a wildcard, {1} and {2} read the name's labels"),
         )
         .arg(host_policy_argument())
         .arg(landing_argument())

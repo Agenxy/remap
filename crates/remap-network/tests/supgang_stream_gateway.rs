@@ -371,6 +371,49 @@ async fn a_plaintext_service_is_reached_only_through_the_stream() -> TestResult 
     gateway.stop().await
 }
 
+// A wildcard whose target is a template routes each name to the service its
+// labels name (ADR-0032), and a name that cannot fill the template is a
+// gateway error naming the mapping, never another service.
+#[tokio::test]
+async fn a_template_routes_each_name_to_the_service_it_names() -> TestResult {
+    let upstream = plain_upstream(Seen::default()).await?;
+    let directory = tempfile::tempdir()?;
+    let socket = endpoint_path(&directory);
+    endpoint(&socket, vec![("preview", upstream)])?;
+    let gateway = gateway(
+        &[("*.fleet.test", "supgang+http://{1}/{2}")],
+        pin()?,
+        Some(socket),
+    )?;
+
+    let (mut stream, head) = exchange(gateway.address, &get("preview.solis.fleet.test")).await?;
+    assert!(head.starts_with("http/1.1 200"), "{head}");
+    let mut body = Vec::new();
+    timeout(Duration::from_secs(5), stream.read_to_end(&mut body)).await??;
+    assert_eq!(body, b"tunnelled page");
+
+    let (_stream, head) = exchange(gateway.address, &get("other.solis.fleet.test")).await?;
+    assert!(
+        head.starts_with("http/1.1 502"),
+        "an unadvertised service: {head}"
+    );
+
+    for name in [
+        "solis.fleet.test",
+        "deep.preview.solis.fleet.test",
+        "a-service-name-too-long.solis.fleet.test",
+    ] {
+        let (mut stream, head) = exchange(gateway.address, &get(name)).await?;
+        assert!(head.starts_with("http/1.1 404"), "{name}: {head}");
+        let mut body = Vec::new();
+        timeout(Duration::from_secs(5), stream.read_to_end(&mut body)).await??;
+        let body = String::from_utf8(body)?;
+        assert!(body.contains("E_GATEWAY_TEMPLATE_NAME"), "{name}: {body}");
+        assert!(body.contains("Mapping: *.fleet.test"), "{name}: {body}");
+    }
+    gateway.stop().await
+}
+
 #[tokio::test]
 async fn a_websocket_switch_rides_the_stream() -> TestResult {
     let upstream = plain_upstream(Seen::default()).await?;

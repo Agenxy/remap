@@ -463,7 +463,8 @@ pub(crate) fn build_snapshot(
                 false,
             )
         }
-        remap_core::SnapshotError::DuplicatePattern(_) => corrupt_record(error),
+        remap_core::SnapshotError::DuplicatePattern(_)
+        | remap_core::SnapshotError::TemplateNeedsWildcard(_) => corrupt_record(error),
     })
 }
 
