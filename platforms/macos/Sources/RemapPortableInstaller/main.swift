@@ -34,6 +34,13 @@ enum RemapPortableInstallerMain {
         }
         report("Verifying the downloaded Remap release")
         let release = try PortableReleaseVerifier().verify()
+        let version = release.manifest.productVersion
+        if let announcement = PortablePackageKind.announcement(
+            for: PortablePackageKind.compiled,
+            productVersion: version
+        ) {
+            report(announcement)
+        }
         let installer = try MacOSInstaller.production()
         try await recoverInstaller(installer)
         let initialStatus = try installer.status()
@@ -66,7 +73,10 @@ enum RemapPortableInstallerMain {
             )
             try authority.commit()
             try removePortableStaging()
-            report("Remap \(release.manifest.productVersion) is installed and ready")
+            report(
+                PortablePackageKind.installedName(for: PortablePackageKind.compiled, productVersion: version)
+                    + " is installed and ready"
+            )
         } catch {
             let primary = error
             do {

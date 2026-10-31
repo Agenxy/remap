@@ -35,6 +35,7 @@ from tools.remap_macos_release_installer_signing import (
 )
 from tools.remap_macos_xar import canonicalize_xar_metadata
 from tools.remap_native_package import MANPAGE_NAMES
+from tools.remap_package import cargo_target_directory
 from tools.remap_release_artifacts import (
     MAXIMUM_FILE_BYTES,
     MAXIMUM_SIGNATURE_BYTES,
@@ -84,10 +85,11 @@ def build(
     """Build and verify one no-shell portable package without a paid identity.
 
     `signing` says which kind of package this is and which key signs it: the development
-    file key, or the release key in the Secure Enclave. The kind also selects the one pin
-    compiled into the package's installer, and the pin both signatures are checked against.
+    file key, the release key in the Secure Enclave, or the rehearsal key in the Secure
+    Enclave. The kind also selects the one pin compiled into the package's installer, and
+    the pin both signatures are checked against.
 
-    `installer_identity` is `None` for a development package. Apple's installer
+    `installer_identity` is `None` for a development or rehearsal package. Apple's installer
     signature is what lets another Mac accept the package, so it is required for
     anything distributed; producing one needs a private key in a keychain, and macOS
     asks a human for the keychain password when the key's access list does not name the
@@ -317,8 +319,8 @@ def _build_products(
     app = build_app(root, version, release=True, sign=False)
     verify_app_structure(root, app)
     binaries = {
-        "remap": root / "target/release/remap",
-        "remapd": root / "target/release/remapd",
+        "remap": cargo_target_directory(root) / "release/remap",
+        "remapd": cargo_target_directory(root) / "release/remapd",
         "remap-release-key": swift_bin / "remap-release-key",
         "remap-release-xar-signer": swift_bin / "remap-release-xar-signer",
         **{name: swift_bin / name for name in swift_names},

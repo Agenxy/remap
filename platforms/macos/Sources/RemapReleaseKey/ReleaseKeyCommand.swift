@@ -16,7 +16,7 @@ enum ReleaseKeyError: Error, Equatable, LocalizedError {
         case let .usage(message):
             message + "\n" + ReleaseKeyCommand.usage
         case .unavailable:
-            "this Mac has no Secure Enclave, so it cannot hold a Remap release key"
+            "this Mac has no Secure Enclave, so it cannot hold a Remap release or rehearsal key"
         case let .keyFile(message), let .input(message), let .enclave(message):
             message
         }
@@ -24,18 +24,20 @@ enum ReleaseKeyError: Error, Equatable, LocalizedError {
 }
 
 enum ReleaseKeyCommand: Equatable {
-    case create(key: String)
-    case publicKey(key: String, comment: String)
-    case sign(key: String, namespace: String)
+    case create(key: String, kind: ReleaseKeyKind)
+    case publicKey(key: String, kind: ReleaseKeyKind, comment: String)
+    case sign(key: String, kind: ReleaseKeyKind, namespace: String)
 
-    static let defaultComment = "remap-release-v2"
     /// The largest package is about 30 MB. This is the same bound the package verifier puts
     /// on a package, so anything the verifier would read can be signed and nothing larger.
     static let maximumMessageByteCount = 268_435_456
     static let usage = """
-    usage: remap-release-key create --key <path>
-           remap-release-key public-key --key <path> [--comment <comment>]
-           remap-release-key sign --key <path> -n <namespace>  < message > signature
+    usage: remap-release-key create [--kind release|rehearsal] --key <path>
+           remap-release-key public-key [--kind release|rehearsal] --key <path> [--comment <comment>]
+           remap-release-key sign [--kind release|rehearsal] --key <path> -n <namespace>  < message > signature
+
+    The kind is release unless --kind says otherwise. A rehearsal key's file name contains
+    "rehearsal", and a release key's never does.
     """
 
     static func parse(_ arguments: [String]) throws -> Self {
@@ -44,9 +46,9 @@ enum ReleaseKeyCommand: Equatable {
         }
         let options = try options(Array(arguments.dropFirst()))
         let allowed: Set<String> = switch subcommand {
-        case "create": ["--key"]
-        case "public-key": ["--key", "--comment"]
-        case "sign": ["--key", "-n"]
+        case "create": ["--key", "--kind"]
+        case "public-key": ["--key", "--kind", "--comment"]
+        case "sign": ["--key", "--kind", "-n"]
         default: throw ReleaseKeyError.usage("unknown subcommand \(subcommand)")
         }
         guard Set(options.keys).isSubset(of: allowed), let key = options["--key"] else {
@@ -55,17 +57,34 @@ enum ReleaseKeyCommand: Equatable {
         guard isCanonicalPath(key) else {
             throw ReleaseKeyError.usage("--key must be an absolute, canonical path")
         }
+        let kind = try kind(options["--kind"], key: key)
         switch subcommand {
         case "create":
-            return .create(key: key)
+            return .create(key: key, kind: kind)
         case "public-key":
-            return try .publicKey(key: key, comment: label(options["--comment"] ?? defaultComment))
+            return try .publicKey(key: key, kind: kind, comment: label(options["--comment"] ?? kind.defaultComment))
         default:
             guard let namespace = options["-n"] else {
                 throw ReleaseKeyError.usage("sign requires -n <namespace>")
             }
-            return try .sign(key: key, namespace: label(namespace))
+            return try .sign(key: key, kind: kind, namespace: label(namespace))
         }
+    }
+
+    /// The kind, which must agree with the blob's file name, so a release key is never created,
+    /// read, or used where a rehearsal key's path was given, nor the reverse.
+    private static func kind(_ value: String?, key: String) throws -> ReleaseKeyKind {
+        guard let kind = ReleaseKeyKind(rawValue: value ?? ReleaseKeyKind.release.rawValue) else {
+            throw ReleaseKeyError.usage("--kind is release or rehearsal")
+        }
+        guard kind.admits(path: key) else {
+            throw ReleaseKeyError.usage(
+                kind == .rehearsal
+                    ? "\(key) is not a rehearsal key's path; its file name must contain \"rehearsal\""
+                    : "\(key) is a rehearsal key's path; pass --kind rehearsal, or name the release key's blob"
+            )
+        }
+        return kind
     }
 
     /// Lexical, not filesystem, canonicality: Foundation's `standardizedFileURL` rewrites an
@@ -110,29 +129,35 @@ enum ReleaseKeyTool {
     static func run(
         _ command: ReleaseKeyCommand,
         input: FileHandle = .standardInput,
-        output: FileHandle = .standardOutput
+        output: FileHandle = .standardOutput,
+        diagnostics: FileHandle = .standardError
     ) throws {
         switch command {
-        case let .create(path):
-            let descriptor = try ReleaseKeyFile.createExclusively(at: path)
+        case let .create(path, kind):
+            let descriptor = try ReleaseKeyFile.createExclusively(at: path, kind: kind)
             let key: SecureEnclave.P256.Signing.PrivateKey
             do {
-                key = try createEnclaveKey()
+                key = try createEnclaveKey(kind: kind)
             } catch {
                 ReleaseKeyFile.abandon(descriptor, path: path)
                 throw error
             }
-            try ReleaseKeyFile.write(key.dataRepresentation, to: descriptor, path: path)
-            try emit(SSHSignature.publicKeyLine(key.publicKey, comment: ReleaseKeyCommand.defaultComment), output)
-        case let .publicKey(path, comment):
-            let key = try loadEnclaveKey(at: path, reason: nil)
+            try ReleaseKeyFile.write(
+                ReleaseKeyBlob.wrap(key.dataRepresentation, kind: kind),
+                to: descriptor,
+                path: path
+            )
+            try emit(SSHSignature.publicKeyLine(key.publicKey, comment: kind.defaultComment), output)
+            try emit("remap-release-key: \(kind.creationNotice); its blob is \(path)", diagnostics)
+        case let .publicKey(path, kind, comment):
+            let key = try loadEnclaveKey(at: path, kind: kind, reason: nil)
             try emit(SSHSignature.publicKeyLine(key.publicKey, comment: comment), output)
-        case let .sign(path, namespace):
+        case let .sign(path, kind, namespace):
             let digest = try SSHSignature.digest(
                 of: input,
                 maximumByteCount: ReleaseKeyCommand.maximumMessageByteCount
             )
-            let key = try loadEnclaveKey(at: path, reason: "sign a Remap release under \(namespace)")
+            let key = try loadEnclaveKey(at: path, kind: kind, reason: kind.signingReason(namespace: namespace))
             let signature = try SSHSignature.sign(messageDigest: digest, namespace: namespace, key: key)
             try output.write(contentsOf: signature)
         }
@@ -142,8 +167,10 @@ enum ReleaseKeyTool {
         try output.write(contentsOf: Data((line + "\n").utf8))
     }
 
-    /// Every signature needs the owner present: Touch ID, or the login password.
-    private static func createEnclaveKey() throws -> SecureEnclave.P256.Signing.PrivateKey {
+    /// A release key needs the owner present for every signature: Touch ID, or the login
+    /// password. A rehearsal key does not, so a rehearsal builds without a person. Neither can
+    /// leave the Enclave, and both are bound to this Mac while it is unlocked.
+    private static func createEnclaveKey(kind: ReleaseKeyKind) throws -> SecureEnclave.P256.Signing.PrivateKey {
         guard SecureEnclave.isAvailable else {
             throw ReleaseKeyError.unavailable
         }
@@ -151,7 +178,7 @@ enum ReleaseKeyTool {
         guard let access = SecAccessControlCreateWithFlags(
             nil,
             kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            [.privateKeyUsage, .userPresence],
+            kind.accessControlFlags,
             &error
         ) else {
             let message = error?.takeRetainedValue().localizedDescription ?? "unknown failure"
@@ -166,12 +193,13 @@ enum ReleaseKeyTool {
 
     private static func loadEnclaveKey(
         at path: String,
+        kind: ReleaseKeyKind,
         reason: String?
     ) throws -> SecureEnclave.P256.Signing.PrivateKey {
         guard SecureEnclave.isAvailable else {
             throw ReleaseKeyError.unavailable
         }
-        let data = try ReleaseKeyFile.read(at: path)
+        let data = try ReleaseKeyBlob.unwrap(ReleaseKeyFile.read(at: path), kind: kind, path: path)
         guard !data.starts(with: Data("-----BEGIN".utf8)), !data.starts(with: Data("openssh-key-v1".utf8)) else {
             throw ReleaseKeyError.keyFile("\(path) is an exportable private key, not a Secure Enclave key")
         }

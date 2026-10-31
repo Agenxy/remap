@@ -105,7 +105,8 @@ struct PortableProductPreparer: Sendable {
             productVersion: release.manifest.productVersion,
             ownerUID: account.uid,
             signingCertificateSHA256: identity.sha256,
-            previousGenerationID: installerStatus.activeGenerationID
+            previousGenerationID: installerStatus.activeGenerationID,
+            packageKind: PortablePackageKind.compiled
         )
         let assembled = try MacOSPortableSourceAssembler.assemble(
             product: portable,

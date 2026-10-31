@@ -26,8 +26,13 @@ from tools.remap_macos_release_installer_signing import (
     ReleaseInstallerSigningIdentity,
 )
 from tools.remap_macos_signing import LocalCodeSigningIdentity
+from tools.remap_rehearsal_publish import RehearsalInputs
 from tools.remap_release_model import ArtifactSpec
-from tools.remap_release_signing import DevelopmentSigning, ReleaseSigning
+from tools.remap_release_signing import (
+    DevelopmentSigning,
+    RehearsalSigning,
+    ReleaseSigning,
+)
 from tools.remap_tasks import (
     task_build_macos_app,
     task_help,
@@ -472,6 +477,189 @@ class NativeProductTaskTests(unittest.TestCase):
         output = keywords["output"]
         self.assertIsInstance(output, Path)
         self.assertIn("-development", Path(str(output)).name)
+
+    def test_a_rehearsal_package_is_named_and_announced_as_one(self) -> None:
+        """No Apple installer identity, its own key and name, and a note saying so."""
+        blob = "/private/rehearsal/remap-rehearsal.key"
+        printed = io.StringIO()
+        with (
+            patch.dict(
+                "tools.remap_tasks.os.environ",
+                {"REMAP_REHEARSAL_PACKAGE": "1", "REMAP_REHEARSAL_SE_KEY": blob},
+                clear=True,
+            ),
+            patch("tools.remap_tasks.require_macos"),
+            patch("tools.remap_tasks.platform.machine", return_value="arm64"),
+            patch("tools.remap_tasks.preflight") as preflight,
+            patch(
+                "tools.remap_tasks.ensure_release_installer_identity"
+            ) as installer_identity,
+            patch("tools.remap_tasks.build_portable_macos_package") as build,
+            contextlib.redirect_stdout(printed),
+        ):
+            build.return_value = self._package_fixture()
+            task_package_macos()
+        installer_identity.assert_not_called()
+        keywords = cast("dict[str, object]", build.call_args.kwargs)
+        self.assertIsNone(keywords["installer_identity"])
+        self.assertEqual(keywords["signing"], RehearsalSigning(Path(blob)))
+        preflight.assert_called_once_with(
+            remap_tasks.ROOT, RehearsalSigning(Path(blob))
+        )
+        self.assertEqual(
+            keywords["output"],
+            remap_tasks.ROOT
+            / "dist"
+            / f"Remap-{remap_tasks.PRODUCT_VERSION}-arm64-rehearsal.pkg",
+        )
+        note = printed.getvalue()
+        self.assertIn("This is a rehearsal package, not a release.", note)
+        self.assertIn("do not install it as a release", note)
+
+    def test_a_missing_rehearsal_pin_stops_the_build_before_anything_runs(self) -> None:
+        with (
+            patch.dict(
+                "tools.remap_tasks.os.environ",
+                {
+                    "REMAP_REHEARSAL_PACKAGE": "1",
+                    "REMAP_REHEARSAL_SE_KEY": "/private/remap-rehearsal.key",
+                },
+                clear=True,
+            ),
+            patch("tools.remap_tasks.require_macos"),
+            patch("tools.remap_tasks.build_portable_macos_package") as build,
+            patch.object(remap_tasks, "ROOT", Path("/nonexistent/remap")),
+            self.assertRaisesRegex(RuntimeError, "has not been committed"),
+        ):
+            task_package_macos()
+        build.assert_not_called()
+
+    def test_rehearsal_publish_builds_a_rehearsal_and_publishes_it(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="remap-rehearsal-root-") as directory:
+            root = Path(directory)
+            blob = "/private/rehearsal/remap-rehearsal.key"
+            package = self._package_fixture()
+            published = (
+                root
+                / "releases/Agenxy/remap/download"
+                / (f"v{remap_tasks.PRODUCT_VERSION}")
+            )
+            with (
+                patch.dict(
+                    "tools.remap_tasks.os.environ",
+                    {
+                        "REMAP_REHEARSAL_ROOT": str(root),
+                        "REMAP_REHEARSAL_URL": "https://solis.example/remap",
+                        "REMAP_REHEARSAL_SE_KEY": blob,
+                    },
+                    clear=True,
+                ),
+                patch("tools.remap_tasks.require_macos"),
+                patch("tools.remap_tasks.preflight"),
+                patch(
+                    "tools.remap_tasks.ensure_release_installer_identity"
+                ) as installer_identity,
+                patch(
+                    "tools.remap_tasks.build_portable_macos_package",
+                    return_value=package,
+                ) as build,
+                patch(
+                    "tools.remap_tasks.source_archive",
+                    return_value=root / "remap.tar.gz",
+                ) as archive,
+                patch(
+                    "tools.remap_tasks.publish_rehearsal", return_value=published
+                ) as publish,
+                contextlib.redirect_stdout(io.StringIO()) as printed,
+            ):
+                remap_tasks.task_rehearsal_publish()
+        installer_identity.assert_not_called()
+        archive.assert_called_once()
+        self.assertEqual(
+            build.call_args.kwargs["signing"], RehearsalSigning(Path(blob))
+        )
+        inputs = cast("RehearsalInputs", publish.call_args.args[2])
+        self.assertEqual(inputs.package, package.path)
+        self.assertEqual(inputs.signature, package.signature_path)
+        self.assertEqual(
+            inputs.pin,
+            remap_tasks.ROOT / "docs/release/remap-rehearsal-signing-key.pub",
+        )
+        self.assertEqual(inputs.source_archive, root / "remap.tar.gz")
+        self.assertIn(
+            "https://solis.example/remap/releases/Agenxy/remap/download",
+            printed.getvalue(),
+        )
+
+    def test_rehearsal_publish_refuses_before_it_builds(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="remap-rehearsal-root-") as directory:
+            settings = {
+                "REMAP_REHEARSAL_ROOT": directory,
+                "REMAP_REHEARSAL_URL": "https://solis.example/remap",
+                "REMAP_REHEARSAL_SE_KEY": "/private/remap-rehearsal.key",
+            }
+            for environment, message in (
+                ({}, "REMAP_REHEARSAL_ROOT"),
+                ({**settings, "REMAP_REHEARSAL_URL": "ftp://x"}, "http"),
+                (
+                    {**settings, "REMAP_RELEASE_SE_KEY": "/private/release.key"},
+                    "another kind's key",
+                ),
+                (
+                    {**settings, "REMAP_DEVELOPMENT_PACKAGE": "1"},
+                    "two kinds of package",
+                ),
+            ):
+                with (
+                    self.subTest(environment=environment),
+                    patch.dict("tools.remap_tasks.os.environ", environment, clear=True),
+                    patch("tools.remap_tasks.require_macos"),
+                    patch("tools.remap_tasks.build_portable_macos_package") as build,
+                    patch("tools.remap_tasks.source_archive") as archive,
+                    self.assertRaisesRegex((RuntimeError, ValueError), message),
+                ):
+                    remap_tasks.task_rehearsal_publish()
+                build.assert_not_called()
+                archive.assert_not_called()
+
+    def test_rehearsal_key_builds_the_helper_and_creates_only_on_request(self) -> None:
+        with (
+            patch.dict("tools.remap_tasks.os.environ", {}, clear=True),
+            patch("tools.remap_tasks.require_macos"),
+            patch("tools.remap_tasks.create_rehearsal_key") as create,
+            self.assertRaisesRegex(RuntimeError, "REMAP_REHEARSAL_SE_KEY"),
+        ):
+            remap_tasks.task_rehearsal_key()
+        create.assert_not_called()
+        blob = "/private/keys/remap-rehearsal.enclave-key"
+        with (
+            patch.dict(
+                "tools.remap_tasks.os.environ",
+                {"REMAP_REHEARSAL_SE_KEY": blob},
+                clear=True,
+            ),
+            patch("tools.remap_tasks.require_macos"),
+            patch("tools.remap_tasks.run") as run,
+            patch("tools.remap_tasks.capture", return_value="/private/build/release"),
+            patch(
+                "tools.remap_tasks.create_rehearsal_key",
+                return_value="ecdsa-sha2-nistp256 AAAA remap-release-rehearsal-only\n",
+            ) as create,
+            patch("tools.remap_tasks.fingerprint", return_value="SHA256:" + "A" * 43),
+            contextlib.redirect_stdout(io.StringIO()) as printed,
+        ):
+            remap_tasks.task_rehearsal_key()
+        self.assertIn(
+            "remap-release-key", cast("tuple[str, ...]", run.call_args.args[0])
+        )
+        create.assert_called_once_with(
+            remap_tasks.ROOT,
+            Path(blob),
+            tool=Path("/private/build/release/remap-release-key"),
+        )
+        self.assertIn(
+            "git add docs/release/remap-rehearsal-signing-key.pub", printed.getvalue()
+        )
 
     def test_a_release_package_is_signed_only_by_the_enclave_key(self) -> None:
         release_key = "/private/release/remap-release.key"

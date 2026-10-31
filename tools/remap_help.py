@@ -25,6 +25,8 @@ def print_task_help() -> None:
   make docs          Build warning-free API documentation
   make package-macos Build the target-Mac-self-signed installer (release key required)
   make install-package-macos Verify, root-pin, and install REMAP_MACOS_PACKAGE
+  make rehearsal-publish     Build a rehearsal and publish it to REMAP_REHEARSAL_ROOT
+  make rehearsal-key         Create the rehearsal Enclave key and write its pin, once
   make release-evidence        Build crates and create unsigned local evidence
   make release-evidence-verify Verify existing crate bytes and evidence
   make install       Preview, install, activate, and verify native Remap

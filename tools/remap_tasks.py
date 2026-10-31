@@ -47,6 +47,7 @@ from tools.remap_macos_install import (
     verify_generated_package_contract,
 )
 from tools.remap_macos_install import uninstall as uninstall_macos
+from tools.remap_macos_portable_package import PortablePackage
 from tools.remap_macos_portable_package import build as build_portable_macos_package
 from tools.remap_macos_release_installer_signing import (
     ensure_release_installer_identity,
@@ -59,11 +60,27 @@ from tools.remap_package import (
     workspace_sources,
 )
 from tools.remap_package import verify as verify_crate_packages
+from tools.remap_rehearsal_key import FINGERPRINT_DOCUMENTS, create_rehearsal_key
+from tools.remap_rehearsal_publish import (
+    RehearsalInputs,
+    rehearsal_root_from_environment,
+    source_archive,
+)
+from tools.remap_rehearsal_publish import publish as publish_rehearsal
+from tools.remap_rehearsal_publish import (
+    release_directory as rehearsal_release_directory,
+)
 from tools.remap_release_evidence import create as create_release_evidence
 from tools.remap_release_evidence import verify as verify_release_evidence
 from tools.remap_release_model import ArtifactSpec
 from tools.remap_release_signing import (
+    REHEARSAL_KEY_VARIABLE,
+    REHEARSAL_PACKAGE_VARIABLE,
+    REHEARSAL_PIN,
+    SWIFT_VERIFIER,
     PackageKind,
+    PackageSigning,
+    fingerprint,
     preflight,
     selected_signing,
 )
@@ -113,9 +130,13 @@ PYTHON_PATHS = (
     "tools/remap_release_inventory.py",
     "tools/remap_release_model.py",
     "tools/remap_release_signing.py",
+    "tools/remap_rehearsal_key.py",
+    "tools/remap_rehearsal_publish.py",
     "tests/python/test_app.py",
     "tests/python/test_docs.py",
     "tests/python/test_freshness.py",
+    "tests/python/test_rehearsal_key.py",
+    "tests/python/test_rehearsal_publish.py",
     "tests/python/test_linux_bootstrap.py",
     "tests/python/test_linux_install.py",
     "tests/python/test_linux_sources.py",
@@ -381,35 +402,157 @@ def task_package_macos() -> None:
 
     The kind of package is chosen once, here, and never mixed: a development package
     (`REMAP_DEVELOPMENT_PACKAGE=1`) is signed by the development file key named by
-    `REMAP_RELEASE_SIGNING_KEY`; a release package is signed by the Secure Enclave key
-    whose blob `REMAP_RELEASE_SE_KEY` names, and by nothing else.
+    `REMAP_RELEASE_SIGNING_KEY`; a rehearsal package (`REMAP_REHEARSAL_PACKAGE=1`) by the
+    rehearsal Secure Enclave key whose blob `REMAP_REHEARSAL_SE_KEY` names; a release
+    package by the Secure Enclave key whose blob `REMAP_RELEASE_SE_KEY` names, and by
+    nothing else.
     """
     require_macos()
-    signing = selected_signing(os.environ)
+    _ = build_package(selected_signing(os.environ))
+
+
+def build_package(signing: PackageSigning) -> PortablePackage:
+    """Build, sign, and announce one package of `signing`'s kind."""
+    require_macos()
     # Refuse a mismatched key or pin before asking the keychain for anything.
     preflight(ROOT, signing)
-    development = signing.kind is PackageKind.DEVELOPMENT
-    suffix = "-development" if development else ""
-    output = ROOT / "dist" / f"Remap-{PRODUCT_VERSION}-{platform.machine()}{suffix}.pkg"
+    kind = signing.kind
+    output = package_output(kind)
     package = build_portable_macos_package(
         ROOT,
         product_version=PRODUCT_VERSION,
         output=output,
         signing=signing,
-        # A development package is installed on the machine that built it, so it needs
-        # no Apple installer signature and therefore no keychain and no person.
+        # A development or rehearsal package carries no Apple installer signature, so it
+        # needs no keychain and no person; only a release does.
         installer_identity=(
-            None if development else ensure_release_installer_identity(ROOT)
+            ensure_release_installer_identity(ROOT)
+            if kind is PackageKind.RELEASE
+            else None
         ),
     )
     print(f"Built {package.path} (SHA-256 {package.sha256})")
     print(f"Signed {package.signature_path} " + f"(SHA-256 {package.signature_sha256})")
-    if development:
-        print(
-            "This package is signed by a development key held in a file, not by "
-            + "hardware. Its signature establishes that these bytes came from this "
-            + "machine and nothing more. Do not distribute it."
+    note = PACKAGE_NOTES.get(kind)
+    if note:
+        print(note)
+    return package
+
+
+PACKAGE_NOTES = {
+    PackageKind.DEVELOPMENT: (
+        "This package is signed by a development key held in a file, not by "
+        + "hardware. Its signature establishes that these bytes came from this "
+        + "machine and nothing more. Do not distribute it."
+    ),
+    PackageKind.REHEARSAL: (
+        "This is a rehearsal package, not a release. It is signed by the rehearsal "
+        + "key, which no release installer accepts, and it carries no Apple Installer "
+        + "signature. Publish it only to a rehearsal root, and do not install it as a "
+        + "release."
+    ),
+}
+
+
+def task_rehearsal_publish() -> None:
+    """Build a rehearsal package of HEAD and publish it into a rehearsal root (ADR-0035).
+
+    The root, the URL, the version's place in the root, and a clean working tree are all
+    checked before anything builds, because the build is the slow part.
+    """
+    require_macos()
+    root, url = rehearsal_root_from_environment(dict(os.environ))
+    destination = rehearsal_release_directory(root, url, PRODUCT_VERSION)
+    signing = selected_signing({**os.environ, REHEARSAL_PACKAGE_VARIABLE: "1"})
+    if signing.kind is not PackageKind.REHEARSAL:
+        raise RuntimeError("a rehearsal root holds only rehearsal packages")
+    with tempfile.TemporaryDirectory(prefix="remap-rehearsal-source-") as directory:
+        archive = source_archive(ROOT, PRODUCT_VERSION, Path(directory))
+        package = build_package(signing)
+        release = publish_rehearsal(
+            root,
+            url,
+            RehearsalInputs(
+                version=PRODUCT_VERSION,
+                package=package.path,
+                signature=package.signature_path,
+                pin=ROOT / REHEARSAL_PIN,
+                source_archive=archive,
+            ),
         )
+    if release != destination:
+        raise RuntimeError(
+            f"the rehearsal was published to {release}, not {destination}"
+        )
+    print(f"Published the {PRODUCT_VERSION} rehearsal to {release}")
+    print(
+        "Install it with the README's commands, replacing "
+        + "https://github.com/Agenxy/remap/releases/download with "
+        + f"{url}/releases/Agenxy/remap/download, and verify against "
+        + "remap-rehearsal-signing-key.pub."
+    )
+
+
+def task_rehearsal_key() -> None:
+    """Create the interim rehearsal Enclave key and write its pin, once only (ADR-0035)."""
+    require_macos()
+    configured = os.environ.get(REHEARSAL_KEY_VARIABLE)
+    if not configured:
+        raise RuntimeError(
+            f"{REHEARSAL_KEY_VARIABLE} must name where the rehearsal key's blob is kept"
+        )
+    key_blob = Path(configured).expanduser()
+    run(
+        (
+            "xcrun",
+            "swift",
+            "build",
+            "--configuration",
+            "release",
+            "--package-path",
+            "platforms/macos",
+            "--product",
+            "remap-release-key",
+        )
+    )
+    tool = Path(
+        capture(
+            (
+                "xcrun",
+                "swift",
+                "build",
+                "--configuration",
+                "release",
+                "--package-path",
+                "platforms/macos",
+                "--show-bin-path",
+            )
+        )
+    )
+    line = create_rehearsal_key(ROOT, key_blob, tool=tool / "remap-release-key")
+    print(f"Wrote {REHEARSAL_PIN}:\n{line}", end="")
+    print(
+        f"Published its fingerprint, {fingerprint(line)}, in the README and REHEARSAL.md."
+    )
+    print(
+        "Commit them together with: git add "
+        + " ".join(str(path) for path in REHEARSAL_KEY_COMMIT)
+        + " && git commit -m 'Pin the interim rehearsal signer (ADR-0035)'"
+    )
+
+
+# Everything `make rehearsal-key` writes, which is one commit.
+REHEARSAL_KEY_COMMIT = (
+    REHEARSAL_PIN,
+    SWIFT_VERIFIER,
+    *FINGERPRINT_DOCUMENTS,
+)
+
+
+def package_output(kind: PackageKind) -> Path:
+    """`dist/Remap-<version>-<arch>[-<kind>].pkg`: a release alone has no suffix."""
+    suffix = "" if kind is PackageKind.RELEASE else f"-{kind.value}"
+    return ROOT / "dist" / f"Remap-{PRODUCT_VERSION}-{platform.machine()}{suffix}.pkg"
 
 
 def task_install_package_macos() -> None:
@@ -740,6 +883,8 @@ TASKS: dict[str, Callable[[], None]] = {
     "recover": task_recover,
     "release-evidence": task_release_evidence,
     "release-evidence-verify": task_release_evidence_verify,
+    "rehearsal-key": task_rehearsal_key,
+    "rehearsal-publish": task_rehearsal_publish,
     "setup-install": task_setup_install,
     "update": task_update,
     "verify-macos": task_verify_macos_app,

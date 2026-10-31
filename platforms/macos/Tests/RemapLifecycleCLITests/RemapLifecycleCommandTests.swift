@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Foundation
+import RemapInstallKit
 @testable import RemapLifecycleCLI
 import Testing
 
@@ -72,4 +74,26 @@ func lifecycleJSONErrorIsCanonicalAndBounded() throws {
         + "\n"
     #expect(text == expected)
     #expect(data.count < 1024)
+}
+
+@Test
+func lifecycleStatusNamesARehearsalInstallAndNothingElse() throws {
+    func status(packageKind: String?) throws -> MacOSInstallerStatus {
+        let kind = packageKind.map { #","packageKind":"\#($0)""# } ?? ""
+        let document = """
+        {"schemaVersion":1,"activeGenerationID":"0.2.0-abc",\
+        "generations":[{"generationID":"0.2.0-abc","productVersion":"0.2.0"\(kind)},\
+        {"generationID":"0.1.9-def","productVersion":"0.1.9"}],\
+        "transactions":[],"services":[],\
+        "dns":{"active":true,"configuredServiceCount":1,"effectiveRemapServiceCount":1}}
+        """
+        return try JSONDecoder().decode(MacOSInstallerStatus.self, from: Data(document.utf8))
+    }
+    let rehearsal = try RemapLifecycleCLIOutput.status(status(packageKind: "rehearsal"))
+    #expect(rehearsal.contains("Remap is installed (0.2.0-abc).\nPackage: rehearsal install, not a release\n"))
+    let development = try RemapLifecycleCLIOutput.status(status(packageKind: "development"))
+    #expect(development.contains("Package: development install"))
+    let release = try RemapLifecycleCLIOutput.status(status(packageKind: nil))
+    #expect(!release.contains("Package:"))
+    #expect(release.contains("Remap is installed (0.2.0-abc).\nGenerations: 2"))
 }

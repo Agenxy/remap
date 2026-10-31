@@ -5,9 +5,9 @@ NATIVE_TASK = MISE_AUTO_INSTALL=0 \
 	--python "$$(MISE_AUTO_INSTALL=0 mise which python)" \
 	python -m tools.remap_tasks
 MISE_VERSION := 2026.10.23
-export PREFIX REMAP_INSTALL_ROOT REMAP_LINUX_LINK
+export PREFIX REMAP_INSTALL_ROOT REMAP_LINUX_LINK REMAP_REHEARSAL_ROOT REMAP_REHEARSAL_URL REMAP_REHEARSAL_SE_KEY
 
-.PHONY: help setup setup-install _require-mise format check release-check test quality dependencies docs package-macos release-evidence release-evidence-verify install install-cli install-system install-check install-package-macos recover run-macos verify-macos update uninstall uninstall-cli uninstall-system
+.PHONY: help setup setup-install _require-mise format check release-check test quality dependencies docs package-macos rehearsal-key rehearsal-publish release-evidence release-evidence-verify install install-cli install-system install-check install-package-macos recover run-macos verify-macos update uninstall uninstall-cli uninstall-system
 
 help:
 	@printf '%s\n' \
@@ -24,6 +24,8 @@ help:
 		'  make docs          Build warning-free API documentation' \
 		'  make package-macos Build the target-Mac-self-signed installer (release key required)' \
 		'  make install-package-macos Verify, root-pin, and install REMAP_MACOS_PACKAGE' \
+		'  make rehearsal-publish     Build a rehearsal and publish it to REMAP_REHEARSAL_ROOT' \
+		'  make rehearsal-key         Create the rehearsal Enclave key and write its pin, once' \
 		'  make release-evidence        Build crates and create unsigned local evidence' \
 		'  make release-evidence-verify Verify existing crate bytes and evidence' \
 		'  make install       Preview, install, activate, and verify native Remap' \
@@ -97,6 +99,12 @@ package-macos: _require-mise
 
 install-package-macos: _require-mise
 	@$(NATIVE_TASK) install-package-macos
+
+rehearsal-publish: _require-mise
+	@$(TASK) rehearsal-publish
+
+rehearsal-key: _require-mise
+	@$(TASK) rehearsal-key
 
 release-evidence: _require-mise
 	@$(TASK) release-evidence

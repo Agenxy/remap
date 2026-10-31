@@ -2,8 +2,12 @@
 import Foundation
 
 enum MacOSPortableManifestBuilder {
+    /// A rehearsal and a release of one version can have identical payloads, so a non-release
+    /// kind is part of the generation's identity: a release then replaces a rehearsal as an
+    /// ordinary update rather than finding it already current. A release's seed is unchanged.
     static func generationID(
         productVersion: String,
+        packageKind: InstallPackageKind? = nil,
         entries: [InstallEntry],
         account: MacOSAccount,
         ownerUID: UInt32,
@@ -18,7 +22,7 @@ enum MacOSPortableManifestBuilder {
             dataDirectory: dataDirectory,
             upstreams: upstreams
         )
-        let seed: [String: Any] = try [
+        var seed: [String: Any] = try [
             "accountName": account.userName,
             "entries": jsonObjects(entries),
             "groupName": account.groupName,
@@ -26,6 +30,9 @@ enum MacOSPortableManifestBuilder {
             "publicationContract": publicationDocuments(generationID: placeholder),
             "productVersion": productVersion
         ]
+        if let packageKind {
+            seed["packageKind"] = packageKind.rawValue
+        }
         let data = try JSONSerialization.data(
             withJSONObject: seed,
             options: [.sortedKeys, .withoutEscapingSlashes]
