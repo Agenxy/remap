@@ -24,7 +24,8 @@ struct SystemNetworkConfiguration: NativeNetworkConfiguring {
         }
         return NetworkSnapshot(
             services: services,
-            globalServers: effectiveGlobalServerAddresses(dynamicStore: dynamicStore)
+            globalServers: effectiveGlobalServerAddresses(dynamicStore: dynamicStore),
+            primaryServiceID: primaryServiceID(dynamicStore: dynamicStore)
         )
     }
 
@@ -67,6 +68,12 @@ struct SystemNetworkConfiguration: NativeNetworkConfiguring {
             )
         }
         try commitPreferences(preferences)
+    }
+
+    private func primaryServiceID(dynamicStore: SCDynamicStore) -> String? {
+        let key = "State:/Network/Global/IPv4" as CFString
+        let value = SCDynamicStoreCopyValue(dynamicStore, key) as? [String: Any]
+        return value?[kSCDynamicStorePropNetPrimaryService as String] as? String
     }
 
     func preflightLoopback(ownerUID: UInt32) throws {

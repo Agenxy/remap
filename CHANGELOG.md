@@ -6,6 +6,31 @@ platform claims separate.
 
 ## Unreleased
 
+- Fixed Remap DNS taking all of a Mac's DNS down when a VPN blocked the
+  resolvers Remap forwarded to, while Remap still reported ready. On
+  31 October Private Internet Access's DNS leak protection dropped every
+  query `remapd` forwarded, so every name failed, and deactivating then put
+  back the router DNS the VPN also blocks (ADR-0036).
+  - `remapd` now notices when every upstream resolver stops answering, over
+    at least four queries and two seconds so one lost packet never counts,
+    and macOS returns to ordinary DNS within seconds. Remap re-arms only
+    once those resolvers answer again or the network offers different ones.
+  - `remap status`, `remap doctor`, and MCP status say "upstream DNS not
+    answering" with the cause, and `remap-system status` explains the
+    fallback the same way.
+  - When a VPN publishes its own DNS, Remap forwards to the VPN's resolver
+    and keeps answering its names, follows a VPN's own network service when
+    macOS uses it, and follows back when the VPN disconnects. Two services
+    with DNS are no longer refused when macOS's resolver says which one it
+    uses.
+  - When a VPN's DNS outranks Remap's, or a VPN changes the DNS of a service
+    Remap set, Remap writes nothing, so it never fights a VPN that
+    re-asserts its DNS; DNS keeps working through the VPN and Remap answers
+    its names again when the VPN lets go.
+  - Deactivation still never overwrites a VPN's change: it reports the
+    conflict and, once the VPN restores what it saved, restores the
+    configuration captured before the VPN connected.
+
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
   without restoring anything. The activation record is now written active

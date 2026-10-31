@@ -62,6 +62,9 @@ public struct NativeResolverStatus: Encodable, Sendable {
             "    Reason      \(bypass.reasonCode), failing since "
                 + statusTimestamp(bypass.failingSinceMilliseconds)
         ]
+        if let meaning = bypassReasonMeaning(bypass.reasonCode) {
+            lines.append("    Meaning     \(meaning)")
+        }
         if let rearmed = bypass.rearmedAtMilliseconds {
             lines.append("    Re-armed    \(statusTimestamp(rearmed))")
         } else {
@@ -77,6 +80,13 @@ public struct NativeResolverStatus: Encodable, Sendable {
         }
         return lines
     }
+}
+
+/// Plain words for a reason whose code alone does not say what to check.
+func bypassReasonMeaning(_ code: String) -> String? {
+    guard code == upstreamUnansweredCode else { return nil }
+    return "upstream DNS not answering; every resolver Remap forwards to stopped replying, "
+        + "as a VPN's DNS leak protection causes when it blocks them"
 }
 
 private func statusTimestamp(_ milliseconds: UInt64) -> String {

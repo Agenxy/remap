@@ -7,6 +7,10 @@ implemented on `fix/resolver-self-healing` at the owner's request. The
 SystemConfiguration effects are proven against a model in the Swift tests,
 not yet on a Mac with the installed privileged supervisor.
 
+Amended 2026-10-31 by ADR-0036: several services with DNS are refused as
+split DNS only when the global resolver does not say which one macOS uses,
+and another agent's DNS ahead of Remap's is deferred to without any write.
+
 ## Context
 
 Activation records exactly one network service, its prior DNS configuration,

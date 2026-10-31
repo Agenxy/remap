@@ -37,6 +37,8 @@ pub(crate) struct DoctorReport {
     pub(crate) health: RuntimeHealth,
     pub(crate) native_install: bool,
     pub(crate) system_lookup: SystemLookup,
+    /// Present while every upstream resolver has stopped answering (ADR-0036).
+    pub(crate) dns_upstream: Option<remap_protocol::Diagnostic>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

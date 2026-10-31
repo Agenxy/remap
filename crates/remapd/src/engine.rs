@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use remap_core::{HostHeaderPolicy, Mapping, MappingTarget, NamePattern, RegistrySnapshot};
-use remap_network::RuntimeIdentity;
+use remap_network::{ResolverPlanStore, RuntimeIdentity};
 use remap_protocol::{
     CONTROL_PROTOCOL_VERSION, Command, CommandResult, ControlRequest, ControlResponse, Diagnostic,
     HealthChallengeResult, HostPolicy, MAX_MAPPING_COUNT, MAX_MAPPING_PAGE_SIZE,
@@ -38,6 +38,9 @@ pub struct Engine {
 struct EngineState {
     sender: Mutex<Option<mpsc::Sender<Job>>>,
     writer: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// The DNS runtime's plans, once it exists, so status can say whether
+    /// its upstreams still answer (ADR-0036).
+    resolver_plans: OnceLock<ResolverPlanStore>,
 }
 
 impl Engine {
@@ -72,6 +75,7 @@ impl Engine {
             state: Arc::new(EngineState {
                 sender: Mutex::new(Some(sender)),
                 writer: Mutex::new(Some(writer)),
+                resolver_plans: OnceLock::new(),
             }),
             revision,
             identity,
@@ -102,6 +106,7 @@ impl Engine {
             request.command,
             Command::Preview { .. } | Command::Apply { .. }
         );
+        let status = matches!(request.command, Command::Status);
         let (response_sender, response_receiver) = oneshot::channel();
         self.sender()?
             .send(Job::Request {
@@ -114,7 +119,20 @@ impl Engine {
         if advisable && let Some(result) = response.result.as_mut() {
             crate::reachability::advise(result).await;
         }
+        if status && let Some(CommandResult::Status(status)) = response.result.as_mut() {
+            status.dns_upstream = self.dns_upstream();
+        }
         Ok(response)
+    }
+
+    /// Lets status report whether the DNS runtime's upstreams still answer.
+    pub(crate) fn observe_resolver_plans(&self, plans: ResolverPlanStore) {
+        let _first = self.state.resolver_plans.set(plans);
+    }
+
+    fn dns_upstream(&self) -> Option<Diagnostic> {
+        let failure = self.state.resolver_plans.get()?.upstream_failure()?;
+        Some(crate::system_control::upstream_failure(failure).diagnostic())
     }
 
     /// Runs retention maintenance on the registry writer.

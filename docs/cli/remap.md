@@ -212,6 +212,14 @@ When retryable retention maintenance is blocking new mutations, status adds a
 retryability. Reads and previews remain available; an exact retry of an already
 committed operation still returns its stored receipt.
 
+While every upstream DNS resolver the daemon forwards to has stopped answering,
+status also adds a `dns_upstream` diagnostic, `E_DNS_UPSTREAM_UNANSWERED`, whose
+message begins "upstream DNS not answering" and names the cause, such as every
+upstream timing out, with counts in its context and never an address. Human
+output prints it as `Upstream   DNS not answering` with a `Cause` line, and
+`remap doctor` reports the same diagnostic. On macOS, names Remap does not own
+then fall back to ordinary DNS (ADR-0036).
+
 Errors retain the daemon's stable identity, retry guidance, and safe context:
 
 ```json
