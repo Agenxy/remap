@@ -34,18 +34,26 @@ package self-consistent; the published fingerprint is what an installing Mac tru
 The verifier copy ships **inside** every package, because the portable installer that
 runs on the target verifies the release manifest with its own embedded copy, and exactly
 one copy is compiled in: a development package's installer knows only the development
-key, and a release package's only the release key. So rotating the release key
-invalidates every package built before the rotation, and the symptom is a refusal from
-the package's own postinstall rather than anything a signature check on the outside would
-catch:
+key, and a release package's only the release key. That copy keeps a package
+self-consistent; it is not what makes the package trusted. Two consequences follow from
+it after the release key rotates:
 
-```text
-Installation stopped safely: Installer integrity validation failed:
-the portable Remap release signature is invalid.
-```
+- A package must be rebuilt after the rotation. One signed by the new key while its
+  installer still embeds the old pin refuses itself in its own postinstall:
 
-Rotate the key, then rebuild. A test keeps the source copies in step with each other;
-nothing can keep an artifact that has already been built in step with them.
+  ```text
+  Installation stopped safely: Installer integrity validation failed:
+  the portable Remap release signature is invalid.
+  ```
+
+- A package built **before** the rotation still verifies, because it carries the old pin
+  and the old key's signature together. Rotation does not revoke it. Only the check made
+  outside the package does: whoever installs verifies the detached signature against the
+  release fingerprint published in the README. A rotation therefore publishes the new
+  fingerprint and says plainly that the old one is retired.
+
+A test keeps the source copies in step with each other; nothing can keep an artifact that
+has already been built in step with them.
 
 ## What a development package needs
 
