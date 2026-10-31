@@ -38,6 +38,13 @@ platform claims separate.
     "inactive". A fallback the supervisor made on its own and DNS that was
     never activated each have their own wording. Turning DNS back on, or any
     installer operation, clears the record.
+- Fixed uninstall leaving `/Library/Application Support/Agenxy/Remap` behind
+  after the resolver supervisor had ever fallen back. Both the source and the
+  packaged uninstall now remove the resolver's own records there, the last
+  fallback and the turned-off record, after checking each is a regular,
+  root-owned file that is not a symlink, and leave the directory exactly as
+  empty as before Remap. Anything they cannot vouch for stops removal and is
+  kept.
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
