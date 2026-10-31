@@ -306,10 +306,23 @@ unprivileged `remapd` and CLI can read it. A record that cannot be written
 never undoes the deactivation; the command warns. Activation removes it
 before it changes anything, and so does the installer's own deactivation
 around an update, a rollback, or uninstall: from then on the installer, not
-the owner's earlier command, decides DNS. Uninstall therefore leaves no new
-file in a directory exact removal must empty, and "not installed" already
-says DNS is gone; recording uninstall as a turn-off was considered and
-rejected for that reason.
+the owner's earlier command, decides DNS. Recording uninstall as a turn-off
+was considered and rejected: "not installed" already says DNS is gone, and
+the record would be one more file in a directory exact removal must empty.
+
+A complete uninstall leaves `/Library/Application Support/Agenxy/Remap`
+exactly as empty as before Remap. Both uninstall paths, the source install's
+`MacOSInstallTopology` and the portable authority cleanup that follows
+`RemapPortableUninstall`, remove the records the resolver keeps there:
+`resolver-bypass-v1.json`, `dns-turned-off-v1.json`, and the
+`loopback-reservations-v1.json` and `.loopback-reservations.lock` that PR #16
+adds. Each is removed only when it is a regular, single-link, non-symlink
+file owned by root with its writer's exact mode, no ACL, and no flags, and
+the inode whose bytes were read is the one unlinked. Anything else is a
+collision that stops removal and is left in place. The activation record is
+not on the list: uninstall deactivates DNS first, so one still present means
+DNS may still point at Remap. Before this, a fallback's bypass record
+survived uninstall and kept the directory.
 
 `remap-system status` says "Native DNS is turned off by the owner at
 2026-10-31T01:20Z (`remap-system deactivate`)" with a `Turn on` line giving
@@ -359,6 +372,12 @@ Remap's persisted configuration or on a service Remap can configure. When a
 VPN's DNS outranks Remap's, Remap's names are not answered until the VPN
 lets go, and every other name resolves through the VPN as the VPN intends.
 That is a fail-open state, reported as such, never a failure of public DNS.
+
+Acceptance for exact uninstall: `MacOSUninstallResolverRecordTests.swift`
+and `MacOSPortableAuthorityCleanupTests.swift` uninstall after a fallback,
+after a deliberate turn-off, and with #16's reservation files, and show the
+directory gone each time, and that a symlinked record or a record with
+another mode stops removal and is preserved.
 
 Acceptance for the turned-off state: `DNSTurnedOffTests.swift` checks the
 record's canonical bytes, which `crates/remapd/src/native_dns.rs` verifies

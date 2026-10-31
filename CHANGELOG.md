@@ -38,7 +38,29 @@ platform claims separate.
     "inactive". A fallback the supervisor made on its own and DNS that was
     never activated each have their own wording. Turning DNS back on, or any
     installer operation, clears the record.
+- Fixed uninstall leaving `/Library/Application Support/Agenxy/Remap` behind
+  after the resolver supervisor had ever fallen back. Both the source and the
+  packaged uninstall now remove the resolver's own records there, the last
+  fallback and the turned-off record, after checking each is a regular,
+  root-owned file that is not a symlink, and leave the directory exactly as
+  empty as before Remap. Anything they cannot vouch for stops removal and is
+  kept.
 
+- A wildcard's peer target may read its peer and service from the name
+  (ADR-0032). `*.k7.internal → supgang://{1}/{2}` routes
+  `preview.solis.k7.internal` to `supgang://solis/preview`, where `{1}` is the
+  label nearest the suffix. Only a whole peer or service is a placeholder,
+  `{2}` needs `{1}`, and an exact name cannot carry one
+  (`E_TEMPLATE_NEEDS_WILDCARD`). Matching and DNS are unchanged. A name that
+  cannot fill the template, because it has another number of labels or a
+  label its field cannot hold, gets `404 E_GATEWAY_TEMPLATE_NAME` naming the
+  mapping. The registry moves to schema 3. It adds no column; it exists so an
+  older daemon refuses the registry before misreading a template.
+- Migrating an existing registry to a newer schema first keeps a copy of it
+  at the old schema, `registry.schema-<old>.<unix-ms>.sqlite3` (mode 0600),
+  beside it. If the copy cannot be made, the migration is refused
+  (`E_REGISTRY_SNAPSHOT`). To roll back, stop `remapd`, remove the registry's
+  `-wal` and `-shm` files, and move the copy over `registry.sqlite3`.
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed
   without restoring anything. The activation record is now written active
