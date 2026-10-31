@@ -220,6 +220,12 @@ output prints it as `Upstream   DNS not answering` with a `Cause` line, and
 `remap doctor` reports the same diagnostic. On macOS, names Remap does not own
 then fall back to ordinary DNS (ADR-0036).
 
+While the owner has turned Remap's macOS DNS off on purpose with
+`remap-system deactivate`, status adds `dns_turned_off`: `turned_off_at` (UTC to
+the minute), `turned_off_at_ms`, the `command` that turned it off, and `turn_on`,
+the exact command that turns it back on. Human output prints `DNS` and `Turn on`
+lines, and `remap doctor`'s Lookup line says DNS is off rather than unresolved.
+
 Errors retain the daemon's stable identity, retry guidance, and safe context:
 
 ```json

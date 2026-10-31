@@ -30,6 +30,14 @@ platform claims separate.
   - Deactivation still never overwrites a VPN's change: it reports the
     conflict and, once the VPN restores what it saved, restores the
     configuration captured before the VPN connected.
+  - Status now tells DNS turned off on purpose apart from a fault. After
+    `remap-system deactivate`, `remap system status`, `remap-system status`,
+    `remap status`, `remap doctor`, and MCP status say, for example, "turned
+    off by the owner at 2026-10-31T01:20Z (`remap-system deactivate`)" and
+    give the exact command that turns it back on, where they used to say only
+    "inactive". A fallback the supervisor made on its own and DNS that was
+    never activated each have their own wording. Turning DNS back on, or any
+    installer operation, clears the record.
 
 - Fixed a failed macOS DNS activation that could leave the Mac pointed at
   Remap under a record marked prepared, which deactivation then removed

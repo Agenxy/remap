@@ -40,7 +40,11 @@ enum RemapSystemCommand {
             let plan = try resolver.plan()
             try render(command: command, value: plan, json: json)
         case "status":
-            let status = try NativeResolverStatus(record: resolver.activeRecord(), bypassStore: .standard)
+            let status = try NativeResolverStatus(
+                record: resolver.activeRecord(),
+                bypassStore: .standard,
+                turnedOffStore: .standard
+            )
             try render(command: command, value: status, json: json)
         case "activate":
             let ownerUID = try requiredUInt32(values, flag: "--owner-uid")
@@ -53,8 +57,13 @@ enum RemapSystemCommand {
             )
             try render(command: command, value: record, json: json)
         case "deactivate":
-            try resolver.deactivate()
-            try render(command: command, value: ["active": false], json: json)
+            let turnOff = try resolver.turnOff(command: remapSystemDeactivateCommand)
+            if let recordError = turnOff.recordError {
+                FileHandle.standardError.write(Data(
+                    "warning: DNS is off, but the turned-off record was not written: \(recordError)\n".utf8
+                ))
+            }
+            try render(command: command, value: TurnedOffResult(turnOff.payload), json: json)
         case "help", "--help", "-h":
             renderHelp()
         case "--version", "version":
@@ -91,20 +100,17 @@ enum RemapSystemCommand {
             guard let status = value as? NativeResolverStatus else {
                 throw CommandError("The native status result has the wrong type.")
             }
-            if let record = status.record {
-                print("Native DNS is \(record.payload.phase == .active ? "active" : "recoverable")")
-                print("  Services \(record.payload.services.count)")
-                print("  Version  \(record.payload.productVersion)")
-            } else {
-                print("Native DNS is inactive")
-            }
-            for line in status.bypassLines() {
+            for line in status.stateLines() + status.bypassLines() {
                 print(line)
             }
         case "activate":
             print("Native DNS activated. Unmapped names still use the captured upstream resolvers.")
         case "deactivate":
-            print("Native DNS deactivated and the prior configuration was restored.")
+            guard let result = value as? TurnedOffResult else {
+                throw CommandError("The deactivation result has the wrong type.")
+            }
+            print("Native DNS turned off and the prior configuration was restored.")
+            print("  Turn on  \(result.dnsTurnedOff.turnOnCommand)")
         default:
             throw CommandError("The command has no human renderer.")
         }
@@ -142,6 +148,8 @@ enum RemapSystemCommand {
 
             plan is read-only. activate and deactivate are invoked by Remap's native
             privileged installer and restore DNS transactionally on failure.
+            deactivate run by the owner records that DNS was turned off on purpose,
+            and status then says when and how to turn it back on.
             """
         )
     }
@@ -170,6 +178,16 @@ enum RemapSystemCommand {
         default:
             "E_SYSTEM_INTERNAL"
         }
+    }
+}
+
+/// `{"active": false, "dnsTurnedOff": {...}}`, keeping the original key.
+private struct TurnedOffResult: Encodable {
+    let active = false
+    let dnsTurnedOff: DNSTurnedOffPayload
+
+    init(_ payload: DNSTurnedOffPayload) {
+        dnsTurnedOff = payload
     }
 }
 

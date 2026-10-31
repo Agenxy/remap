@@ -8,6 +8,8 @@ struct MacOSResolverObservation: Equatable, Sendable {
     let phase: ActivationPhase?
     let configuredServiceIDs: [String]
     let remapServiceIDs: [String]
+    /// The owner's deliberate turn-off, while no activation exists (ADR-0036).
+    var turnedOff: DNSTurnedOffPayload?
 
     var recordPresent: Bool {
         phase != nil
@@ -44,7 +46,9 @@ struct NativeMacOSResolverController: MacOSResolverControlling, Sendable {
             productVersion: record?.payload.productVersion,
             phase: record?.payload.phase,
             configuredServiceIDs: record?.payload.services.map(\.serviceID).sorted() ?? [],
-            remapServiceIDs: system.remapServiceIDs
+            remapServiceIDs: system.remapServiceIDs,
+            // A diagnostic record never decides whether status can be read.
+            turnedOff: record == nil ? (try? DNSTurnedOffStore(directory: store.directory).read())?.payload : nil
         )
     }
 

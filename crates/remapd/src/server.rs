@@ -24,6 +24,7 @@ use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, interval, timeout, timeout_at};
 
 use crate::Engine;
+use crate::native_dns::TurnedOffRecordSource;
 use crate::network_bootstrap::{bind_network, prepare_network};
 use crate::peer;
 use crate::privilege;
@@ -67,6 +68,9 @@ pub struct DaemonConfig {
     pub systemd_sockets: bool,
     /// Root-supervisor channel, overridden only by a native service contract.
     pub system_socket: PathBuf,
+    /// The record of the owner turning system DNS off on purpose, read for
+    /// status (ADR-0036); the installed macOS location by default.
+    pub dns_turned_off_record: Option<TurnedOffRecordSource>,
 }
 
 impl DaemonConfig {
@@ -96,6 +100,7 @@ impl DaemonConfig {
             launchd_sockets: false,
             systemd_sockets: false,
             system_socket,
+            dns_turned_off_record: TurnedOffRecordSource::standard(),
         }
     }
 }
@@ -247,6 +252,9 @@ where
         Ok(engine) => engine,
         Err(error) => return cleanup_start_failure(listener, guard, error),
     };
+    if let Some(source) = config.dns_turned_off_record.clone() {
+        engine.observe_dns_turned_off(source);
+    }
     if let Err(error) = secure_database_family(config.paths.database()) {
         let shutdown_result = engine.shutdown().await;
         let cleanup_result = cleanup_start_failure(listener, guard, error);

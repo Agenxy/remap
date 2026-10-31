@@ -119,7 +119,7 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
     writeln!(
         writer,
         "  Lookup     {}",
-        lookup_line(&report.system_lookup)
+        lookup_line(&report.system_lookup, report.dns_turned_off.as_ref())
     )?;
     writeln!(writer, "  Telemetry  none")?;
     writeln!(writer)?;
@@ -127,7 +127,14 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
         writer,
         "Doctor itself changed nothing. Telemetry remains absent."
     )?;
-    if matches!(
+    if let Some(turned_off) = &report.dns_turned_off {
+        writeln!(
+            writer,
+            "Remap DNS was {}, so the system is not asking Remap. Turn it on with: {}",
+            terminal_text(&turned_off.status_line()),
+            terminal_text(&turned_off.turn_on)
+        )?;
+    } else if matches!(
         report.system_lookup,
         SystemLookup::Bypassed { .. } | SystemLookup::Unresolved { .. }
     ) {
@@ -159,8 +166,18 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
     }
 }
 
-fn lookup_line(lookup: &SystemLookup) -> String {
+fn lookup_line(lookup: &SystemLookup, turned_off: Option<&remap_protocol::DnsTurnedOff>) -> String {
     let name = lookup.name().map(terminal_text).unwrap_or_default();
+    if let Some(turned_off) = turned_off
+        && !matches!(lookup, SystemLookup::Matched { .. })
+    {
+        let line = terminal_text(&turned_off.status_line()).into_owned();
+        return if name.is_empty() {
+            format!("off ({line})")
+        } else {
+            format!("off ({line}; {name} uses ordinary DNS)")
+        };
+    }
     match (lookup, lookup.answer()) {
         (SystemLookup::Matched { .. }, Some(answer)) => format!("ready ({name} → {answer})"),
         (SystemLookup::Bypassed { .. }, Some(answer)) => {
@@ -292,6 +309,18 @@ fn write_status(writer: &mut dyn Write, status: &RegistryStatus) -> io::Result<(
         terminal_text(&status.daemon_version)
     )?;
     write_dns_upstream(writer, status.dns_upstream.as_ref())?;
+    if let Some(turned_off) = &status.dns_turned_off {
+        writeln!(
+            writer,
+            "  DNS        {}",
+            terminal_text(&turned_off.status_line())
+        )?;
+        writeln!(
+            writer,
+            "  Turn on    {}",
+            terminal_text(&turned_off.turn_on)
+        )?;
+    }
     if let Some(error) = &status.maintenance {
         writeln!(writer, "  Mutations  blocked by maintenance")?;
         writeln!(writer, "  Reason     {}", terminal_text(&error.message))?;
@@ -466,6 +495,7 @@ fn report_json(report: &Report) -> Value {
                 "dns_forwarding": report.health.forwarding,
                 "http_gateway": report.health.http,
                 "dns_upstream": report.dns_upstream,
+                "dns_turned_off": report.dns_turned_off,
                 "system_lookup": {
                     "state": report.system_lookup.state(),
                     "name": report.system_lookup.name(),
@@ -511,7 +541,9 @@ mod tests {
     };
     use serde_json::Value;
 
-    use super::{write_diagnostic, write_report};
+    use remap_mcp::system_lookup::SystemLookup;
+
+    use super::{lookup_line, write_diagnostic, write_report};
     use crate::app::{Report, ValidationReport};
     use crate::diagnostic::Diagnostic;
 
@@ -624,6 +656,7 @@ mod tests {
                     true,
                 )),
                 dns_upstream: None,
+                dns_turned_off: None,
             }),
         };
         let mut bytes = Vec::new();
@@ -647,6 +680,7 @@ mod tests {
                 daemon_version: "0.1.1".to_owned(),
                 maintenance: None,
                 dns_upstream: None,
+                dns_turned_off: None,
             }),
         };
         let mut bytes = Vec::new();
@@ -656,6 +690,57 @@ mod tests {
         assert!(!output.contains("blocked"));
         assert!(!output.contains("Upstream"));
         Ok(())
+    }
+
+    #[test]
+    fn human_status_says_dns_was_turned_off_on_purpose_and_how_to_undo_it()
+    -> Result<(), Box<dyn Error>> {
+        let report = Report::Authority {
+            command: "status",
+            result: CommandResult::Status(RegistryStatus {
+                revision: 8,
+                mapping_count: 2,
+                enabled_count: 1,
+                schema_version: 1,
+                daemon_version: "0.2.0".to_owned(),
+                maintenance: None,
+                dns_upstream: None,
+                dns_turned_off: Some(turned_off()),
+            }),
+        };
+        let mut bytes = Vec::new();
+        write_report(&mut bytes, &report, false)?;
+        let output = String::from_utf8(bytes)?;
+        assert!(output.contains(
+            "DNS        turned off by the owner at 2026-10-31T01:20Z (`remap-system deactivate`)"
+        ));
+        assert!(output.contains("Turn on    sudo '/Library/"));
+        Ok(())
+    }
+
+    #[test]
+    fn doctor_lookup_says_dns_is_off_on_purpose_instead_of_unresolved() {
+        let unresolved = SystemLookup::Unresolved {
+            name: "atlas.test".to_owned(),
+        };
+        assert!(lookup_line(&unresolved, None).starts_with("unresolved"));
+        assert_eq!(
+            lookup_line(&unresolved, Some(&turned_off())),
+            "off (turned off by the owner at 2026-10-31T01:20Z (`remap-system deactivate`); \
+             atlas.test uses ordinary DNS)"
+        );
+    }
+
+    fn turned_off() -> remap_protocol::DnsTurnedOff {
+        remap_protocol::DnsTurnedOff {
+            turned_off_at: "2026-10-31T01:20Z".to_owned(),
+            turned_off_at_ms: 1_793_409_600_000,
+            command: "remap-system deactivate".to_owned(),
+            turn_on: "sudo '/Library/Application Support/Agenxy/Remap/Install/current/libexec/remap-system' \
+                      activate --owner-uid 501 --product-version 0.2.0 \
+                      --system-socket /var/run/org.agenxy.Remap.system.sock"
+                .to_owned(),
+        }
     }
 
     #[test]
@@ -675,6 +760,7 @@ mod tests {
                 daemon_version: "0.2.0".to_owned(),
                 maintenance: None,
                 dns_upstream: Some(failure.diagnostic()),
+                dns_turned_off: None,
             }),
         };
         let mut bytes = Vec::new();

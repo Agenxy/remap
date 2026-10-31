@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use remap_core::{HostHeaderPolicy, Mapping, MappingTarget, NamePattern, RegistrySnapshot};
 use remap_network::{ResolverPlanStore, RuntimeIdentity};
+
+use crate::native_dns::TurnedOffRecordSource;
 use remap_protocol::{
     CONTROL_PROTOCOL_VERSION, Command, CommandResult, ControlRequest, ControlResponse, Diagnostic,
     HealthChallengeResult, HostPolicy, MAX_MAPPING_COUNT, MAX_MAPPING_PAGE_SIZE,
@@ -41,6 +43,8 @@ struct EngineState {
     /// The DNS runtime's plans, once it exists, so status can say whether
     /// its upstreams still answer (ADR-0036).
     resolver_plans: OnceLock<ResolverPlanStore>,
+    /// Where the owner's deliberate DNS turn-off is recorded (ADR-0036).
+    dns_turned_off: OnceLock<TurnedOffRecordSource>,
 }
 
 impl Engine {
@@ -76,6 +80,7 @@ impl Engine {
                 sender: Mutex::new(Some(sender)),
                 writer: Mutex::new(Some(writer)),
                 resolver_plans: OnceLock::new(),
+                dns_turned_off: OnceLock::new(),
             }),
             revision,
             identity,
@@ -121,6 +126,7 @@ impl Engine {
         }
         if status && let Some(CommandResult::Status(status)) = response.result.as_mut() {
             status.dns_upstream = self.dns_upstream();
+            status.dns_turned_off = self.dns_turned_off();
         }
         Ok(response)
     }
@@ -128,6 +134,24 @@ impl Engine {
     /// Lets status report whether the DNS runtime's upstreams still answer.
     pub(crate) fn observe_resolver_plans(&self, plans: ResolverPlanStore) {
         let _first = self.state.resolver_plans.set(plans);
+    }
+
+    /// Lets status say when the owner turned system DNS off on purpose.
+    pub(crate) fn observe_dns_turned_off(&self, source: TurnedOffRecordSource) {
+        let _first = self.state.dns_turned_off.set(source);
+    }
+
+    /// The owner's turn-off, unless a supervisor has since published a plan.
+    fn dns_turned_off(&self) -> Option<remap_protocol::DnsTurnedOff> {
+        let plans_active = self
+            .state
+            .resolver_plans
+            .get()
+            .is_some_and(|plans| plans.active_generation().is_some());
+        if plans_active {
+            return None;
+        }
+        self.state.dns_turned_off.get()?.read()
     }
 
     fn dns_upstream(&self) -> Option<Diagnostic> {

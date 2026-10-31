@@ -7,6 +7,7 @@ mod output;
 mod params;
 mod resources;
 mod server;
+mod status_summary;
 pub mod system_lookup;
 mod transport;
 mod ui;

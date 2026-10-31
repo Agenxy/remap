@@ -197,6 +197,47 @@ Following does not re-capture a foreign configuration as a service's prior
 state. Doing so would leave the record restoring the VPN's resolver after
 the VPN had gone, which is the failure the owner saw, in reverse.
 
+### Turning DNS off on purpose is its own state (amended 2026-10-31)
+
+During the outage the owner deactivated Remap DNS with `remap-system
+deactivate`. The next morning another agent read `remap system status`,
+saw "DNS: inactive (0 effective service(s))" and "Recovery needed: no",
+could not tell a deliberate turn-off from a fault, and investigated a
+problem that did not exist. Status now names four states, never one word
+for three of them: active; falling back to ordinary DNS on its own, which
+keeps its prepared activation and its bypass record; turned off by the
+owner; and not activated.
+
+`remap-system deactivate` restores ordinary DNS exactly as before, then
+writes `dns-turned-off-v1.json` beside the activation record: the time, the
+command, and the activation's owner UID and product version, which are what
+turning it back on needs. It holds no name and no address. It follows the
+bypass record's pattern: root-owned, written by exclusive temporary file and
+atomic rename with the directory synchronized, covered by a SHA-256 digest
+of its canonical payload, and refused when it is a symlink, has another
+owner or mode, is oversized, or names an unknown command. Unlike the bypass
+record it is 0644, inside the 0711 product directory, so the owner's
+unprivileged `remapd` and CLI can read it. A record that cannot be written
+never undoes the deactivation; the command warns. Activation removes it
+before it changes anything, and so does the installer's own deactivation
+around an update, a rollback, or uninstall: from then on the installer, not
+the owner's earlier command, decides DNS. Uninstall therefore leaves no new
+file in a directory exact removal must empty, and "not installed" already
+says DNS is gone; recording uninstall as a turn-off was considered and
+rejected for that reason.
+
+`remap-system status` says "Native DNS is turned off by the owner at
+2026-10-31T01:20Z (`remap-system deactivate`)" with a `Turn on` line giving
+the exact `sudo ... remap-system activate --owner-uid ... --product-version
+... --system-socket ...` command, and its JSON gains `dnsTurnedOff`. `remap
+system status` gains the installer status key `dnsTurnedOff` and says the
+same on its DNS line. `remapd` reads and verifies the record for `remap
+status`, `remap doctor`, and MCP status, which gain `dns_turned_off`
+(`turned_off_at`, `turned_off_at_ms`, `command`, `turn_on`), and reports it
+only while no resolver plan is active, so a stale record can never
+contradict a supervisor that has re-armed. `remap doctor`'s Lookup line says
+"off (turned off by the owner at ...)" instead of a bare "unresolved".
+
 ## Alternatives considered
 
 Overlaying loopback once on a VPN's persisted change and re-capturing the
@@ -226,6 +267,14 @@ Remap's persisted configuration or on a service Remap can configure. When a
 VPN's DNS outranks Remap's, Remap's names are not answered until the VPN
 lets go, and every other name resolves through the VPN as the VPN intends.
 That is a fail-open state, reported as such, never a failure of public DNS.
+
+Acceptance for the turned-off state: `DNSTurnedOffTests.swift` checks the
+record's canonical bytes, which `crates/remapd/src/native_dns.rs` verifies
+byte for byte, the write, read, and clear, every refusal, and the four status
+states; `RemapLifecycleCommandTests.swift` the `remap system status` line;
+`native_dns.rs` and `crates/remapd/tests/dns_upstream_status.rs` that the
+daemon reports a verified record only while no plan is active; and the CLI
+and MCP tests the status, doctor, and summary wording.
 
 Acceptance: `crates/remap-network/src/liveness.rs` tests the thresholds,
 the window, the cause, and that the verdict follows the upstream set;

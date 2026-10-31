@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use crate::health::{self, HealthReport};
+use crate::status_summary::status_summary;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -110,31 +111,6 @@ impl RemapMcp {
             }
             _ => Err(unexpected_result("an apply receipt")),
         }
-    }
-}
-
-fn status_summary(status: &RegistryStatus) -> String {
-    let base = format!(
-        "Revision {} contains {} mappings; {} are active.",
-        status.revision, status.mapping_count, status.enabled_count
-    );
-    let base = match &status.dns_upstream {
-        Some(upstream) => format!(
-            "{base} Upstream DNS {}.",
-            upstream
-                .message
-                .strip_prefix("upstream DNS ")
-                .unwrap_or(&upstream.message)
-        ),
-        None => base,
-    };
-    if let Some(error) = &status.maintenance {
-        format!(
-            "{base} Mutations are blocked by maintenance ({}).",
-            error.code
-        )
-    } else {
-        base
     }
 }
 
@@ -917,69 +893,10 @@ fn subscription_capacity_error() -> ErrorData {
 
 #[cfg(test)]
 mod status_tests {
-    use remap_protocol::{Diagnostic, RegistryStatus};
+    use remap_protocol::Diagnostic;
 
-    use super::{WatchState, resource_changed, status_summary};
+    use super::{WatchState, resource_changed};
     use crate::resources;
-
-    #[test]
-    fn status_summary_identifies_mutation_blocking_maintenance() {
-        let status = RegistryStatus {
-            revision: 8,
-            mapping_count: 2,
-            enabled_count: 1,
-            schema_version: 1,
-            daemon_version: "0.1.0".to_owned(),
-            maintenance: Some(Diagnostic::new(
-                "E_REGISTRY_CHECKPOINT",
-                "checkpoint blocked",
-                None,
-                true,
-            )),
-            dns_upstream: None,
-        };
-
-        let summary = status_summary(&status);
-        assert!(summary.contains("Mutations are blocked by maintenance"));
-        assert!(summary.contains("E_REGISTRY_CHECKPOINT"));
-    }
-
-    #[test]
-    fn status_summary_says_upstream_dns_is_not_answering() {
-        let failure = remap_protocol::UpstreamFailure {
-            cause: remap_protocol::UpstreamFailureCause::Refused,
-            unanswered_queries: 5,
-            unanswered_for_ms: 4_000,
-        };
-        let status = RegistryStatus {
-            revision: 8,
-            mapping_count: 2,
-            enabled_count: 1,
-            schema_version: 1,
-            daemon_version: "0.2.0".to_owned(),
-            maintenance: None,
-            dns_upstream: Some(failure.diagnostic()),
-        };
-
-        let summary = status_summary(&status);
-        assert!(summary.contains("Upstream DNS not answering: every upstream resolver"));
-        assert!(summary.contains("refused the queries"));
-        let healthy = WatchState {
-            revision: 8,
-            maintenance: None,
-            dns_upstream_unanswered: false,
-        };
-        let failing = WatchState {
-            dns_upstream_unanswered: true,
-            ..healthy.clone()
-        };
-        assert!(resource_changed(resources::STATUS_URI, &healthy, &failing));
-        assert!(!resource_changed(
-            resources::MAPPINGS_URI,
-            &healthy,
-            &failing
-        ));
-    }
 
     #[test]
     fn maintenance_only_changes_notify_status_but_not_mappings() {
@@ -1014,6 +931,25 @@ mod status_tests {
             resources::MAPPINGS_URI,
             &healthy,
             &advanced
+        ));
+    }
+
+    #[test]
+    fn dns_upstream_transitions_notify_status_but_not_mappings() {
+        let healthy = WatchState {
+            revision: 8,
+            maintenance: None,
+            dns_upstream_unanswered: false,
+        };
+        let failing = WatchState {
+            dns_upstream_unanswered: true,
+            ..healthy.clone()
+        };
+        assert!(resource_changed(resources::STATUS_URI, &healthy, &failing));
+        assert!(!resource_changed(
+            resources::MAPPINGS_URI,
+            &healthy,
+            &failing
         ));
     }
 }

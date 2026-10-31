@@ -96,6 +96,8 @@ public struct SystemResolver: Sendable {
         guard !store.exists() else {
             throw ResolverError.activationAlreadyExists
         }
+        // Turning DNS on ends the owner's deliberate turn-off (ADR-0036).
+        try DNSTurnedOffStore(directory: store.directory).clear()
         try DNSListenerProbe.run()
         let handles = try serviceHandles(
             preferences: makePreferences(),
@@ -134,8 +136,31 @@ public struct SystemResolver: Sendable {
             .commitPrepared()
     }
 
+    /// Restores ordinary DNS and removes the activation, as the installer
+    /// does around an update and for uninstall. Any turned-off record goes
+    /// too: the installer, not the owner's earlier command, now decides.
     public func deactivate(store: ActivationStore = .standard) throws {
         try restoreOrdinaryDNS(store: store, retainPreparedRecord: false)
+        try DNSTurnedOffStore(directory: store.directory).clear()
+    }
+
+    /// The owner turns Remap DNS off on purpose: ordinary DNS is restored
+    /// exactly as `deactivate` restores it, then a turned-off record says
+    /// when, by which command, and how to turn it back on (ADR-0036). A
+    /// record that cannot be written never undoes the deactivation; it is
+    /// returned so the command can say so.
+    public func turnOff(
+        command: String,
+        store: ActivationStore = .standard
+    ) throws -> DNSTurnOff {
+        let record = try store.read()
+        try deactivate(store: store)
+        return recordTurnOff(
+            command: command,
+            activation: record,
+            at: Date(),
+            store: DNSTurnedOffStore(directory: store.directory)
+        )
     }
 
     /// Restores ordinary DNS while retaining the integrity-covered activation

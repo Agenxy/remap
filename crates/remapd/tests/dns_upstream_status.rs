@@ -159,3 +159,60 @@ async fn wait_for_socket(path: &std::path::Path) -> TestResult {
     }
     Err("daemon socket did not appear within one second".into())
 }
+
+/// The bytes `remap-system deactivate` writes, as in `native_dns.rs`.
+const TURNED_OFF_RECORD: &str = concat!(
+    r#"{"payload":{"command":"remap-system deactivate","ownerUID":501,"#,
+    r#""productVersion":"0.2.0","schemaVersion":1,"turnedOffAtMilliseconds":1793409600000},"#,
+    r#""sha256":"e36ff5314b7d49cfec7182148bf33cebc66dc6ae4a66b2f3609128a2f103f24a"}"#
+);
+
+#[tokio::test]
+async fn status_says_dns_was_turned_off_on_purpose_only_while_no_plan_is_active() -> TestResult {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let directory = tempfile::tempdir()?;
+    let record = directory.path().join("dns-turned-off-v1.json");
+    std::fs::write(&record, TURNED_OFF_RECORD)?;
+    std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o644))?;
+    // The product requires root to own it; the test account stands in.
+    let owner_uid = std::fs::metadata(&record)?.uid();
+    let source = remapd::TurnedOffRecordSource {
+        path: record,
+        owner_uid,
+    };
+    for (index, with_plan) in [false, true].into_iter().enumerate() {
+        let paths = ControlPaths::under(directory.path().join(format!("data-{index}")));
+        let mut config = DaemonConfig::new(paths.clone());
+        config.dns_turned_off_record = Some(source.clone());
+        if with_plan {
+            let upstream = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+            config.dns = Some(DnsRuntimeConfig::new(
+                unused_dns_address().await?,
+                vec![upstream.local_addr()?],
+            ));
+        }
+        let (stop_sender, stop_receiver) = tokio::sync::oneshot::channel();
+        let daemon = tokio::spawn(async move {
+            remapd::serve_until(config, async {
+                let _result = stop_receiver.await;
+            })
+            .await
+        });
+        wait_for_socket(paths.socket()).await?;
+        let client = ControlClient::new(paths.socket(), Surface::Probe, "0.2.0");
+        let turned_off = status(&client).await?.dns_turned_off;
+        if with_plan {
+            // A published plan means DNS is on again; the record is stale.
+            assert_eq!(turned_off, None);
+        } else {
+            let turned_off = turned_off.ok_or("status did not report the deliberate turn-off")?;
+            assert_eq!(turned_off.turned_off_at, "2026-10-31T01:20Z");
+            assert_eq!(turned_off.command, "remap-system deactivate");
+            assert!(turned_off.turn_on.contains("activate --owner-uid 501"));
+        }
+        let _sent = stop_sender.send(());
+        daemon.await??;
+    }
+    Ok(())
+}

@@ -13,8 +13,8 @@ mod wire;
 pub use client::ControlClient;
 pub use diagnostic::Diagnostic;
 pub use model::{
-    ApplyResult, Change, ChangeEffect, Command, CommandResult, HealthChallengeResult, HostPolicy,
-    ListResult, MAX_ATOMIC_CHANGE_COUNT, MAX_MAPPING_COUNT, MAX_MAPPING_PAGE_SIZE,
+    ApplyResult, Change, ChangeEffect, Command, CommandResult, DnsTurnedOff, HealthChallengeResult,
+    HostPolicy, ListResult, MAX_ATOMIC_CHANGE_COUNT, MAX_MAPPING_COUNT, MAX_MAPPING_PAGE_SIZE,
     MAX_REVISION_WAIT_MS, MAX_TARGET_BYTES, MappingView, PreviewResult, RegistryStatus,
     ResolutionResult, RevisionNotice, Surface, ValidationResult,
 };

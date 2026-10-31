@@ -187,6 +187,7 @@ async fn doctor(data_dir: Option<&Path>) -> Result<Report, Diagnostic> {
         native_install,
         system_lookup,
         dns_upstream: inspection.dns_upstream,
+        dns_turned_off: inspection.dns_turned_off,
     }))
 }
 
@@ -220,6 +221,7 @@ struct RuntimeInspection {
     authority_ready: bool,
     health: RuntimeHealth,
     dns_upstream: Option<remap_protocol::Diagnostic>,
+    dns_turned_off: Option<remap_protocol::DnsTurnedOff>,
 }
 
 impl RuntimeInspection {
@@ -235,6 +237,7 @@ impl RuntimeInspection {
                 http: false,
             },
             dns_upstream: None,
+            dns_turned_off: None,
         }
     }
 }
@@ -292,6 +295,7 @@ async fn inspect_runtime(data_dir: Option<&Path>) -> RuntimeInspection {
         authority_ready: true,
         health,
         dns_upstream: status.dns_upstream,
+        dns_turned_off: status.dns_turned_off,
     }
 }
 

@@ -39,6 +39,8 @@ pub(crate) struct DoctorReport {
     pub(crate) system_lookup: SystemLookup,
     /// Present while every upstream resolver has stopped answering (ADR-0036).
     pub(crate) dns_upstream: Option<remap_protocol::Diagnostic>,
+    /// Present while the owner has turned system DNS off on purpose (ADR-0036).
+    pub(crate) dns_turned_off: Option<remap_protocol::DnsTurnedOff>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
