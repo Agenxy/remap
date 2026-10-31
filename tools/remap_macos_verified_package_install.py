@@ -19,9 +19,11 @@ from tools.remap_release_signing import (
     REHEARSAL_PIN,
     RELEASE_PIN,
     PackageKind,
+    fingerprint,
     is_development_marked,
     is_rehearsal_marked,
     pinned_public_key,
+    revoked_fingerprints,
 )
 
 # What is printed before an unsigned kind is handed to Apple's installer.
@@ -156,6 +158,10 @@ def _rehearsal_kind(root: Path, package: Path) -> PackageKind:
         raise RuntimeError(
             f"the rehearsal pin {REHEARSAL_PIN} must carry {REHEARSAL_KEY_MARKER}, and "
             + "only that marker"
+        )
+    if fingerprint(pin) in revoked_fingerprints(root):
+        raise RuntimeError(
+            f"the rehearsal pin {REHEARSAL_PIN} is revoked; nothing it signed is installed"
         )
     return PackageKind.REHEARSAL
 

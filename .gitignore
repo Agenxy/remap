@@ -13,4 +13,3 @@ __pycache__/
 /.vscode/
 *.xcuserstate
 xcuserdata/
-/platforms/macos/Sources/RemapPortableInstaller/Generated/

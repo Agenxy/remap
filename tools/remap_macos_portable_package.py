@@ -46,7 +46,6 @@ from tools.remap_release_signing import (
     PackageSigning,
     Signer,
     canonical_public_key,
-    generated_rehearsal_pin,
     open_signer,
     pinned_public_key,
     preflight,
@@ -272,22 +271,19 @@ def _build_products(
         root=root,
         environment=rust_environment,
     )
-    # A rehearsal installer's pin is compiled from a build-only source generated from the
-    # committed rehearsal pin; it exists only for this build (ADR-0035).
-    with generated_rehearsal_pin(root, kind):
-        _run(
-            (
-                "xcrun",
-                "swift",
-                "build",
-                "--configuration",
-                "release",
-                "--package-path",
-                "platforms/macos",
-                *swift_build_arguments(kind),
-            ),
-            root=root,
-        )
+    _run(
+        (
+            "xcrun",
+            "swift",
+            "build",
+            "--configuration",
+            "release",
+            "--package-path",
+            "platforms/macos",
+            *swift_build_arguments(kind),
+        ),
+        root=root,
+    )
     swift_bin = Path(
         _capture(
             (

@@ -12,10 +12,16 @@ from pathlib import Path
 from unittest import mock
 
 from tools import remap_macos_verified_package_install as verified_install
+from tools.remap_release_signing import fingerprint
 
 RELEASE_PIN = "ecdsa-sha2-nistp256 release-key remap-release-v2\n"
 DEVELOPMENT_PIN = "ssh-ed25519 development-key remap-release-development-only\n"
-REHEARSAL_PIN = "ecdsa-sha2-nistp256 rehearsal-key remap-release-rehearsal-only\n"
+# Fixture pins need a well-formed key only where a fingerprint is taken.
+REHEARSAL_PIN = (
+    "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBI5Kvkb"
+    + "CKt1ALyXYnhyFFPtYP5RuHixZ12wcy3xLWHYoleWuWCLc6nP23SVRTsLOGvLzWPBVbYHfiMwqexbHuMA= "
+    + "remap-release-rehearsal-only\n"
+)
 REHEARSAL_PACKAGE = "Remap-0.2.0-arm64-rehearsal.pkg"
 
 
@@ -145,6 +151,20 @@ class MacOSVerifiedPackageInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = _pinned_root(directory, rehearsal=RELEASE_PIN)
             with self.assertRaisesRegex(RuntimeError, "remap-release-rehearsal-only"):
+                _ = self._install(
+                    root, REHEARSAL_PACKAGE, {"REMAP_REHEARSAL_PACKAGE": "1"}
+                )
+
+    def test_a_revoked_rehearsal_pin_installs_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = _pinned_root(directory, rehearsal=REHEARSAL_PIN)
+            _ = (
+                root / "docs/release/remap-rehearsal-revoked-fingerprints.txt"
+            ).write_text(
+                f"# revoked\n{fingerprint(REHEARSAL_PIN)} 2026-11-01 rotated\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "is revoked"):
                 _ = self._install(
                     root, REHEARSAL_PACKAGE, {"REMAP_REHEARSAL_PACKAGE": "1"}
                 )

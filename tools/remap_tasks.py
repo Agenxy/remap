@@ -60,7 +60,7 @@ from tools.remap_package import (
     workspace_sources,
 )
 from tools.remap_package import verify as verify_crate_packages
-from tools.remap_rehearsal_key import create_rehearsal_key
+from tools.remap_rehearsal_key import FINGERPRINT_DOCUMENTS, create_rehearsal_key
 from tools.remap_rehearsal_publish import (
     RehearsalInputs,
     rehearsal_root_from_environment,
@@ -77,8 +77,10 @@ from tools.remap_release_signing import (
     REHEARSAL_KEY_VARIABLE,
     REHEARSAL_PACKAGE_VARIABLE,
     REHEARSAL_PIN,
+    SWIFT_VERIFIER,
     PackageKind,
     PackageSigning,
+    fingerprint,
     preflight,
     selected_signing,
 )
@@ -530,10 +532,21 @@ def task_rehearsal_key() -> None:
     line = create_rehearsal_key(ROOT, key_blob, tool=tool / "remap-release-key")
     print(f"Wrote {REHEARSAL_PIN}:\n{line}", end="")
     print(
-        "Commit it with: git add "
-        + f"{REHEARSAL_PIN} && git commit -m "
-        + "'Pin the interim rehearsal signer (ADR-0035)'"
+        f"Published its fingerprint, {fingerprint(line)}, in the README and REHEARSAL.md."
     )
+    print(
+        "Commit them together with: git add "
+        + " ".join(str(path) for path in REHEARSAL_KEY_COMMIT)
+        + " && git commit -m 'Pin the interim rehearsal signer (ADR-0035)'"
+    )
+
+
+# Everything `make rehearsal-key` writes, which is one commit.
+REHEARSAL_KEY_COMMIT = (
+    REHEARSAL_PIN,
+    SWIFT_VERIFIER,
+    *FINGERPRINT_DOCUMENTS,
+)
 
 
 def package_output(kind: PackageKind) -> Path:

@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import os
+import re
 import stat
 import subprocess
-from collections.abc import Generator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -43,17 +44,25 @@ EXPORTABLE_KEY_PREFIXES = (b"-----BEGIN", b"openssh-key-v1", b"PuTTY-User-Key-Fi
 REHEARSAL_BLOB_LABEL = b"remap-release-rehearsal-key-v1\n"
 SWIFT_DEVELOPMENT_CONDITION = "REMAP_DEVELOPMENT_PACKAGE"
 SWIFT_REHEARSAL_CONDITION = "REMAP_REHEARSAL_PACKAGE"
-# The rehearsal pin is compiled into a rehearsal installer from this build-only file, which
-# exists only while a rehearsal package's Swift products build and is never committed.
-GENERATED_REHEARSAL_PIN = Path(
-    "platforms/macos/Sources/RemapPortableInstaller/Generated/RehearsalSigningPin.swift"
+# The installer source holds every committed pin as a literal. Until the rehearsal pin is
+# committed its branch is this error, and `make rehearsal-key` replaces it in that commit.
+SWIFT_VERIFIER = Path(
+    "platforms/macos/Sources/RemapPortableInstaller/PortableReleaseManifest.swift"
 )
+REHEARSAL_SWIFT_PENDING = (
+    '#error("The rehearsal signing pin is not committed yet (ADR-0035).")'
+)
+REHEARSAL_SWIFT_BRANCH = re.compile(
+    r"(?P<head>\n    #elseif REMAP_REHEARSAL_PACKAGE\n)(?P<body>.*?)(?P<tail>\n    #else\n)",
+    re.DOTALL,
+)
+# A rotated rehearsal key's fingerprint, one per line; the documented steps refuse it.
+REHEARSAL_REVOKED = Path("docs/release/remap-rehearsal-revoked-fingerprints.txt")
 REHEARSAL_PIN_MISSING = (
     f"the rehearsal pin {REHEARSAL_PIN} has not been committed. That is expected until "
     + "the owner approves the interim rehearsal signer; docs/release/REHEARSAL.md has the "
     + "one command that creates the key and writes the pin, and the commit that pins it."
 )
-SWIFT_LITERAL_COLUMNS = 70
 
 
 class PackageKind(Enum):
@@ -300,12 +309,26 @@ def verify_embedded_pin(installer: Path, root: Path, kind: PackageKind) -> None:
         )
 
 
-def rehearsal_pin_swift(public_key: str) -> str:
-    """The build-only Swift source that compiles the rehearsal pin into an installer.
+def fingerprint(public_key: str) -> str:
+    """The `SHA256:` fingerprint `ssh-keygen -l -E sha256` prints for this key."""
+    blob = base64.b64decode(canonical_public_key(public_key).split()[1], validate=True)
+    digest = base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii")
+    return "SHA256:" + digest.rstrip("=")
 
-    The literal, once its continuation lines are joined, is byte-identical to the pin
-    file's one line, and the whole file compiles to nothing outside a rehearsal build.
-    """
+
+def revoked_fingerprints(root: Path) -> frozenset[str]:
+    """Every rehearsal fingerprint a rotation has revoked."""
+    path = root / REHEARSAL_REVOKED
+    if not path.exists():
+        return frozenset()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return frozenset(
+        line.split()[0] for line in lines if line.strip() and not line.startswith("#")
+    )
+
+
+def rehearsal_pin_line(public_key: str) -> str:
+    """The one marked OpenSSH line a rehearsal pin must be, refusing anything else."""
     fields = public_key.removesuffix("\n").split(" ")
     if (
         public_key.count("\n") != 1
@@ -318,48 +341,41 @@ def rehearsal_pin_swift(public_key: str) -> str:
             f"the rehearsal pin {REHEARSAL_PIN} must be one OpenSSH public key line "
             + f"whose comment is {REHEARSAL_KEY_MARKER}"
         )
-    key_type, blob, comment = fields
-    chunks = [
-        blob[index : index + SWIFT_LITERAL_COLUMNS]
-        for index in range(0, len(blob), SWIFT_LITERAL_COLUMNS)
-    ]
+    return public_key
+
+
+def swift_pin_literal(public_key: str) -> str:
+    """The pin as the Swift verifier writes every pin: a continued multi-line literal.
+
+    Joining its continuation lines gives the pin file's line exactly, which is what the
+    pin-consistency test checks for every kind.
+    """
+    key_type, blob, comment = (
+        rehearsal_pin_line(public_key).removesuffix("\n").split(" ")
+    )
+    chunks = [blob[index : index + 70] for index in range(0, len(blob), 70)]
     lines = [f"{key_type} ", *chunks[:-1], f"{chunks[-1]} ", comment]
     body = "\\\n".join(f"        {line}" for line in lines)
-    return (
-        "// SPDX-License-Identifier: GPL-3.0-or-later\n"
-        + f"// Generated from {REHEARSAL_PIN} by tools/remap_release_signing.py\n"
-        + "// for one rehearsal package build. Never edit or commit it (ADR-0035).\n"
-        + f"#if {SWIFT_REHEARSAL_CONDITION}\n"
-        + "    enum RehearsalSigningPin {\n"
-        + '        static let publicKey = """\n'
-        + f"{body}\n"
-        + '        """\n'
-        + "    }\n"
-        + "#endif\n"
+    return f'        static let releasePublicKey = """\n{body}\n        """'
+
+
+def rehearsal_swift_branch(source: str) -> str:
+    """The body of the verifier's rehearsal branch: the pending error, or the literal."""
+    match = REHEARSAL_SWIFT_BRANCH.search(source)
+    if match is None:
+        raise RuntimeError(f"{SWIFT_VERIFIER} has no rehearsal branch")
+    return match.group("body")
+
+
+def with_rehearsal_literal(source: str, public_key: str) -> str:
+    """The verifier source with its rehearsal branch holding exactly this pin."""
+    _ = rehearsal_swift_branch(source)
+    literal = swift_pin_literal(public_key)
+    return REHEARSAL_SWIFT_BRANCH.sub(
+        lambda match: match.group("head") + literal + match.group("tail"),
+        source,
+        count=1,
     )
-
-
-@contextmanager
-def generated_rehearsal_pin(root: Path, kind: PackageKind) -> Generator[None]:
-    """Hold the generated rehearsal pin source in place for one Swift build of `kind`.
-
-    A release or development build neither needs nor writes it. A rehearsal build writes
-    it from the committed pin, or fails with the same message preflight gives when that
-    pin has not been committed, and removes it afterwards whatever happens.
-    """
-    if kind is not PackageKind.REHEARSAL:
-        yield
-        return
-    source = rehearsal_pin_swift(pinned_public_key(root, PackageKind.REHEARSAL))
-    generated = root / GENERATED_REHEARSAL_PIN
-    generated.parent.mkdir(mode=0o755, exist_ok=True)
-    try:
-        _ = generated.write_text(source, encoding="utf-8")
-        yield
-    finally:
-        generated.unlink(missing_ok=True)
-        if generated.parent.exists() and not any(generated.parent.iterdir()):
-            generated.parent.rmdir()
 
 
 @dataclass(frozen=True)
@@ -555,9 +571,20 @@ def _preflight_rehearsal(root: Path, key_blob: Path) -> None:
             f"the rehearsal pin {REHEARSAL_PIN} must carry {REHEARSAL_KEY_MARKER}, and "
             + "only that marker, so it can never be mistaken for a release pin"
         )
-    _ = rehearsal_pin_swift(pin)
-    _ = _require_enclave_blob(key_blob, PackageKind.REHEARSAL)
+    _ = rehearsal_pin_line(pin)
+    if fingerprint(pin) in revoked_fingerprints(root):
+        raise RuntimeError(
+            f"the rehearsal pin {REHEARSAL_PIN} is listed in {REHEARSAL_REVOKED}; a "
+            + "revoked key signs nothing. Rotate to a new key first."
+        )
     _require_distinct_pins(root)
+    branch = rehearsal_swift_branch((root / SWIFT_VERIFIER).read_text(encoding="utf-8"))
+    if branch.strip() != swift_pin_literal(pin).strip():
+        raise RuntimeError(
+            f"the rehearsal branch of {SWIFT_VERIFIER} does not hold the committed "
+            + "rehearsal pin; `make rehearsal-key` writes both in one commit"
+        )
+    _ = _require_enclave_blob(key_blob, PackageKind.REHEARSAL)
 
 
 def _require_distinct_pins(root: Path) -> None:

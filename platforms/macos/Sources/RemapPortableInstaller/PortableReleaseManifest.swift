@@ -131,9 +131,10 @@ struct PortableReleaseVerifier: Sendable {
     // when, it builds a development package, and `-D REMAP_REHEARSAL_PACKAGE` when, and only
     // when, it builds a rehearsal package. Each literal, once its backslash-continued lines are
     // joined, is byte-identical to its file under `docs/release`, and a test keeps them so.
-    // A P-256 line is longer than a source line may be, hence the continuations. The rehearsal
-    // literal is generated from its pin for each rehearsal build and never committed, because
-    // that pin exists only once the owner approves the rehearsal signer (ADR-0035).
+    // A P-256 line is longer than a source line may be, hence the continuations. Until the owner
+    // approves the rehearsal signer there is no rehearsal pin, so a rehearsal build stops here;
+    // `make rehearsal-key` replaces the error with the literal in the commit that adds the pin
+    // (ADR-0035).
     #if REMAP_DEVELOPMENT_PACKAGE && REMAP_REHEARSAL_PACKAGE
         #error("a package is exactly one kind: development or rehearsal, never both")
     #endif
@@ -144,7 +145,7 @@ struct PortableReleaseVerifier: Sendable {
         remap-release-development-only
         """
     #elseif REMAP_REHEARSAL_PACKAGE
-        static let releasePublicKey = RehearsalSigningPin.publicKey
+        #error("The rehearsal signing pin is not committed yet (ADR-0035).")
     #else
         static let releasePublicKey = """
         ecdsa-sha2-nistp256 \

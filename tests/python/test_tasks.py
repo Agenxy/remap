@@ -645,6 +645,7 @@ class NativeProductTaskTests(unittest.TestCase):
                 "tools.remap_tasks.create_rehearsal_key",
                 return_value="ecdsa-sha2-nistp256 AAAA remap-release-rehearsal-only\n",
             ) as create,
+            patch("tools.remap_tasks.fingerprint", return_value="SHA256:" + "A" * 43),
             contextlib.redirect_stdout(io.StringIO()) as printed,
         ):
             remap_tasks.task_rehearsal_key()

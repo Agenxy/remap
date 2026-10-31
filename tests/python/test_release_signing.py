@@ -21,10 +21,11 @@ from tools.remap_macos_portable_package import (
 )
 from tools.remap_release_signing import (
     DEVELOPMENT_PIN,
-    GENERATED_REHEARSAL_PIN,
     REHEARSAL_BLOB_LABEL,
     REHEARSAL_PIN,
     REHEARSAL_PIN_MISSING,
+    REHEARSAL_REVOKED,
+    REHEARSAL_SWIFT_PENDING,
     RELEASE_PIN,
     DevelopmentSigning,
     EnclaveSigner,
@@ -33,13 +34,15 @@ from tools.remap_release_signing import (
     RehearsalSigning,
     ReleaseSigning,
     canonical_public_key,
-    generated_rehearsal_pin,
+    fingerprint,
     open_signer,
     preflight,
-    rehearsal_pin_swift,
+    rehearsal_pin_line,
+    rehearsal_swift_branch,
     selected_signing,
     swift_build_arguments,
     verify_embedded_pin,
+    with_rehearsal_literal,
 )
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -51,13 +54,13 @@ SWIFT_PINS = re.compile(
     r'#if REMAP_DEVELOPMENT_PACKAGE\n\s*static let releasePublicKey = """\n'
     + r'(?P<development>.*?)\n\s*"""\n'
     + r"\s*#elseif REMAP_REHEARSAL_PACKAGE\n"
-    + r"\s*static let releasePublicKey = RehearsalSigningPin\.publicKey\n"
+    + r"(?P<rehearsal_branch>.*?)\n"
     + r"\s*#else\n"
     + r'\s*static let releasePublicKey = """\n(?P<release>.*?)\n\s*"""\n\s*#endif\n',
     re.DOTALL,
 )
-GENERATED_LITERAL = re.compile(
-    r'static let publicKey = """\n(?P<literal>.*?)\n\s*"""\n', re.DOTALL
+LITERAL = re.compile(
+    r'^\s*static let releasePublicKey = """\n(?P<literal>.*?)\n\s*"""$', re.DOTALL
 )
 
 
@@ -88,7 +91,11 @@ class ReleaseSigningTests(unittest.TestCase):
         self.directory = Path(tempfile.mkdtemp(prefix="remap-release-signing-test-"))
         os.chmod(self.directory, 0o700)
         (self.directory / "docs/release").mkdir(parents=True)
-        (self.directory / GENERATED_REHEARSAL_PIN).parent.parent.mkdir(parents=True)
+        verifier = self.directory / signing.SWIFT_VERIFIER
+        verifier.parent.mkdir(parents=True)
+        _ = verifier.write_text(
+            SWIFT_VERIFIER.read_text(encoding="utf-8"), encoding="utf-8"
+        )
 
     @override
     def tearDown(self) -> None:
@@ -122,10 +129,13 @@ class ReleaseSigningTests(unittest.TestCase):
         return blob
 
     def _rehearsal_pin(self, kind: str = "ecdsa") -> str:
-        """A fixture rehearsal pin from a key generated now, in this test's directory."""
+        """A fixture rehearsal pin from a key generated now, committed with its literal."""
         key = self._key(f"rehearsal-{kind}", kind, "remap-release-rehearsal-only")
         pin = key.with_suffix(".pub").read_text(encoding="utf-8")
         _ = (self.directory / REHEARSAL_PIN).write_text(pin, encoding="utf-8")
+        verifier = self.directory / signing.SWIFT_VERIFIER
+        source = verifier.read_text(encoding="utf-8")
+        _ = verifier.write_text(with_rehearsal_literal(source, pin), encoding="utf-8")
         return pin
 
     def _rehearsal_blob(self) -> Path:
@@ -391,14 +401,27 @@ class ReleaseSigningTests(unittest.TestCase):
         self.assertIn("expected until the owner approves", REHEARSAL_PIN_MISSING)
         # Release and development builds do not need it.
         preflight(self.directory, ReleaseSigning(self._blob(b"\x30enclave blob")))
-        with (
-            self.assertRaises(RuntimeError) as generated,
-            generated_rehearsal_pin(self.directory, PackageKind.REHEARSAL),
-        ):
-            self.fail("a rehearsal build must not start without its pin")
-        self.assertEqual(str(generated.exception), REHEARSAL_PIN_MISSING)
-        with generated_rehearsal_pin(self.directory, PackageKind.RELEASE):
-            self.assertFalse((self.directory / GENERATED_REHEARSAL_PIN).exists())
+
+    def test_a_pin_committed_without_its_literal_or_revoked_is_refused(self) -> None:
+        _ = self._real_pins()
+        pin = self._rehearsal_pin()
+        blob = self._rehearsal_blob()
+        verifier = self.directory / signing.SWIFT_VERIFIER
+        _ = verifier.write_text(
+            SWIFT_VERIFIER.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        with self.assertRaisesRegex(RuntimeError, "does not hold the committed"):
+            preflight(self.directory, RehearsalSigning(blob))
+        _ = verifier.write_text(
+            with_rehearsal_literal(verifier.read_text(encoding="utf-8"), pin),
+            encoding="utf-8",
+        )
+        preflight(self.directory, RehearsalSigning(blob))
+        _ = (self.directory / REHEARSAL_REVOKED).write_text(
+            f"# revoked keys\n{fingerprint(pin)} 2026-11-01 rotated\n", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(RuntimeError, "revoked key signs nothing"):
+            preflight(self.directory, RehearsalSigning(blob))
 
     def test_a_rehearsal_pin_of_either_type_is_accepted_when_marked(self) -> None:
         _ = self._real_pins()
@@ -543,39 +566,39 @@ class ReleaseSigningTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "release pin"):
             verify_embedded_pin(installer, self.directory, PackageKind.RELEASE)
 
-    def test_the_generated_rehearsal_literal_is_the_pin_byte_for_byte(self) -> None:
-        _ = self._real_pins()
+    def test_the_rehearsal_literal_is_the_pin_byte_for_byte(self) -> None:
+        """What `make rehearsal-key` writes into the verifier joins to the pin exactly."""
+        source = SWIFT_VERIFIER.read_text(encoding="utf-8")
         for kind in ("ecdsa", "ed25519"):
             with self.subTest(kind=kind):
                 pin = self._rehearsal_pin(kind)
-                generated = self.directory / GENERATED_REHEARSAL_PIN
-                with generated_rehearsal_pin(self.directory, PackageKind.REHEARSAL):
-                    source = generated.read_text(encoding="utf-8")
-                self.assertFalse(generated.exists())
-                self.assertFalse(generated.parent.exists())
-                self.assertEqual(source, rehearsal_pin_swift(pin))
-                self.assertTrue(source.startswith("// SPDX-License-Identifier"))
-                self.assertIn("#if REMAP_REHEARSAL_PACKAGE\n", source)
-                self.assertTrue(source.endswith("#endif\n"))
-                match = GENERATED_LITERAL.search(source)
+                pinned = with_rehearsal_literal(source, pin)
+                match = SWIFT_PINS.search(pinned)
                 assert match is not None
-                self.assertEqual(_swift_literal(match.group("literal")) + "\n", pin)
-                self.assertTrue(
-                    all(len(line) <= 120 for line in source.splitlines()),
-                    "the generated source must keep to the Swift line length",
+                literal = LITERAL.match(match.group("rehearsal_branch"))
+                assert literal is not None
+                self.assertEqual(_swift_literal(literal.group("literal")) + "\n", pin)
+                self.assertTrue(all(len(line) <= 120 for line in pinned.splitlines()))
+                # Only the rehearsal branch changes, and a rotation replaces it again.
+                self.assertEqual(
+                    pinned.replace(match.group("rehearsal_branch"), ""),
+                    source.replace(rehearsal_swift_branch(source), ""),
                 )
+                other = self._key(f"next-{kind}", kind, "remap-release-rehearsal-only")
+                rotated = other.with_suffix(".pub").read_text(encoding="utf-8")
+                again = with_rehearsal_literal(pinned, rotated)
+                self.assertIn(rotated.split()[1][:60], again)
+                self.assertNotIn(pin.split()[1][:60], again)
 
-    def test_the_generated_source_is_removed_even_when_the_build_fails(self) -> None:
-        _ = self._real_pins()
-        _ = self._rehearsal_pin()
-        generated = self.directory / GENERATED_REHEARSAL_PIN
-        with (
-            self.assertRaisesRegex(RuntimeError, "swift build failed"),
-            generated_rehearsal_pin(self.directory, PackageKind.REHEARSAL),
-        ):
-            self.assertTrue(generated.is_file())
-            raise RuntimeError("swift build failed")
-        self.assertFalse(generated.exists())
+    def test_a_fingerprint_is_what_ssh_keygen_prints(self) -> None:
+        for kind in ("ecdsa", "ed25519"):
+            with self.subTest(kind=kind):
+                key = self._key(f"print-{kind}", kind, "remap-release-rehearsal-only")
+                listing = _keygen(
+                    "-l", "-E", "sha256", "-f", str(key.with_suffix(".pub"))
+                )
+                line = key.with_suffix(".pub").read_text(encoding="utf-8")
+                self.assertEqual(fingerprint(line), listing.split()[1])
 
     def test_a_pin_that_could_not_be_a_swift_literal_is_refused(self) -> None:
         pin = self._rehearsal_pin()
@@ -589,7 +612,7 @@ class ReleaseSigningTests(unittest.TestCase):
             f"{fields[0]}  {fields[1]} remap-release-rehearsal-only\n",
         ):
             with self.subTest(unsafe=unsafe), self.assertRaises(RuntimeError):
-                _ = rehearsal_pin_swift(unsafe)
+                _ = rehearsal_pin_line(unsafe)
 
 
 @final
@@ -601,12 +624,25 @@ class PinConsistencyTests(unittest.TestCase):
         match = SWIFT_PINS.search(source)
         self.assertIsNotNone(match, "the Swift verifier must select one pin by kind")
         assert match is not None
-        self.assertEqual(source.count("static let releasePublicKey"), 3)
         for kind, pin in (("development", DEVELOPMENT_PIN), ("release", RELEASE_PIN)):
             with self.subTest(kind=kind):
                 document = (REPOSITORY / pin).read_text(encoding="utf-8")
                 self.assertEqual(document.count("\n"), 1)
                 self.assertEqual(_swift_literal(match.group(kind)) + "\n", document)
+        # The rehearsal branch is the pending error until its pin is committed, and then
+        # the pin's literal, exactly like the other two.
+        branch = match.group("rehearsal_branch")
+        rehearsal = REPOSITORY / REHEARSAL_PIN
+        if rehearsal.exists():
+            literal = LITERAL.match(branch)
+            assert literal is not None
+            self.assertEqual(
+                _swift_literal(literal.group("literal")) + "\n",
+                rehearsal.read_text(encoding="utf-8"),
+            )
+        else:
+            self.assertEqual(branch.strip(), REHEARSAL_SWIFT_PENDING)
+            self.assertEqual(source.count("static let releasePublicKey"), 2)
 
     def test_the_development_pin_says_what_it_is(self) -> None:
         pin = (REPOSITORY / DEVELOPMENT_PIN).read_text(encoding="utf-8")
@@ -615,25 +651,12 @@ class PinConsistencyTests(unittest.TestCase):
     def test_the_rehearsal_pin_is_committed_only_as_itself(self) -> None:
         """Until the owner approves the signer there is no pin; afterwards it is marked."""
         pin = REPOSITORY / REHEARSAL_PIN
+        revoked = signing.revoked_fingerprints(REPOSITORY)
+        self.assertTrue(all(entry.startswith("SHA256:") for entry in revoked))
         if pin.exists():
             text = pin.read_text(encoding="utf-8")
-            self.assertTrue(text.rstrip("\n").endswith(" remap-release-rehearsal-only"))
-            _ = rehearsal_pin_swift(text)
-        generated = REPOSITORY / GENERATED_REHEARSAL_PIN
-        ignored = subprocess.run(
-            ("git", "-C", str(REPOSITORY), "check-ignore", "-q", str(generated)),
-            check=False,
-            timeout=30,
-        )
-        self.assertEqual(ignored.returncode, 0, "the generated pin must be ignored")
-        tracked = subprocess.run(
-            ("git", "-C", str(REPOSITORY), "ls-files", str(generated.parent)),
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        self.assertEqual(tracked.stdout, "", "the generated pin is never committed")
+            _ = rehearsal_pin_line(text)
+            self.assertNotIn(fingerprint(text), revoked)
 
     def test_published_fingerprints_follow_the_release_pin(self) -> None:
         listing = _keygen("-l", "-E", "sha256", "-f", str(REPOSITORY / RELEASE_PIN))
