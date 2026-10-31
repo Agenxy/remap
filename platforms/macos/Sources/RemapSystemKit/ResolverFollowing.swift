@@ -17,7 +17,9 @@ enum ResolverCarrier: Equatable, Sendable {
 
 /// The resolver macOS uses: loopback is Remap; otherwise the one service
 /// whose effective servers are exactly the global servers, with macOS's own
-/// primary ranking breaking a tie between services on the same resolver.
+/// primary ranking breaking a tie between services on the same resolver; or,
+/// when no configured service has those servers and the primary service is
+/// absent from the preferences, that dynamic-store service.
 func resolverCarrier(_ snapshot: NetworkSnapshot) -> ResolverCarrier {
     if snapshot.globalServers == [loopbackResolver] {
         return .remap
@@ -26,9 +28,6 @@ func resolverCarrier(_ snapshot: NetworkSnapshot) -> ResolverCarrier {
     guard !global.isEmpty else {
         return .unattributed
     }
-    if let primary = snapshot.primaryServiceID, snapshot.service(primary) == nil {
-        return .outsidePreferences
-    }
     let matches = snapshot.services.filter { service in
         guard let effective = service.effectiveServers else { return false }
         return Set(effective.filter(isUsableUpstream)) == global
@@ -36,8 +35,17 @@ func resolverCarrier(_ snapshot: NetworkSnapshot) -> ResolverCarrier {
     if matches.count == 1 {
         return .service(matches[0])
     }
-    if let primary = snapshot.primaryServiceID, matches.contains(primary) {
+    guard let primary = snapshot.primaryServiceID else {
+        return .unattributed
+    }
+    if matches.contains(primary) {
         return .service(primary)
+    }
+    // A tunnel that publishes no DNS of its own can be primary while a
+    // configured service still supplies the resolver; only a resolver no
+    // configured service accounts for belongs to the tunnel.
+    if matches.isEmpty, snapshot.service(primary) == nil {
+        return .outsidePreferences
     }
     return .unattributed
 }

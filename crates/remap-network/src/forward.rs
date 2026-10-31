@@ -33,15 +33,23 @@ impl Forwarder {
             .plans
             .capture()
             .ok_or(NetworkError::UpstreamUnavailable)?;
+        self.exchange_through(&plan, packet).await
+    }
+
+    async fn exchange_through(
+        &self,
+        plan: &ResolverPlan,
+        packet: &[u8],
+    ) -> Result<Vec<u8>, NetworkError> {
         let request = Message::from_vec(packet).ok();
         let mut failures = UpstreamFailures::default();
         for upstream in plan.upstreams().iter().copied() {
             match self
-                .exchange_one(&plan, upstream, packet, request.as_ref())
+                .exchange_one(plan, upstream, packet, request.as_ref())
                 .await
             {
                 Attempt::Answered(response) => {
-                    self.plans.record_exchange(&plan, ExchangeOutcome::Answered);
+                    self.plans.record_exchange(plan, ExchangeOutcome::Answered);
                     return Ok(response);
                 }
                 Attempt::AnsweredIncompletely => failures.answered = true,
@@ -53,7 +61,7 @@ impl Forwarder {
                 Attempt::Cancelled => return Err(NetworkError::UpstreamUnavailable),
             }
         }
-        self.plans.record_exchange(&plan, failures.outcome());
+        self.plans.record_exchange(plan, failures.outcome());
         failures.refused.ok_or(NetworkError::UpstreamUnavailable)
     }
 
@@ -61,14 +69,18 @@ impl Forwarder {
     /// upstream is judged unanswered, so the verdict clears once one of them
     /// answers again even when no client is asking. It carries no name a
     /// person chose, and runs at most once per probe interval.
+    ///
+    /// After a bypass invalidated the plan, the probe still asks the set the
+    /// verdict belongs to, so a supervisor that republishes that set finds
+    /// the verdict already cleared once those resolvers answer again.
     pub(crate) async fn probe(&self) {
-        if !self.plans.upstreams_unanswered() {
+        let Some(plan) = self.plans.probe_plan() else {
             return;
-        }
+        };
         let Some(query) = probe_query() else {
             return;
         };
-        let _outcome = self.exchange(&query).await;
+        let _outcome = self.exchange_through(&plan, &query).await;
     }
 
     pub(crate) fn probe_interval(&self) -> Duration {

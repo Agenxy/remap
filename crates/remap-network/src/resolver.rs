@@ -172,8 +172,18 @@ impl ResolverPlanStore {
             .record(plan.upstreams(), outcome, tokio::time::Instant::now());
     }
 
-    pub(crate) fn upstreams_unanswered(&self) -> bool {
-        self.liveness.tripped()
+    /// The plan a liveness probe uses while the verdict holds: the active
+    /// plan, or, once invalidation removed it, a plan over the same upstream
+    /// set that is never published and so never forwards a client query.
+    pub(crate) fn probe_plan(&self) -> Option<Arc<ResolverPlan>> {
+        if !self.liveness.tripped() {
+            return None;
+        }
+        if let Some(active) = self.capture() {
+            return Some(active);
+        }
+        let upstreams = self.liveness.upstreams();
+        ResolverPlan::new(1, upstreams).ok().map(Arc::new)
     }
 
     pub(crate) const fn liveness_policy(&self) -> UpstreamLivenessPolicy {

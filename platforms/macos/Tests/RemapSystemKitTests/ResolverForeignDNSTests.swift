@@ -281,6 +281,11 @@ func theResolverMacOSUsesIsAttributedToExactlyOneService() {
         services: twoOnOneRouter, globalServers: [vpnResolver], primaryServiceID: "utun"
     )) == .outsidePreferences)
     #expect(resolverCarrier(NetworkSnapshot(services: [service("a", nil)], globalServers: [])) == .unattributed)
+    // A full-tunnel VPN with no DNS of its own is primary, but Wi-Fi's
+    // resolver is still the one macOS uses.
+    #expect(resolverCarrier(NetworkSnapshot(
+        services: [service("wifi", [routerResolver])], globalServers: [routerResolver], primaryServiceID: "utun"
+    )) == .service("wifi"))
 }
 
 extension ActivatedMac {

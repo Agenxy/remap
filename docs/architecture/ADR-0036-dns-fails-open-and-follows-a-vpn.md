@@ -60,8 +60,11 @@ the same set, as a supervisor does when it re-arms after a bypass, keeps
 the verdict, so re-arming cannot put the Mac back on resolvers known to be
 dead. Any other set starts with no evidence. Only an answered exchange
 clears it. While no client traffic arrives, such as after a bypass, the
-runtime sends one root `NS` query to the active set every five seconds, and
-only while the verdict holds. The probe carries no name a person chose.
+runtime sends one root `NS` query to that set every five seconds, and only
+while the verdict holds. It does so after a bypass has invalidated the plan
+too, through a plan that is never published and so never forwards a client
+query, so the verdict is already clear when the supervisor republishes the
+set. The probe carries no name a person chose.
 
 ### The verdict reaches the supervisor and the person
 
@@ -117,9 +120,11 @@ the record owns:
 
 Which resolver macOS actually uses is read from the same snapshot: the
 global resolver is loopback, or it is exactly one service's effective
-resolver, with macOS's own primary service breaking a tie, or the primary
-service exists only in the dynamic store, as a VPN's tunnel often does, or
-no service accounts for it. `NetworkSnapshot` gains the primary service ID
+resolver, with macOS's own primary service breaking a tie, or no configured
+service has those servers and the primary service exists only in the
+dynamic store, as a VPN's tunnel often does, or no service accounts for it.
+A tunnel that is primary but publishes no DNS of its own therefore never
+hides the configured service whose resolver macOS still uses. `NetworkSnapshot` gains the primary service ID
 from `State:/Network/Global/IPv4` for this.
 
 ### Remap follows the resolver macOS uses
@@ -239,6 +244,14 @@ the model with a VPN's dynamic DNS below and above Remap's, a VPN service
 macOS uses, a tunnel outside the preferences, and a persisted foreign
 change, and shows zero writes under every re-assertion, following back on
 disconnect, and the exact restore sequence above.
+
+Two judgements are deliberate. An upstream that answers REFUSED to every
+query counts as not answering, since it serves no name; the probe clears the
+verdict if it still answers the root, and ADR-0030 damps any return. And a
+re-arm commit that configd has not applied within its three-second
+verification looks like an outranked one, so the record stays active and
+defers until configd applies it, instead of restoring; both states are
+fail-open and neither writes again.
 
 Only a live VPN on a real Mac can show which layer a given VPN writes, how
 configd ranks it against Remap's persisted configuration, whether a tunnel

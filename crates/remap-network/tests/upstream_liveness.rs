@@ -276,3 +276,19 @@ async fn publishing_a_different_upstream_set_starts_without_a_verdict() -> TestR
     );
     resolver.stop().await
 }
+
+#[tokio::test]
+async fn the_probe_clears_the_verdict_after_a_bypass_invalidated_the_plan() -> TestResult {
+    let upstream = Upstream::start(true, 0, false).await?;
+    let resolver = Resolver::start(vec![upstream.address])?;
+    let _codes = resolver.ask_spaced(4).await?;
+    assert!(resolver.plans.upstream_failure().is_some());
+
+    // A safe bypass invalidates the plan; the system no longer asks Remap.
+    assert!(resolver.plans.invalidate(1)?);
+    upstream.silent.store(false, Ordering::SeqCst);
+
+    assert!(eventually(|| resolver.plans.upstream_failure().is_none()).await);
+    assert_eq!(resolver.plans.active_generation(), None);
+    resolver.stop().await
+}

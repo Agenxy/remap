@@ -198,6 +198,14 @@ impl UpstreamLiveness {
         })
     }
 
+    /// The upstream set the evidence belongs to, in canonical order.
+    pub(crate) fn upstreams(&self) -> Vec<SocketAddr> {
+        self.state
+            .lock()
+            .map(|state| state.upstreams.clone())
+            .unwrap_or_default()
+    }
+
     pub(crate) fn tripped(&self) -> bool {
         self.state.lock().is_ok_and(|state| state.tripped)
     }
