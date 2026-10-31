@@ -35,6 +35,7 @@ from tools.remap_macos_release_installer_signing import (
 )
 from tools.remap_macos_xar import canonicalize_xar_metadata
 from tools.remap_native_package import MANPAGE_NAMES
+from tools.remap_package import cargo_target_directory
 from tools.remap_release_artifacts import (
     MAXIMUM_FILE_BYTES,
     MAXIMUM_SIGNATURE_BYTES,
@@ -56,6 +57,21 @@ from tools.remap_release_signing import (
 PACKAGE_IDENTIFIER = "org.agenxy.Remap.PortableInstaller"
 RELEASE_NAMESPACE = "remap-release"
 PACKAGE_NAMESPACE = "remap-package-v1"
+# The signing identifier of every executable a package carries. Each equals the
+# CFBundleIdentifier its build embeds in `__TEXT,__info_plist` (ADR-0034).
+PRODUCT_IDENTIFIERS = {
+    "remap": "org.agenxy.Remap.cli",
+    "remapd": "org.agenxy.Remap.daemon",
+    "remap-install": "org.agenxy.Remap.install-bootstrap",
+    "remap-installer-bootstrap": "org.agenxy.Remap.installer-bootstrap",
+    "remap-installer-service": "org.agenxy.Remap.installer-service",
+    "remap-lifecycle": "org.agenxy.Remap.lifecycle-cli",
+    "remap-portable-installer": "org.agenxy.Remap.portable-installer",
+    "remap-release-key": "org.agenxy.Remap.release-key",
+    "remap-release-xar-signer": "org.agenxy.Remap.release-xar-signer",
+    "remap-resolver": "org.agenxy.Remap.resolver",
+    "remap-system": "org.agenxy.Remap.system",
+}
 RELEASE_SIGNER_IDENTITY = "remap-release"
 LOCAL_BUILD_PATH_MARKERS = (b"/Users/", b"/private/var/folders/")
 
@@ -317,8 +333,8 @@ def _build_products(
     app = build_app(root, version, release=True, sign=False)
     verify_app_structure(root, app)
     binaries = {
-        "remap": root / "target/release/remap",
-        "remapd": root / "target/release/remapd",
+        "remap": cargo_target_directory(root) / "release/remap",
+        "remapd": cargo_target_directory(root) / "release/remapd",
         "remap-release-key": swift_bin / "remap-release-key",
         "remap-release-xar-signer": swift_bin / "remap-release-xar-signer",
         **{name: swift_bin / name for name in swift_names},
@@ -326,20 +342,7 @@ def _build_products(
     for name, source in binaries.items():
         _copy_file(source, products / name, mode=0o500)
     _copy_tree(app, products / "Remap.app")
-    identifiers = {
-        "remap": "org.agenxy.Remap.cli",
-        "remapd": "org.agenxy.Remap.daemon",
-        "remap-install": "org.agenxy.Remap.install-bootstrap",
-        "remap-installer-bootstrap": "org.agenxy.Remap.installer-bootstrap",
-        "remap-installer-service": "org.agenxy.Remap.installer-service",
-        "remap-lifecycle": "org.agenxy.Remap.lifecycle-cli",
-        "remap-portable-installer": "org.agenxy.Remap.portable-installer",
-        "remap-release-key": "org.agenxy.Remap.release-key",
-        "remap-release-xar-signer": "org.agenxy.Remap.release-xar-signer",
-        "remap-resolver": "org.agenxy.Remap.resolver",
-        "remap-system": "org.agenxy.Remap.system",
-    }
-    for name, identifier in identifiers.items():
+    for name, identifier in PRODUCT_IDENTIFIERS.items():
         _strip_and_ad_hoc_sign(products / name, identifier=identifier, root=root)
     app = products / "Remap.app"
     _remove_copied_bundle_signature(app)

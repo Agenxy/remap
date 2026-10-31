@@ -15,14 +15,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, cast
 
-from tools.remap_lifecycle_approval import confirm_approval
+from tools.remap_lifecycle_approval import SUDO, administrator_command, confirm_approval
 from tools.remap_linux_bootstrap import (
     BOOTSTRAP_HELPER_NAME,
-    SUDO,
     TrustedHelper,
     bootstrap_helper,
     capture_trusted_helper,
     open_verified_helper,
+    sudo_expands_prompt,
     verify_bootstrap_environment,
     verify_pinned_helper,
     verify_root_owned_ancestry,
@@ -273,7 +273,7 @@ def install_or_update(root: Path, version: str, operation: str) -> None:
     account = native_account()
     with tempfile.TemporaryDirectory(prefix="remap-linux-source-") as directory:
         build = build_native_products(root, Path(directory))
-        authorize_administrator(root)
+        authorize_administrator(root, operation)
         with (
             pin_source_manifest(
                 cli=build.cli,
@@ -358,7 +358,7 @@ def recover(root: Path) -> None:
     require_linux_bootstrap()
     with tempfile.TemporaryDirectory(prefix="remap-linux-recover-") as directory:
         source = build_native_helper(root, Path(directory))
-        authorize_administrator(root)
+        authorize_administrator(root, "recover")
         with bootstrap_helper(root, source, native_account().uid) as bootstrap:
             status = lifecycle_status(helper_json(root, bootstrap, ("status",)))
             print(render_status(status))
@@ -391,7 +391,7 @@ def uninstall(root: Path) -> None:
     require_linux_bootstrap()
     with tempfile.TemporaryDirectory(prefix="remap-linux-remove-") as directory:
         source = build_native_helper(root, Path(directory))
-        authorize_administrator(root)
+        authorize_administrator(root, "uninstall")
         with bootstrap_helper(root, source, native_account().uid) as bootstrap:
             status = lifecycle_status(helper_json(root, bootstrap, ("status",)))
             print(render_status(status))
@@ -417,9 +417,9 @@ def uninstall(root: Path) -> None:
     print("Remap was removed, resolver state was restored, and mappings remain.")
 
 
-def authorize_administrator(root: Path) -> None:
+def authorize_administrator(root: Path, operation: str) -> None:
     """Acquire one visible, time-limited sudo authorization ticket."""
-    _run((str(SUDO), "-v"), root)
+    _run(administrator_command(operation, prompt=sudo_expands_prompt()), root)
 
 
 def _selected_helper(status: LinuxStatus, bootstrap: TrustedHelper) -> TrustedHelper:

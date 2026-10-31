@@ -343,7 +343,7 @@ struct ServiceHandle {
 }
 
 func makePreferences() throws -> SCPreferences {
-    guard let preferences = SCPreferencesCreate(nil, "Agenxy Remap" as CFString, nil) else {
+    guard let preferences = SCPreferencesCreate(nil, RemapProduct.configurationSession as CFString, nil) else {
         throw ResolverError.preferences("open DNS preferences")
     }
     return preferences
@@ -387,7 +387,7 @@ func makeAuthorizedPreferences() throws -> AuthorizedPreferencesSession {
     }
     guard let preferences = SCPreferencesCreateWithAuthorization(
         nil,
-        "Agenxy Remap" as CFString,
+        RemapProduct.configurationSession as CFString,
         nil,
         authorization
     ) else {
@@ -401,7 +401,7 @@ func makeAuthorizedPreferences() throws -> AuthorizedPreferencesSession {
 }
 
 func makeDynamicStore() throws -> SCDynamicStore {
-    guard let store = SCDynamicStoreCreate(nil, "Agenxy Remap" as CFString, nil, nil) else {
+    guard let store = SCDynamicStoreCreate(nil, RemapProduct.configurationSession as CFString, nil, nil) else {
         throw ResolverError.preferences("open the dynamic network store")
     }
     return store

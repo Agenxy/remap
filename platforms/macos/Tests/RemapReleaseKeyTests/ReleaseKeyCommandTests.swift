@@ -97,4 +97,15 @@ struct ReleaseKeyCommandTests {
         #expect(throws: ReleaseKeyError.self) { try digest(9, bound: 8) }
         #expect(throws: ReleaseKeyError.self) { try digest(0, bound: 8) }
     }
+
+    @Test("each signature's prompt says which one the owner is approving")
+    func signingReasonsCompleteTheSystemSentence() {
+        let reasons = ["remap-release", "remap-package-v1", "other"].map(ReleaseKeyTool.signingReason)
+        #expect(reasons[0] == "sign the manifest of a Remap release")
+        #expect(reasons[1] == "sign a Remap installer package")
+        #expect(Set(reasons).count == reasons.count)
+        for reason in reasons {
+            #expect(reason.first?.isLowercase == true && !reason.hasSuffix("."))
+        }
+    }
 }

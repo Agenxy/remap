@@ -99,7 +99,7 @@ enum RemapInstallUserPresence {
         }
         return try await context.evaluatePolicy(
             .deviceOwnerAuthentication,
-            localizedReason: "Approve the reviewed Remap system changes"
+            localizedReason: RemapPresenceReason.reviewedChanges
         )
     }
 

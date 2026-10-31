@@ -243,7 +243,7 @@ private struct DNSCursor {
 
 private final class DNSConnectionProbe: @unchecked Sendable {
     private let connection: NWConnection
-    private let queue = DispatchQueue(label: "org.agenxy.remap.dns-probe", qos: .utility)
+    private let queue = DispatchQueue(label: "org.agenxy.Remap.dns-probe", qos: .utility)
     private let state = Mutex(DNSConnectionState.idle)
     private let transport: DNSProbeTransport
 

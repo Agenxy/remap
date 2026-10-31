@@ -22,6 +22,7 @@ from typing import BinaryIO, cast
 from tools.remap_app import build as build_native_app
 from tools.remap_app import verify as verify_native_app
 from tools.remap_freshness import verify_selected_xcode
+from tools.remap_lifecycle_approval import administrator_command
 from tools.remap_macos_artifact import (
     expected_macos_sdk,
     normalize_macos_sdk_metadata,
@@ -61,6 +62,7 @@ from tools.remap_native_package import (
     NativeProductFiles,
     assemble,
 )
+from tools.remap_package import cargo_target_directory
 
 SYSTEM_CLI = Path("/usr/local/bin/remap")
 SYSTEM_APP = Path("/Applications/Remap.app")
@@ -209,11 +211,11 @@ def build_native_products(root: Path, version: str, staging: Path) -> NativeBuil
     signing_directory = products / "signing"
     signing_directory.mkdir(mode=0o700)
     cli_staging = stage_unsigned_executable(
-        root / "target/release/remap",
+        cargo_target_directory(root) / "release/remap",
         signing_directory / "cli",
     )
     daemon_staging = stage_unsigned_executable(
-        root / "target/release/remapd",
+        cargo_target_directory(root) / "release/remapd",
         signing_directory / "daemon",
     )
     installer_staging = stage_unsigned_executable(
@@ -374,7 +376,7 @@ def install_or_update(root: Path, version: str, operation: str) -> None:
     with tempfile.TemporaryDirectory(prefix="remap-native-source-") as directory:
         workspace = Path(directory)
         build = build_native_products(root, version, workspace)
-        authorize_administrator(root)
+        authorize_administrator(root, operation)
         with bootstrap_helper(
             root, build.files.installer, build.installer_cdhash
         ) as bootstrap:
@@ -449,7 +451,7 @@ def uninstall(root: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="remap-native-remove-") as directory:
         staging = Path(directory)
         helper_source, expected_cdhash = build_installer(root, staging)
-        authorize_administrator(root)
+        authorize_administrator(root, "uninstall")
         with bootstrap_helper(root, helper_source, expected_cdhash) as bootstrap:
             status = installer_status(helper_json(root, bootstrap, ("status",)))
             helper = _selected_helper(root, bootstrap, expected_cdhash, status)
@@ -496,7 +498,7 @@ def recover(root: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="remap-native-recover-") as directory:
         staging = Path(directory)
         helper_source, expected_cdhash = build_installer(root, staging)
-        authorize_administrator(root)
+        authorize_administrator(root, "recover")
         with bootstrap_helper(root, helper_source, expected_cdhash) as bootstrap:
             status = installer_status(helper_json(root, bootstrap, ("status",)))
             helper = _selected_helper(root, bootstrap, expected_cdhash, status)
@@ -599,10 +601,10 @@ def verify_generated_package_contract(root: Path, version: str) -> None:
         )
 
 
-def authorize_administrator(root: Path) -> None:
+def authorize_administrator(root: Path, operation: str) -> None:
     """Acquire visible administrator authority for read-only root inspection."""
     try:
-        _run(("/usr/bin/sudo", "-v"), root=root)
+        _run(administrator_command(operation), root=root)
     except subprocess.TimeoutExpired as error:
         message = (
             "administrator authentication did not complete within the bounded "

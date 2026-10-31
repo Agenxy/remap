@@ -132,9 +132,19 @@ enum ReleaseKeyTool {
                 of: input,
                 maximumByteCount: ReleaseKeyCommand.maximumMessageByteCount
             )
-            let key = try loadEnclaveKey(at: path, reason: "sign a Remap release under \(namespace)")
+            let key = try loadEnclaveKey(at: path, reason: signingReason(namespace))
             let signature = try SSHSignature.sign(messageDigest: digest, namespace: namespace, key: key)
             try output.write(contentsOf: signature)
+        }
+    }
+
+    /// macOS asks "<program> is trying to <reason>." once per signature, and a
+    /// release takes two, so each says which of them the owner is approving.
+    static func signingReason(_ namespace: String) -> String {
+        switch namespace {
+        case "remap-release": "sign the manifest of a Remap release"
+        case "remap-package-v1": "sign a Remap installer package"
+        default: "sign Remap release data under \(namespace)"
         }
     }
 

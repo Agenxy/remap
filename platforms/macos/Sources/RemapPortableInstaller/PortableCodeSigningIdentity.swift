@@ -254,7 +254,7 @@ struct PortableCodeSigningIdentityStore: Sendable {
         }
     }
 
-    private static let opensslConfiguration = """
+    static let opensslConfiguration = """
     [ req ]
     default_bits = 3072
     default_md = sha256
@@ -264,7 +264,7 @@ struct PortableCodeSigningIdentityStore: Sendable {
 
     [ dn ]
     CN = Remap Local Codesign
-    O = Agenxy Local
+    O = Remap
     OU = Remap Signing
 
     [ codesign ]
