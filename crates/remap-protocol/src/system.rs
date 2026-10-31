@@ -85,6 +85,96 @@ pub struct SystemResult {
     /// steady-state responses byte-identical to the original v1 contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub highest_accepted_generation: Option<u64>,
+    /// Present only while every upstream of the daemon's current set has
+    /// stopped answering over its bounded window (ADR-0036).
+    ///
+    /// Absent means the upstreams answer, too little evidence exists yet, or
+    /// the daemon is older than this field. Omitting it while healthy keeps
+    /// steady-state responses byte-identical to the original v1 contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_failure: Option<UpstreamFailure>,
+}
+
+/// Why the daemon judges that its upstream resolvers stopped answering. It
+/// carries counts and a duration, never an address.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamFailure {
+    /// The most frequent failure among the unanswered queries.
+    pub cause: UpstreamFailureCause,
+    /// Queries that went unanswered since the last answer.
+    pub unanswered_queries: u32,
+    /// Milliseconds since the first of those queries failed.
+    pub unanswered_for_ms: u64,
+}
+
+/// How the unanswered queries failed.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpstreamFailureCause {
+    /// No upstream replied before the deadline, as when a VPN's DNS leak
+    /// protection drops the packets.
+    TimedOut,
+    /// Upstreams refused the query or the connection.
+    Refused,
+    /// The network reported the upstreams unreachable.
+    Unreachable,
+}
+
+impl UpstreamFailure {
+    /// The status diagnostic `remap status`, `remap doctor`, and MCP show.
+    #[must_use]
+    pub fn diagnostic(&self) -> Diagnostic {
+        let seconds = self.unanswered_for_ms.saturating_add(500) / 1_000;
+        let span = if seconds == 1 {
+            "1 second".to_owned()
+        } else {
+            format!("{seconds} seconds")
+        };
+        Diagnostic::new(
+            UPSTREAM_UNANSWERED_CODE,
+            format!(
+                "upstream DNS not answering: every upstream resolver {} for the last {} queries over {span}",
+                self.cause.describe(),
+                self.unanswered_queries
+            ),
+            Some(
+                "names Remap does not own fall back to ordinary DNS; a VPN's DNS leak protection \
+                 can block the resolvers Remap forwards to, and on macOS 'remap-system status' \
+                 shows the fallback"
+                    .to_owned(),
+            ),
+            true,
+        )
+        .with_context("cause", self.cause.as_str())
+        .with_context("unanswered_queries", self.unanswered_queries.to_string())
+        .with_context("unanswered_for_ms", self.unanswered_for_ms.to_string())
+    }
+}
+
+/// Stable code for upstream resolvers that stopped answering (ADR-0036).
+pub const UPSTREAM_UNANSWERED_CODE: &str = "E_DNS_UPSTREAM_UNANSWERED";
+
+impl UpstreamFailureCause {
+    /// Plain words for status output.
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::TimedOut => "timed out",
+            Self::Refused => "refused the queries",
+            Self::Unreachable => "were unreachable",
+        }
+    }
+
+    /// Stable lowercase name, as on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TimedOut => "timed_out",
+            Self::Refused => "refused",
+            Self::Unreachable => "unreachable",
+        }
+    }
 }
 
 impl SystemResult {
@@ -101,7 +191,15 @@ impl SystemResult {
             activation_id,
             active_generation,
             highest_accepted_generation,
+            upstream_failure: None,
         }
+    }
+
+    /// Adds the daemon's verdict that its upstreams stopped answering.
+    #[must_use]
+    pub const fn with_upstream_failure(mut self, failure: Option<UpstreamFailure>) -> Self {
+        self.upstream_failure = failure;
+        self
     }
 }
 
@@ -164,8 +262,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest, SystemResult, read_system_frame,
-        write_system_frame,
+        SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest, SystemResult, UpstreamFailure,
+        UpstreamFailureCause, read_system_frame, write_system_frame,
     };
 
     #[tokio::test]
@@ -230,6 +328,51 @@ mod tests {
             r#"{"activation_id":null,"active_generation":null,"highest_accepted_generation":3}"#,
         )?;
         assert_eq!(current.highest_accepted_generation, Some(3));
+        Ok(())
+    }
+
+    #[test]
+    fn upstream_failure_is_additive_and_carries_no_address() -> Result<(), Box<dyn Error>> {
+        let healthy = SystemResult::new(None, Some(4), None).with_upstream_failure(None);
+        assert_eq!(
+            serde_json::to_value(&healthy)?,
+            serde_json::json!({"activation_id": null, "active_generation": 4})
+        );
+        let failing =
+            SystemResult::new(None, Some(4), None).with_upstream_failure(Some(UpstreamFailure {
+                cause: UpstreamFailureCause::TimedOut,
+                unanswered_queries: 12,
+                unanswered_for_ms: 9_000,
+            }));
+        let encoded = serde_json::to_value(&failing)?;
+        assert_eq!(
+            encoded["upstream_failure"],
+            serde_json::json!({
+                "cause": "timed_out",
+                "unanswered_queries": 12,
+                "unanswered_for_ms": 9_000,
+            })
+        );
+        let decoded: SystemResult = serde_json::from_value(encoded)?;
+        assert_eq!(decoded, failing);
+        let diagnostic = failing
+            .upstream_failure
+            .ok_or_else(|| std::io::Error::other("the failure disappeared"))?
+            .diagnostic();
+        assert_eq!(diagnostic.code, "E_DNS_UPSTREAM_UNANSWERED");
+        assert!(diagnostic.message.starts_with("upstream DNS not answering"));
+        assert!(
+            diagnostic
+                .message
+                .contains("timed out for the last 12 queries over 9 seconds")
+        );
+        assert_eq!(
+            diagnostic.context.get("cause").map(String::as_str),
+            Some("timed_out")
+        );
+        let older: SystemResult =
+            serde_json::from_str(r#"{"activation_id":null,"active_generation":4}"#)?;
+        assert_eq!(older.upstream_failure, None);
         Ok(())
     }
 

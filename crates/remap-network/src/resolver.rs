@@ -6,12 +6,16 @@ use arc_swap::ArcSwapOption;
 use tokio_util::sync::CancellationToken;
 
 use crate::NetworkError;
+use crate::liveness::{
+    ExchangeOutcome, UpstreamLiveness, UpstreamLivenessPolicy, UpstreamsUnanswered,
+};
 
 /// Lock-free reader and serialized publisher for ordered DNS resolver plans.
 #[derive(Debug, Clone)]
 pub struct ResolverPlanStore {
     active: Arc<ArcSwapOption<ResolverPlan>>,
     publisher: Arc<Mutex<PublisherState>>,
+    liveness: UpstreamLiveness,
 }
 
 #[derive(Debug)]
@@ -33,11 +37,18 @@ impl ResolverPlanStore {
     /// authenticated privileged supervisor publishes generation one or newer.
     #[must_use]
     pub fn dormant() -> Self {
+        Self::dormant_with(UpstreamLivenessPolicy::default())
+    }
+
+    /// Creates a dormant store that judges upstream liveness by `policy`.
+    #[must_use]
+    pub fn dormant_with(policy: UpstreamLivenessPolicy) -> Self {
         Self {
             active: Arc::new(ArcSwapOption::empty()),
             publisher: Arc::new(Mutex::new(PublisherState {
                 latest_generation: 0,
             })),
+            liveness: UpstreamLiveness::new(policy),
         }
     }
 
@@ -47,12 +58,27 @@ impl ResolverPlanStore {
     ///
     /// Returns a configuration failure for unsafe or empty endpoints.
     pub fn initial(upstreams: Vec<SocketAddr>) -> Result<Self, NetworkError> {
+        Self::initial_with(upstreams, UpstreamLivenessPolicy::default())
+    }
+
+    /// Creates generation one that judges upstream liveness by `policy`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration failure for unsafe or empty endpoints.
+    pub fn initial_with(
+        upstreams: Vec<SocketAddr>,
+        policy: UpstreamLivenessPolicy,
+    ) -> Result<Self, NetworkError> {
         let plan = Arc::new(ResolverPlan::new(1, upstreams)?);
+        let liveness = UpstreamLiveness::new(policy);
+        liveness.observe_plan(plan.upstreams());
         Ok(Self {
             active: Arc::new(ArcSwapOption::from(Some(plan))),
             publisher: Arc::new(Mutex::new(PublisherState {
                 latest_generation: 1,
             })),
+            liveness,
         })
     }
 
@@ -76,6 +102,7 @@ impl ResolverPlanStore {
             ));
         }
         publisher.latest_generation = generation;
+        self.liveness.observe_plan(plan.upstreams());
         if let Some(previous) = self.active.swap(Some(plan)) {
             previous.cancellation.cancel();
         }
@@ -124,8 +151,33 @@ impl ResolverPlanStore {
         (publisher.latest_generation > 0).then_some(publisher.latest_generation)
     }
 
+    /// Reports that every upstream of the current set has stopped answering,
+    /// over the bounded window and minimum query count of the store's
+    /// liveness policy (ADR-0036). Absent while any upstream answers, before
+    /// enough evidence exists, and for a set that has never been published.
+    ///
+    /// The verdict outlives invalidation and a republication of the same
+    /// upstream set; only an answer, or a different set, clears it.
+    #[must_use]
+    pub fn upstream_failure(&self) -> Option<UpstreamsUnanswered> {
+        self.liveness.verdict(tokio::time::Instant::now())
+    }
+
     pub(crate) fn capture(&self) -> Option<Arc<ResolverPlan>> {
         self.active.load_full()
+    }
+
+    pub(crate) fn record_exchange(&self, plan: &ResolverPlan, outcome: ExchangeOutcome) {
+        self.liveness
+            .record(plan.upstreams(), outcome, tokio::time::Instant::now());
+    }
+
+    pub(crate) fn upstreams_unanswered(&self) -> bool {
+        self.liveness.tripped()
+    }
+
+    pub(crate) const fn liveness_policy(&self) -> UpstreamLivenessPolicy {
+        self.liveness.policy()
     }
 }
 

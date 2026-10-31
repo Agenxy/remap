@@ -7,6 +7,7 @@ mod failure;
 mod forward;
 mod gateway;
 mod health;
+mod liveness;
 mod peer;
 mod proxy;
 mod reachability;
@@ -24,6 +25,7 @@ pub use health::{
     HEALTH_NONCE_BYTES, HEALTH_PROOF_BYTES, MAX_INSTANCE_ID_BYTES, MAX_RUNTIME_VERSION_BYTES,
     RuntimeIdentity, RuntimeProofs,
 };
+pub use liveness::{UpstreamFailureCause, UpstreamLivenessPolicy, UpstreamsUnanswered};
 pub use peer::{
     PEER_CACHE_LIMIT, PeerResolveError, PeerResolver, PinnedVerifier, RESOLVE_TIMEOUT,
     ResolvedPeerService, SupgangResolver, parse_node, parse_resolution, subject_public_key_info,

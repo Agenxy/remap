@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use remap_network::{NetworkError, ResolverPlanStore};
+use remap_network::{NetworkError, ResolverPlanStore, UpstreamsUnanswered};
 use remap_protocol::{
     DEFAULT_DAEMON_DRAIN_GRACE, Diagnostic, SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest,
-    SystemResponse, SystemResult, read_system_frame, write_system_frame,
+    SystemResponse, SystemResult, UpstreamFailure, UpstreamFailureCause, read_system_frame,
+    write_system_frame,
 };
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Semaphore, watch};
@@ -205,6 +206,20 @@ fn system_result(state: &ControllerState, plans: &ResolverPlanStore) -> SystemRe
         plans.active_generation(),
         plans.highest_accepted_generation(),
     )
+    .with_upstream_failure(plans.upstream_failure().map(upstream_failure))
+}
+
+/// The wire form of the runtime's verdict: counts and a duration, no address.
+pub(crate) fn upstream_failure(verdict: UpstreamsUnanswered) -> UpstreamFailure {
+    UpstreamFailure {
+        cause: match verdict.cause {
+            remap_network::UpstreamFailureCause::TimedOut => UpstreamFailureCause::TimedOut,
+            remap_network::UpstreamFailureCause::Refused => UpstreamFailureCause::Refused,
+            remap_network::UpstreamFailureCause::Unreachable => UpstreamFailureCause::Unreachable,
+        },
+        unanswered_queries: verdict.unanswered_queries,
+        unanswered_for_ms: u64::try_from(verdict.unanswered_for.as_millis()).unwrap_or(u64::MAX),
+    }
 }
 
 async fn serve_connection(
@@ -609,5 +624,96 @@ mod tests {
             request_id: Uuid::new_v4(),
             command: SystemCommand::ResolverHealth,
         }
+    }
+
+    /// The supervisor learns over the system channel that every upstream
+    /// stopped answering real UDP queries, with the cause and no address
+    /// (ADR-0036), and the report disappears once a different set answers.
+    #[tokio::test]
+    async fn health_reports_upstreams_that_stopped_answering_real_queries()
+    -> Result<(), Box<dyn Error>> {
+        use std::time::Duration;
+
+        use hickory_proto::op::{Message, MessageType, OpCode, Query};
+        use hickory_proto::rr::{Name, RecordType};
+        use remap_network::{DnsRuntime, DnsRuntimeConfig, SnapshotStore, UpstreamLivenessPolicy};
+        use remap_protocol::UpstreamFailureCause;
+        use tokio::net::UdpSocket;
+
+        // A resolver a VPN's leak protection has cut off: it receives and
+        // never answers.
+        let blackhole = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let mut config = DnsRuntimeConfig::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            vec![blackhole.local_addr()?],
+        );
+        config.io_timeout = Duration::from_millis(40);
+        config.upstream_liveness = UpstreamLivenessPolicy {
+            min_unanswered: 3,
+            min_span: Duration::from_millis(100),
+            ..UpstreamLivenessPolicy::default()
+        };
+        let runtime = DnsRuntime::bind(&config, SnapshotStore::empty())?;
+        let address = runtime.local_addr();
+        let controller = SystemController::new(runtime.resolver_plans());
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let serving = tokio::spawn(runtime.serve(stopped));
+        let activation_id = Uuid::new_v4();
+        assert!(
+            controller
+                .execute(publish(activation_id, 2))
+                .await
+                .error
+                .is_none()
+        );
+        let silent = SystemRequest {
+            protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
+            request_id: Uuid::new_v4(),
+            command: SystemCommand::PublishResolverPlan {
+                activation_id,
+                generation: 3,
+                upstreams: vec![blackhole.local_addr()?],
+            },
+        };
+        assert!(controller.execute(silent).await.error.is_none());
+
+        let client = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let mut buffer = vec![0_u8; 4_096];
+        for index in 0..4_u16 {
+            let mut request = Message::new(index, MessageType::Query, OpCode::Query);
+            request.add_query(Query::query(
+                Name::from_ascii(format!("q{index}.public.example."))?,
+                RecordType::A,
+            ));
+            client.send_to(&request.to_vec()?, address).await?;
+            let _answered =
+                tokio::time::timeout(Duration::from_secs(1), client.recv_from(&mut buffer))
+                    .await??;
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+
+        let response = controller.execute(health()).await;
+        let failure = response
+            .result
+            .as_ref()
+            .and_then(|result| result.upstream_failure)
+            .ok_or_else(|| io::Error::other("health did not report the silent upstreams"))?;
+        assert_eq!(failure.cause, UpstreamFailureCause::TimedOut);
+        assert!(failure.unanswered_queries >= 3);
+        assert!(failure.unanswered_for_ms >= 100);
+        let encoded = serde_json::to_string(&response)?;
+        assert!(encoded.contains("\"upstream_failure\""));
+        assert!(!encoded.contains("127.0.0.1"));
+
+        // Following a VPN's resolver publishes a different set, which starts
+        // without a verdict.
+        let recovered = controller.execute(publish(activation_id, 4)).await;
+        assert_eq!(
+            recovered.result.map(|result| result.upstream_failure),
+            Some(None)
+        );
+        stop.send(true)?;
+        serving.await??;
+        Ok(())
     }
 }

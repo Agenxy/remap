@@ -21,7 +21,8 @@ pub use model::{
 pub use paths::ControlPaths;
 pub use system::{
     SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest, SystemResponse, SystemResult,
-    read_system_frame, write_system_frame,
+    UPSTREAM_UNANSWERED_CODE, UpstreamFailure, UpstreamFailureCause, read_system_frame,
+    write_system_frame,
 };
 pub use wire::{
     CONTROL_PROTOCOL_VERSION, ControlRequest, ControlResponse, MAX_CONTROL_FRAME_BYTES,
