@@ -48,6 +48,16 @@ When a routed request fails, the gateway answers `502 E_GATEWAY_UPSTREAM` or
 `tls`, `reset`, `unreachable` or `other`. It never shows the target's address; read the
 target with `remap_get`.
 
+## Templates for peer services
+
+A wildcard's `supgang://` or `supgang+http://` target may read its peer or service from
+the name asked for: `{1}` is the label nearest the wildcard's suffix and `{2}` the next.
+With `*.k7.internal` mapped to `supgang://{1}/{2}`, `preview.solis.k7.internal` routes to
+`supgang://solis/preview`. Only a whole peer or service is a placeholder, `{2}` needs
+`{1}`, and an exact name cannot carry a template. The wildcard still owns every name
+under its suffix: a name with another number of labels, or a label its field cannot
+hold, is `404 E_GATEWAY_TEMPLATE_NAME` naming the mapping, never another service.
+
 ## Choosing names
 
 Remap reserves no namespace, and any name the owner chooses is valid. The trade-offs:
@@ -252,6 +262,17 @@ mod tests {
             assert!(HELP.contains(trade_off), "help omits {trade_off}");
         }
         assert!(!HELP.contains("should use"), "help prescribes a suffix");
+    }
+
+    #[test]
+    fn help_explains_target_templates() {
+        for fact in [
+            "supgang://{1}/{2}",
+            "E_GATEWAY_TEMPLATE_NAME",
+            "`{2}` needs",
+        ] {
+            assert!(HELP.contains(fact), "help omits {fact}");
+        }
     }
 
     #[test]

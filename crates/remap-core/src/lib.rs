@@ -7,6 +7,7 @@ mod mapping;
 mod moved;
 mod name;
 mod target;
+mod template;
 
 pub use advisory::target_advisories;
 pub use landing::{LandingPath, LandingPathError, MAX_LANDING_BYTES};
@@ -18,3 +19,4 @@ pub use target::{
     MAX_SERVICE_NAME_BYTES, MappingTarget, MappingTargetError, MappingTargetKind, PeerService,
     PeerServiceError, PeerTransport, UpstreamHost,
 };
+pub use template::{MAX_TEMPLATE_CAPTURES, TemplateNameError, captured_labels};
