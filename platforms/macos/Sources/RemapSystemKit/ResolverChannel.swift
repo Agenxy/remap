@@ -54,21 +54,49 @@ public struct ResolverSystemResult: Decodable, Equatable, Sendable {
     /// sends it only when it exceeds `activeGeneration`, and a daemon older
     /// than ADR-0025 never sends it, so absence is decoded as nil.
     public let highestAcceptedGeneration: UInt64?
+    /// Present only while every upstream of the daemon's current set has
+    /// stopped answering over its bounded window (ADR-0036). A daemon older
+    /// than that field never sends it, so absence is decoded as nil.
+    public let upstreamFailure: ResolverUpstreamFailure?
 
     public init(
         activationID: UUID?,
         activeGeneration: UInt64?,
-        highestAcceptedGeneration: UInt64? = nil
+        highestAcceptedGeneration: UInt64? = nil,
+        upstreamFailure: ResolverUpstreamFailure? = nil
     ) {
         self.activationID = activationID
         self.activeGeneration = activeGeneration
         self.highestAcceptedGeneration = highestAcceptedGeneration
+        self.upstreamFailure = upstreamFailure
     }
 
     enum CodingKeys: String, CodingKey {
         case activationID = "activation_id"
         case activeGeneration = "active_generation"
         case highestAcceptedGeneration = "highest_accepted_generation"
+        case upstreamFailure = "upstream_failure"
+    }
+}
+
+/// The daemon's verdict that its upstream resolvers stopped answering: a
+/// cause, a count, and a duration, never an address.
+public struct ResolverUpstreamFailure: Decodable, Equatable, Sendable {
+    /// `timed_out`, `refused`, or `unreachable`; a newer daemon may add one.
+    public let cause: String
+    public let unansweredQueries: UInt32
+    public let unansweredForMilliseconds: UInt64
+
+    public init(cause: String, unansweredQueries: UInt32, unansweredForMilliseconds: UInt64) {
+        self.cause = cause
+        self.unansweredQueries = unansweredQueries
+        self.unansweredForMilliseconds = unansweredForMilliseconds
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case cause
+        case unansweredQueries = "unanswered_queries"
+        case unansweredForMilliseconds = "unanswered_for_ms"
     }
 }
 

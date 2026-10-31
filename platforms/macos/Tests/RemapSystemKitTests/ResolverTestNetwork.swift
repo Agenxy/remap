@@ -8,6 +8,12 @@ import Synchronization
 /// applied. A service that is up resolves through its applied server
 /// addresses, or its DHCP resolvers when it sets none, and the first service
 /// that is up in service order supplies the global resolver.
+///
+/// Another agent, such as a VPN, can also publish DNS in the dynamic store
+/// (ADR-0036): an `override` for one service, which Remap's commits never
+/// touch, and which wins over the persisted configuration or loses to it
+/// according to `overridePrecedence`; or a whole `outsideService`, ranked
+/// primary but absent from the preferences Remap can configure.
 final class ResolverTestNetwork: NativeNetworkConfiguring, Sendable {
     enum Fault: Equatable, Sendable {
         case preflight
@@ -23,10 +29,24 @@ final class ResolverTestNetwork: NativeNetworkConfiguring, Sendable {
         var applied: Data?
         var connected: Bool
         var dhcp: [String]
+        /// Servers another agent publishes for this service in the dynamic store.
+        var override: [String]?
+    }
+
+    enum OverridePrecedence: Sendable {
+        /// The override is what macOS resolves through, ahead of Remap.
+        case dynamic
+        /// Persisted server addresses still win; the service reports the override.
+        case persisted
     }
 
     struct State: Sendable {
         var services: [Service]
+        var overridePrecedence = OverridePrecedence.dynamic
+        /// A dynamic-store-only service ranked primary, with its servers.
+        var outsideService: (serviceID: String, servers: [String])?
+        /// A global resolver no service accounts for.
+        var unattributedGlobal: [String]?
         var faults: Set<Fault> = []
         var commits = 0
         var commitAttempts = 0
@@ -96,11 +116,22 @@ final class ResolverTestNetwork: NativeNetworkConfiguring, Sendable {
                 networkSignature: Data(service.serviceID.utf8)
             )
         }
-        var global = try current.services.first(where: \.connected).map(effectiveServers) ?? []
+        let primary = current.services.first(where: \.connected)
+        var global = try primary.map { try globalServers($0, precedence: current.overridePrecedence) } ?? []
+        if let outside = current.outsideService {
+            global = outside.servers
+        }
+        if let unattributed = current.unattributedGlobal {
+            global = unattributed
+        }
         if current.faults.contains(.verificationStale) {
             global = ["198.51.100.1"]
         }
-        return NetworkSnapshot(services: services, globalServers: global)
+        return NetworkSnapshot(
+            services: services,
+            globalServers: global,
+            primaryServiceID: current.outsideService?.serviceID ?? primary?.serviceID
+        )
     }
 
     func commit(_ changes: [ServiceConfigurationChange]) throws {
@@ -142,8 +173,31 @@ final class ResolverTestNetwork: NativeNetworkConfiguring, Sendable {
     }
 
     private func effectiveServers(_ service: Service) throws -> [String] {
-        let configured = try service.applied.map { try serverAddresses(from: PropertyLists.decode($0)) } ?? []
+        if let override = service.override {
+            return override
+        }
+        let configured = try appliedServers(service)
         return configured.isEmpty ? service.dhcp : configured
+    }
+
+    private func globalServers(_ service: Service, precedence: OverridePrecedence) throws -> [String] {
+        guard precedence == .persisted else {
+            return try effectiveServers(service)
+        }
+        let configured = try appliedServers(service)
+        return configured.isEmpty ? service.override ?? service.dhcp : configured
+    }
+
+    private func appliedServers(_ service: Service) throws -> [String] {
+        try service.applied.map { try serverAddresses(from: PropertyLists.decode($0)) } ?? []
+    }
+
+    /// Another agent publishes, replaces, or withdraws its dynamic DNS for a service.
+    func agentOverrides(_ serviceID: String, servers: [String]?) {
+        update { state in
+            guard let index = state.services.firstIndex(where: { $0.serviceID == serviceID }) else { return }
+            state.services[index].override = servers
+        }
     }
 }
 

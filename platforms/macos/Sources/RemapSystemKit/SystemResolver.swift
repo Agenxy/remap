@@ -158,16 +158,25 @@ public struct SystemResolver: Sendable {
             .restoreOrdinaryDNS(retainPreparedRecord: retainPreparedRecord)
     }
 
-    /// Follows the single service that now carries DNS, when it is not the
-    /// recorded one. Nil means the recorded service should be reconciled.
+    /// Follows the service that now carries DNS, when it is not the recorded
+    /// one, or defers to another agent's DNS (ADR-0024, ADR-0036).
     func handOffIfNeeded(
         record: ActivationRecord,
         store: ActivationStore,
         publish: (DNSPlan) throws -> Void
-    ) throws -> DNSPlan? {
+    ) throws -> ResolverFollowing {
         try requireRoot()
         return try NativeResolverConfigurator(network: SystemNetworkConfiguration(), store: store)
             .handOffIfNeeded(record: record, publish: publish)
+    }
+
+    /// Commits an active record again when Remap's own restore left its
+    /// services at their prior state, and defers when Remap's configuration
+    /// is in place but macOS uses another resolver (ADR-0036).
+    func reassertActiveActivation(record: ActivationRecord, store: ActivationStore) throws {
+        try requireRoot()
+        try NativeResolverConfigurator(network: SystemNetworkConfiguration(), store: store)
+            .reassertActive(record: record)
     }
 
     public func activeRecord(store: ActivationStore = .standard) throws -> ActivationRecord? {

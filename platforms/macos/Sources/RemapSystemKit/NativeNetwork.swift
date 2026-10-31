@@ -21,6 +21,15 @@ struct ObservedNetworkService: Equatable, Sendable {
 struct NetworkSnapshot: Equatable, Sendable {
     let services: [ObservedNetworkService]
     let globalServers: [String]
+    /// The service macOS ranks primary, which may be one a VPN publishes
+    /// only in the dynamic store and so is absent from `services`.
+    let primaryServiceID: String?
+
+    init(services: [ObservedNetworkService], globalServers: [String], primaryServiceID: String? = nil) {
+        self.services = services
+        self.globalServers = globalServers
+        self.primaryServiceID = primaryServiceID
+    }
 
     func service(_ serviceID: String) -> ObservedNetworkService? {
         services.first { $0.serviceID == serviceID }

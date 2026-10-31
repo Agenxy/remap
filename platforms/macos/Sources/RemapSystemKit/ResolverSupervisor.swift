@@ -5,6 +5,10 @@ import Foundation
 public enum ResolverSupervisorState: Equatable, Sendable {
     case bypassed(code: String)
     case degraded(code: String)
+    /// Another agent's DNS holds the resolver macOS uses. Remap wrote
+    /// nothing, ordinary DNS through that agent is in effect, and the code
+    /// says why (ADR-0036).
+    case deferred(code: String)
     case ready
 }
 
@@ -21,6 +25,10 @@ public enum ResolverSupervisorState: Equatable, Sendable {
 /// ADR-0030: returning is damped. After a bypass the daemon must answer
 /// continuously for the period `rearmDamping` sets before Remap re-arms, so
 /// one lucky exchange on a loaded Mac cannot flip DNS back and forth.
+///
+/// ADR-0036: upstreams that stopped answering are a fault, so ordinary DNS
+/// is restored at once; another agent holding the resolver macOS uses is
+/// not, so nothing is written and nothing is bypassed until it lets go.
 public final class ResolverSupervisor: Sendable {
     private let reconciler: ResolverReconciler
     private let monitor: any ResolverChangeMonitoring
@@ -111,6 +119,11 @@ public final class ResolverSupervisor: Sendable {
         while true {
             let state = await reconcile(monitorAvailable: monitorAvailable)
             report(state, progress: &progress)
+            if case .deferred = state {
+                // Ordinary DNS through another agent is already in effect.
+                progress.failure = nil
+                return false
+            }
             guard case let .degraded(code) = state, code != monitorDegradedCode else {
                 progress.failure = nil
                 noteRearmed(progress: &progress)
@@ -210,6 +223,9 @@ public final class ResolverSupervisor: Sendable {
             }
             let state = await reconcile(monitorAvailable: monitorAvailable)
             guard state == .ready || state == .degraded(code: monitorDegradedCode) else {
+                if case .deferred = state {
+                    report(state, progress: &progress)
+                }
                 healthySince = nil
                 continue
             }
@@ -234,6 +250,8 @@ public final class ResolverSupervisor: Sendable {
         do {
             try await reconciler.reconcile()
             return monitorAvailable ? .ready : .degraded(code: monitorDegradedCode)
+        } catch let deferral as ResolverDeferral {
+            return .deferred(code: deferral.code)
         } catch {
             return .degraded(code: supervisorErrorCode(error))
         }
@@ -258,6 +276,7 @@ public final class ResolverSupervisor: Sendable {
 }
 
 private let monitorDegradedCode = "E_RESOLVER_MONITOR"
+let upstreamUnansweredCode = "E_RESOLVER_UPSTREAM_UNANSWERED"
 private let networkUnobservedCode = "E_RESOLVER_NETWORK_UNOBSERVED"
 
 /// The supervisor loop's own memory between reconciliations.
@@ -321,6 +340,8 @@ private func supervisorErrorCode(_ error: Error) -> String {
     switch error {
     case is ResolverChannelError:
         "E_RESOLVER_CHANNEL"
+    case is ResolverUpstreamsUnanswered:
+        upstreamUnansweredCode
     case let refusal as ResolverSystemDiagnostic:
         // The authenticated daemon's own stable code says why it refused.
         isStableErrorCode(refusal.code) ? refusal.code : "E_RESOLVER_DAEMON_REFUSED"

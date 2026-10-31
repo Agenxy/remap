@@ -21,6 +21,10 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
         var publications: [UInt64] = []
         var publishedUpstreams: [String] = []
         var invalidations: [UUID] = []
+        /// An upstream set the daemon judges unanswered (ADR-0036). Like
+        /// `remapd`, it reports the verdict while that exact set, in any
+        /// order, is the last one published, including after invalidation.
+        var unansweredUpstreams: [String]?
     }
 
     private let state: Mutex<State>
@@ -98,6 +102,13 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
         let exceedsActive = state.highestGeneration > (state.activeGeneration ?? 0)
         if state.reportsHighWater, state.highestGeneration > 0, exceedsActive {
             object["highest_accepted_generation"] = NSNumber(value: state.highestGeneration)
+        }
+        if let unanswered = state.unansweredUpstreams, unanswered.sorted() == state.publishedUpstreams.sorted() {
+            object["upstream_failure"] = [
+                "cause": "timed_out",
+                "unanswered_queries": 12,
+                "unanswered_for_ms": 9000
+            ]
         }
         return try JSONSerialization.data(withJSONObject: object)
     }
