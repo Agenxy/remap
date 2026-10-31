@@ -80,15 +80,15 @@ fn landing_schema_migrates_v1_without_changing_old_receipts() -> TestResult {
     let CommandResult::Status(status) = registry.execute(Command::Status, Surface::Probe)? else {
         return Err("wrong status result".into());
     };
-    assert_eq!(status.schema_version, 2);
+    assert_eq!(status.schema_version, 3);
     let connection = rusqlite::Connection::open(&path)?;
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     assert_eq!(
-        version, 2,
+        version, 3,
         "older daemons must see a newer schema before reading records"
     );
     drop(registry);
-    connection.pragma_update(None, "user_version", 3)?;
+    connection.pragma_update(None, "user_version", 4)?;
     assert_eq!(
         Registry::open(&path)
             .err()
