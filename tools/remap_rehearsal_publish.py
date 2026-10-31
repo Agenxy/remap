@@ -4,17 +4,26 @@
 The root is static files a rehearsal host serves: the GitHub release-asset tree, a shim of
 the two GitHub API answers that name those assets, and a Homebrew tap. A published version
 is never rewritten, because a rehearsal that changed under an installer would prove nothing.
+
+The root is served only over HTTPS, or over plain HTTP to a loopback address, which is how a
+Supgang `forward` or `connect` delivers it after authenticating the peer. Nothing served
+from the root is a trust anchor: an installing Mac checks the published fingerprint and the
+repository's committed pin, never the copy beside the package. Every write into the root
+refuses a symbolic link on its way and replaces a file whole rather than writing through it.
 """
 
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
-import shutil
+import stat
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 OWNER = "Agenxy"
 REPOSITORY = "remap"
@@ -40,20 +49,58 @@ def release_directory(root: Path, base_url: str, version: str) -> Path:
     `make rehearsal-publish` asks this before it builds anything, so a root, a URL, or an
     already published version that would be refused is refused first.
     """
-    if not root.is_absolute() or not root.is_dir():
+    if not root.is_absolute() or root.is_symlink() or not root.is_dir():
         raise ValueError(
             f"the rehearsal root {root} must be an existing absolute directory"
         )
-    if not base_url.startswith(("https://", "http://")) or base_url.endswith("/"):
-        raise ValueError(
-            "the rehearsal URL must be an http(s) origin and path with no trailing /"
-        )
+    require_rehearsal_url(base_url)
     release = root / "releases" / OWNER / REPOSITORY / "download" / f"v{version}"
-    if release.exists():
+    if release.exists() or release.is_symlink():
         raise FileExistsError(
             f"{release} is already published; a rehearsal is never rewritten"
         )
     return release
+
+
+def require_rehearsal_url(base_url: str) -> None:
+    """`https://`, or `http://` only to a loopback address; never a trailing `/`.
+
+    Plain HTTP across a network lets anyone on the path change what is served. Loopback is
+    where a Supgang `forward` or `connect` delivers the deck root, over a path Supgang has
+    already authenticated (K7 ADR 0167 §6). A loopback name such as `localhost` is refused,
+    because only an address says where the bytes come from.
+    """
+    parts = urlsplit(base_url)
+    if parts.scheme not in {"https", "http"}:
+        raise ValueError(
+            "the rehearsal URL must be https://, or http:// to a loopback address"
+        )
+    if base_url.endswith("/") or parts.query or parts.fragment or not parts.hostname:
+        raise ValueError(
+            "the rehearsal URL must be an origin and path with no trailing /, query, "
+            + "or fragment"
+        )
+    if parts.username is not None or parts.password is not None:
+        raise ValueError("the rehearsal URL must not carry credentials")
+    if parts.scheme == "https":
+        return
+    if parts.scheme == "http" and _is_loopback_address(parts.hostname):
+        return
+    raise ValueError(
+        "the rehearsal URL must be https://, or http:// to a loopback address "
+        + "(127.0.0.0/8 or [::1]) such as a Supgang forward"
+    )
+
+
+def _is_loopback_address(host: str) -> bool:
+    """Exactly 127.0.0.0/8 or ::1; an IPv4-mapped IPv6 form is not accepted."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv4Address):
+        return address in ipaddress.IPv4Network("127.0.0.0/8")
+    return address == ipaddress.IPv6Address("::1")
 
 
 def source_archive(repository: Path, version: str, destination: Path) -> Path:
@@ -96,18 +143,25 @@ def publish(root: Path, base_url: str, inputs: RehearsalInputs) -> Path:
     """Write one version into `root` and return its release-asset directory."""
     release = release_directory(root, base_url, inputs.version)
     tag = f"v{inputs.version}"
-    archive = root / "releases" / OWNER / REPOSITORY / "archive" / "refs" / "tags"
-    release.mkdir(parents=True)
+    # Every place this writes is checked before anything is written, so a link planted
+    # anywhere in the root refuses the whole publication rather than half of it.
+    for relative in DIRECTORIES:
+        _ = _directory(root, relative)
+    for relative in REPLACED:
+        _require_replaceable(root / relative)
+    release.mkdir()
     assets = [inputs.package, inputs.signature, inputs.pin]
     for asset in assets:
-        _ = shutil.copyfile(asset, release / asset.name)
+        _write_new(release / asset.name, asset.read_bytes())
     sums = "".join(
         f"{_sha256(release / asset.name)}  {asset.name}\n" for asset in sorted(assets)
     )
-    _ = (release / "SHA256SUMS").write_text(sums, encoding="utf-8")
-    archive.mkdir(parents=True, exist_ok=True)
+    _write_new(release / "SHA256SUMS", sums.encode())
+    archive = _directory(
+        root, Path("releases") / OWNER / REPOSITORY / "archive" / "refs" / "tags"
+    )
     source = archive / f"{tag}.tar.gz"
-    _ = shutil.copyfile(inputs.source_archive, source)
+    _write_new(source, inputs.source_archive.read_bytes())
     _write_api_shim(root, base_url, tag, release)
     _write_formula(root, base_url, inputs.version, source)
     return release
@@ -132,10 +186,10 @@ def _write_api_shim(root: Path, base_url: str, tag: str, release: Path) -> None:
         "tag_name": tag,
     }
     text = json.dumps(document, indent=2, sort_keys=True) + "\n"
-    api = root / "api" / "repos" / OWNER / REPOSITORY / "releases"
-    (api / "tags").mkdir(parents=True, exist_ok=True)
-    _ = (api / "tags" / tag).write_text(text, encoding="utf-8")
-    _ = (api / "latest").write_text(text, encoding="utf-8")
+    api = _directory(root, Path("api/repos") / OWNER / REPOSITORY / "releases")
+    tags = _directory(root, api.relative_to(root) / "tags")
+    _write_new(tags / tag, text.encode())
+    _replace(api / "latest", text.encode())
 
 
 def _write_formula(root: Path, base_url: str, version: str, source: Path) -> None:
@@ -153,9 +207,63 @@ def _write_formula(root: Path, base_url: str, version: str, source: Path) -> Non
         raise ValueError(
             "the Homebrew formula template has a placeholder this publisher does not fill"
         )
-    directory = root / "homebrew" / "Formula"
-    directory.mkdir(parents=True, exist_ok=True)
-    _ = (directory / "remap.rb").write_text(formula, encoding="utf-8")
+    directory = _directory(root, Path("homebrew/Formula"))
+    _replace(directory / "remap.rb", formula.encode())
+
+
+DIRECTORIES = (
+    Path("releases") / OWNER / REPOSITORY / "download",
+    Path("releases") / OWNER / REPOSITORY / "archive" / "refs" / "tags",
+    Path("api/repos") / OWNER / REPOSITORY / "releases" / "tags",
+    Path("homebrew/Formula"),
+)
+REPLACED = (
+    Path("api/repos") / OWNER / REPOSITORY / "releases" / "latest",
+    Path("homebrew/Formula/remap.rb"),
+)
+
+
+def _require_replaceable(path: Path) -> None:
+    if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
+        raise RuntimeError(
+            f"{path} is not a regular file; the root is never written through a link"
+        )
+
+
+def _directory(root: Path, relative: Path) -> Path:
+    """`root / relative` as real directories, creating any missing, following no link."""
+    path = root
+    for part in relative.parts:
+        path = path / part
+        if path.is_symlink():
+            raise RuntimeError(
+                f"{path} is a symbolic link; the root is never written through one"
+            )
+        if not path.exists():
+            path.mkdir(mode=0o755)
+        elif not path.is_dir():
+            raise RuntimeError(f"{path} is not a directory")
+    return path
+
+
+_NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _write_new(path: Path, data: bytes) -> None:
+    """Create one file that must not exist yet, not even as a link."""
+    with os.fdopen(os.open(path, _NEW_FILE, 0o644), "wb") as output:
+        _ = output.write(data)
+
+
+def _replace(path: Path, data: bytes) -> None:
+    """Replace one file whole, so a link planted at its path is never followed."""
+    _require_replaceable(path)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        _write_new(temporary, data)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _sha256(path: Path) -> str:
