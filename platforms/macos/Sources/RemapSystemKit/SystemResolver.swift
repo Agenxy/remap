@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import Network
+import OSLog
 import Security
 import SystemConfiguration
 import SystemConfiguration.SCDynamicStoreCopyDHCPInfo
@@ -134,8 +135,20 @@ public struct SystemResolver: Sendable {
             .commitPrepared()
     }
 
+    /// Restores ordinary DNS, then releases every loopback address held for
+    /// peer-machine names (ADR-0033), so nothing outlives the activation.
+    /// DNS is restored first because it is what the owner depends on.
     public func deactivate(store: ActivationStore = .standard) throws {
         try restoreOrdinaryDNS(store: store, retainPreparedRecord: false)
+        // DNS is restored by now, and that is what deactivation promises. A
+        // release that fails is logged, never thrown: a retry would skip this
+        // step, and the keeper releases the rest once it sees no activation.
+        do {
+            try LoopbackReservationKeeper.releaseAll(store: LoopbackReservationStore(directory: store.directory))
+        } catch {
+            loopbackLogger
+                .error("peer-machine loopback addresses not released: \(String(describing: error), privacy: .public)")
+        }
     }
 
     /// Restores ordinary DNS while retaining the integrity-covered activation
@@ -602,3 +615,5 @@ func requireActiveConsoleUser(_ expectedUID: UInt32) throws {
         throw ResolverError.activeUserMismatch
     }
 }
+
+private let loopbackLogger = Logger(subsystem: "org.agenxy.Remap", category: "loopback-reservations")
