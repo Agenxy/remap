@@ -62,6 +62,7 @@ from tools.remap_native_package import (
     NativeProductFiles,
     assemble,
 )
+from tools.remap_package import cargo_target_directory
 
 SYSTEM_CLI = Path("/usr/local/bin/remap")
 SYSTEM_APP = Path("/Applications/Remap.app")
@@ -210,11 +211,11 @@ def build_native_products(root: Path, version: str, staging: Path) -> NativeBuil
     signing_directory = products / "signing"
     signing_directory.mkdir(mode=0o700)
     cli_staging = stage_unsigned_executable(
-        root / "target/release/remap",
+        cargo_target_directory(root) / "release/remap",
         signing_directory / "cli",
     )
     daemon_staging = stage_unsigned_executable(
-        root / "target/release/remapd",
+        cargo_target_directory(root) / "release/remapd",
         signing_directory / "daemon",
     )
     installer_staging = stage_unsigned_executable(

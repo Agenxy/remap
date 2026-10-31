@@ -43,3 +43,17 @@ authority boundary, privilege, trust operation, or platform contract.
 Make and shell are acceptable for thin orchestration and bootstrap. Substantive
 logic belongs in native typed tools; product platform behavior never shells out
 when a maintained native API or binding exists.
+
+### Worktrees and build output
+
+Parallel work uses `git worktree`s under `.worktrees/`. Each one would otherwise
+grow its own multi-gigabyte `target/`, so:
+
+- Point every worktree at one shared Cargo target directory with
+  `CARGO_TARGET_DIR`. The repository's tools resolve Cargo's real target
+  directory and never assume `<checkout>/target`. Concurrent builds in
+  different worktrees then wait for Cargo's lock instead of duplicating it.
+- Remove a worktree as soon as its branch is merged into the integration
+  branch and the worktree is clean and pushed. The branch stays.
+- Keep at most six worktrees with build output. Never remove a worktree whose
+  branch is unmerged, dirty or unpushed without the owner's OK.
