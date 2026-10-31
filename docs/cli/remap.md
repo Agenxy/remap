@@ -200,7 +200,7 @@ Every structured response includes schema identity and success state:
       "revision": 12,
       "mapping_count": 4,
       "enabled_count": 3,
-      "schema_version": 2,
+      "schema_version": 3,
       "daemon_version": "0.2.0"
     }
   }
