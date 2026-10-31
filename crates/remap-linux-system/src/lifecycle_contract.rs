@@ -67,7 +67,7 @@ pub(crate) struct LinkCandidate {
     link_index: u32,
     interface_name: String,
     backend: String,
-    selection_state: String,
+    pub(crate) selection_state: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
@@ -241,7 +241,11 @@ pub(crate) async fn status(
         (Some(value), false) if value.phase == InstallPhase::Active => "active",
         (None | Some(_), true) | (Some(_), false) => "recovery_required",
     };
-    let link_hint = link_selection_hint(selected.is_some(), recovery_required, &candidates);
+    let link_hint = crate::lifecycle_hints::link_selection_hint(
+        selected.is_some(),
+        recovery_required,
+        &candidates,
+    );
     let current_link_exact = record.as_ref().is_some_and(|value| {
         crate::system_publication::verify_current_link(value.current.id).is_ok()
     });
@@ -268,7 +272,11 @@ pub(crate) async fn status(
         services,
         link_candidates: candidates,
         state_residue,
-        hint: recovery_hint.or(link_hint),
+        hint: recovery_hint
+            .or_else(|| {
+                crate::lifecycle_hints::bypass_hint(resolver_record.as_ref(), recovery_required)
+            })
+            .or(link_hint),
     })
 }
 
@@ -284,27 +292,6 @@ fn accepted_generation(
         .map(|value| &value.current)
 }
 
-fn link_selection_hint(
-    selected: bool,
-    recovery_required: bool,
-    candidates: &[LinkCandidate],
-) -> Option<&'static str> {
-    if selected || recovery_required {
-        return None;
-    }
-    let primary_count = candidates
-        .iter()
-        .filter(|candidate| candidate.selection_state == "supported_primary")
-        .count();
-    Some(match primary_count {
-        0 => {
-            "no supported primary interface is available; inspect link candidates and resolver ownership"
-        }
-        1 => "the only supported primary interface will be selected automatically",
-        _ => "select one supported primary interface with REMAP_LINUX_LINK=<index> make install",
-    })
-}
-
 fn classify_status(
     record: Option<&InstallRecord>,
     activation: Option<&remap_linux::ActivationRecord>,
@@ -317,6 +304,7 @@ fn classify_status(
     let active_integrity_invalid = record
         .is_some_and(|value| value.phase == InstallPhase::Active && verify_active(value).is_err());
     let activation_state_invalid = activation
+        .filter(|value| value.phase() != ActivationPhase::Bypassed)
         .map(|value| {
             SystemdResolved::observe(value.owned().link())
                 .map(|observed| observed != *value.owned())
@@ -846,10 +834,12 @@ async fn snapshot(
         resolver_environment: environment_name(ResolverEnvironment::detect()),
         selected_link,
         effective_link_digest,
+        // A bypassed link carries ordinary DNS, which Remap does not own.
         activation_state_valid: activation_record.as_ref().is_none_or(|activation| {
-            effective_link
-                .as_ref()
-                .is_some_and(|observed| observed == activation.owned())
+            activation.phase() == ActivationPhase::Bypassed
+                || effective_link
+                    .as_ref()
+                    .is_some_and(|observed| observed == activation.owned())
         }),
         activation_record_digest,
         activation_phase: activation_record

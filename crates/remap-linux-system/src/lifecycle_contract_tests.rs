@@ -2,12 +2,13 @@
 use crate::install_model::{
     DirectoryProvenance, Generation, InstallPhase, PublicDirectory, RollbackStep, UninstallStep,
 };
+use crate::lifecycle_hints::link_selection_hint;
 use crate::lifecycle_observation::os_release_value;
 
 use super::{
     LinkCandidate, Operation, accepted_generation, classify_status_observation,
-    directory_publication_effects, hex, link_selection_hint, plan_token, publication_effects,
-    require_token, require_update_capability, sort_publications,
+    directory_publication_effects, hex, plan_token, publication_effects, require_token,
+    require_update_capability, sort_publications,
 };
 
 #[test]

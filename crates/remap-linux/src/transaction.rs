@@ -13,6 +13,14 @@ pub struct ResolverStartupObservation {
     state: crate::LinkState,
 }
 
+impl ResolverStartupObservation {
+    /// Returns the complete observed link state.
+    #[must_use]
+    pub const fn state(&self) -> &crate::LinkState {
+        &self.state
+    }
+}
+
 /// Durable root-owned activation-record storage boundary.
 ///
 /// Implementations must use a root-owned directory, reject symlinks, durably
@@ -221,7 +229,10 @@ where
                 self.continue_abort(record)
             }
             ActivationPhase::Aborting { .. } => self.continue_abort(record),
-            ActivationPhase::Active | ActivationPhase::Restoring { .. } => Err(recovery_required()),
+            ActivationPhase::Active
+            | ActivationPhase::Restoring { .. }
+            | ActivationPhase::Bypassing { .. }
+            | ActivationPhase::Bypassed => Err(recovery_required()),
         }
     }
 
@@ -372,6 +383,11 @@ where
         let Some(mut record) = self.store.load()? else {
             return Ok(None);
         };
+        // A bypassed link carries whatever its manager set since; Remap owns
+        // none of it, so there is no progress to compare.
+        if record.phase() == ActivationPhase::Bypassed {
+            return Ok(Some(record));
+        }
         self.reconcile_progress(&mut record)?;
         match record.phase() {
             ActivationPhase::Applying { .. } => self.continue_transition(record).map(Some),
@@ -379,11 +395,12 @@ where
                 self.continue_abort(record)?;
                 Ok(None)
             }
-            ActivationPhase::Active => Ok(Some(record)),
+            ActivationPhase::Active | ActivationPhase::Bypassed => Ok(Some(record)),
             ActivationPhase::Restoring { .. } => {
                 self.continue_restore(record)?;
                 Ok(None)
             }
+            ActivationPhase::Bypassing { .. } => self.continue_bypass(record).map(Some),
         }
     }
 
@@ -588,6 +605,11 @@ where
                     completed_steps: completed_steps + 1,
                 }
             }
+            ActivationPhase::Bypassing { completed_steps } if completed_steps < LAST_STEP => {
+                ActivationPhase::Bypassing {
+                    completed_steps: completed_steps + 1,
+                }
+            }
             ActivationPhase::Aborting {
                 applied_steps,
                 completed_steps,
@@ -598,6 +620,8 @@ where
             ActivationPhase::Applying { .. }
             | ActivationPhase::Active
             | ActivationPhase::Restoring { .. }
+            | ActivationPhase::Bypassing { .. }
+            | ActivationPhase::Bypassed
             | ActivationPhase::Aborting { .. } => {
                 return Err(ownership_conflict(external_change()));
             }
@@ -646,6 +670,11 @@ const fn observation_unstable() -> LinuxError {
         "resolver state changed during steady observation",
     )
 }
+
+#[path = "transaction_bypass.rs"]
+mod bypass;
+#[cfg(target_os = "linux")]
+pub(crate) use bypass::successor_metadata;
 
 #[cfg(test)]
 #[path = "transaction_tests.rs"]

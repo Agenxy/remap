@@ -407,13 +407,12 @@ async fn recover_explicit(
                 remap_linux::RootRecordStore::inspect(Path::new(STATE_DIRECTORY))
                     .map_err(platform_error)?
                     .is_some_and(|activation| {
-                        activation.phase() == remap_linux::ActivationPhase::Active
+                        activation.phase().is_settled()
                             && daemon_plan_observed
                             && daemon_plan_identity
-                                == Some(crate::install_model::ResolverPlanIdentity {
-                                    activation_id: activation.metadata().activation_id(),
-                                    generation: activation.metadata().generation(),
-                                })
+                                == crate::lifecycle_recovery::expected_daemon_plan(Some(
+                                    &activation,
+                                ))
                     });
             if !services_healthy || !activation_healthy {
                 ensure_service_health_with_plan(

@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::channel::SystemChannel;
+use crate::native_transaction::{NativeResolverTransaction, NativeStartupObservation};
 use crate::resolver_events::{ResolverEvent, connect_monitor, next_event};
+use crate::resolver_fallback::{Supervised, bypass_if_unanswered, reconcile_bypassed};
 use crate::resolver_generation::timestamp_after;
 use crate::resolver_stability::{
     ObservationStability, SteadyObservation, deadline_reached as steady_deadline_reached,
@@ -20,9 +22,7 @@ use crate::resolver_worker::{
 };
 use nix::unistd::Uid;
 use remap_linux::{
-    ActivationPhase, ActivationRecord, LinkIndex, LinkState, NetworkManagerStartupObservation,
-    NetworkManagerTransaction, RecordMetadata, ResolverStartupObservation, ResolverTransaction,
-    RootRecordStore, SystemdResolved,
+    ActivationPhase, ActivationRecord, LinkIndex, LinkState, RecordMetadata, RootRecordStore,
 };
 use remap_protocol::{SystemCommand, SystemResult};
 use tokio::time::MissedTickBehavior;
@@ -33,9 +33,9 @@ const EVENT_MONITOR_RECONNECT_INTERVAL: Duration = Duration::from_secs(30);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const STARTUP_RETRY: Duration = Duration::from_millis(50);
 const STABILITY_INTERVAL: Duration = Duration::from_millis(500);
-const STEADY_STABILITY_INTERVAL: Duration = Duration::from_millis(25);
-const STEADY_STABILITY_TIMEOUT: Duration = Duration::from_millis(150);
-const NATIVE_EFFECT_CALL_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const STEADY_STABILITY_INTERVAL: Duration = Duration::from_millis(25);
+pub(crate) const STEADY_STABILITY_TIMEOUT: Duration = Duration::from_millis(150);
+pub(crate) const NATIVE_EFFECT_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const NATIVE_MANAGER_STABILITY_TIMEOUT: &str =
     "the native resolver manager did not reach stable configured state";
 #[derive(Debug, Clone)]
@@ -84,8 +84,7 @@ pub(crate) async fn serve(config: SupervisorConfig) -> io::Result<()> {
         };
     drop(startup_worker);
     let channel = SystemChannel::new(config.system_socket.clone(), config.daemon_uid);
-    let mut record = initialized.record;
-    let mut resolver_upstreams = initialized.resolver_upstreams;
+    let mut supervised = Supervised::new(initialized.record, initialized.resolver_upstreams);
     let transaction = BoundedWorker::new(initialized.transaction)?;
     let mut events = connect_monitor(config.link, config.manager).await;
     let mut ticker = tokio::time::interval(RECONCILE_INTERVAL);
@@ -127,15 +126,12 @@ pub(crate) async fn serve(config: SupervisorConfig) -> io::Result<()> {
         if !reconcile {
             continue;
         }
-        match reconcile_active(
-            &transaction,
-            &channel,
-            &mut record,
-            &mut resolver_upstreams,
-            &mut shutdown,
-        )
-        .await
-        {
+        let reconciled = if supervised.is_bypassed() {
+            reconcile_bypassed(&transaction, &channel, &mut supervised, &mut shutdown).await
+        } else {
+            reconcile_active(&transaction, &channel, &mut supervised, &mut shutdown).await
+        };
+        match reconciled {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::Interrupted => return Ok(()),
             Err(error) => return Err(error),
@@ -194,8 +190,10 @@ async fn initialize_supervisor(
             return startup_failure(session.transaction, session.provenance, true, error).await;
         }
     };
-    if let Err(failure) =
-        publish_if_needed(&channel, &session.record, resolver_upstreams.clone()).await
+    // A bypassed record has no plan to publish; the steady loop re-arms it.
+    if session.record.phase() == ActivationPhase::Active
+        && let Err(failure) =
+            publish_if_needed(&channel, &session.record, resolver_upstreams.clone()).await
     {
         return startup_failure(
             session.transaction,
@@ -215,10 +213,14 @@ async fn initialize_supervisor(
 async fn reconcile_active(
     transaction: &BoundedWorker<NativeResolverTransaction>,
     channel: &SystemChannel,
-    record: &mut ActivationRecord,
-    resolver_upstreams: &mut Vec<SocketAddr>,
+    supervised: &mut Supervised,
     shutdown: &mut tokio::sync::watch::Receiver<bool>,
 ) -> io::Result<()> {
+    let Supervised {
+        record,
+        upstreams: resolver_upstreams,
+        ..
+    } = supervised;
     let mut stopped_after_rebase = false;
     if let Some(observed) =
         worker_startup_observation(transaction, record.owned().link(), shutdown).await?
@@ -237,9 +239,9 @@ async fn reconcile_active(
             *resolver_upstreams = upstreams(record)?;
         }
     }
-    if let Err(failure) = publish_if_needed(channel, record, resolver_upstreams.clone()).await {
-        return Err(failure.error);
-    }
+    let latest = publish_if_needed(channel, record, resolver_upstreams.clone())
+        .await
+        .map_err(|failure| failure.error)?;
     if stopped_after_rebase {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
@@ -249,12 +251,12 @@ async fn reconcile_active(
     let Some(loaded) = worker_load(transaction, shutdown).await? else {
         return Ok(());
     };
-    if loaded.as_ref() != Some(record) {
+    if loaded.as_ref() != Some(&*record) {
         return Err(conflict(
             "resolver activation record changed while supervised",
         ));
     }
-    Ok(())
+    bypass_if_unanswered(transaction, channel, supervised, &latest, shutdown).await
 }
 
 async fn wait_for_steady_rebase_observation(
@@ -350,7 +352,18 @@ pub(crate) async fn converge_owned_with_store(
 ) -> io::Result<RootRecordStore> {
     require_root()?;
     let mut transaction = NativeResolverTransaction::connect_with_store(config, store)?;
-    let Some((record, observation)) = stabilize_active(&mut transaction, config.link).await? else {
+    let mut stabilized = stabilize_active(&mut transaction, config.link).await?;
+    if let Some(Stabilized::Bypassed(record)) = &stabilized {
+        // The generation a rollback restores cannot read a bypassed record,
+        // so Remap DNS is re-armed from a fresh capture first (ADR-0036).
+        let observation = wait_for_stable_observation(&mut transaction, config.link).await?;
+        let (generation, created) = timestamp_after(Some(record.metadata().generation()))?;
+        transaction
+            .rearm_observed(generation, created, &observation)
+            .map_err(platform_error)?;
+        stabilized = stabilize_active(&mut transaction, config.link).await?;
+    }
+    let Some(Stabilized::Active(record, observation)) = stabilized else {
         return Err(conflict(
             "the update rollback has no resolver activation to converge",
         ));
@@ -372,24 +385,37 @@ async fn deactivate_transaction(
     transaction: &mut NativeResolverTransaction,
     link: LinkIndex,
 ) -> io::Result<()> {
-    let Some((_record, observation)) = stabilize_active(transaction, link).await? else {
-        return Ok(());
-    };
-    transaction
-        .deactivate_observed(&observation)
-        .map_err(platform_error)?;
-    Ok(())
+    match stabilize_active(transaction, link).await? {
+        None => Ok(()),
+        Some(Stabilized::Bypassed(_record)) => {
+            transaction.release_bypassed().map_err(platform_error)
+        }
+        Some(Stabilized::Active(_record, observation)) => transaction
+            .deactivate_observed(&observation)
+            .map_err(platform_error),
+    }
+}
+
+/// A record at rest: Remap's owned state is exact on a stable link, or
+/// ordinary DNS is in effect and Remap owns nothing on the link.
+#[derive(Debug)]
+enum Stabilized {
+    Active(ActivationRecord, NativeStartupObservation),
+    Bypassed(ActivationRecord),
 }
 
 async fn stabilize_active(
     transaction: &mut NativeResolverTransaction,
     link: LinkIndex,
-) -> io::Result<Option<(ActivationRecord, NativeStartupObservation)>> {
+) -> io::Result<Option<Stabilized>> {
     let deadline = tokio::time::Instant::now() + STARTUP_TIMEOUT;
     loop {
         let Some(record) = transaction.load().map_err(platform_error)? else {
             return Ok(None);
         };
+        if record.phase() == ActivationPhase::Bypassed {
+            return Ok(Some(Stabilized::Bypassed(record)));
+        }
         if record.phase() != ActivationPhase::Active {
             match transaction.recover().map_err(platform_error)? {
                 Some(_record) => continue,
@@ -404,7 +430,7 @@ async fn stabilize_active(
             rebase_after_observation(transaction, &observation)?;
             continue;
         }
-        return Ok(Some((record, observation)));
+        return Ok(Some(Stabilized::Active(record, observation)));
     }
 }
 
@@ -480,7 +506,7 @@ async fn activate_or_recover(
         }
         Err(error) => return abort_failed_activation(transaction, error),
     };
-    if record.phase() != ActivationPhase::Active || record.owned().link() != config.link {
+    if !record.phase().is_settled() || record.owned().link() != config.link {
         return Err(conflict(
             "resolver activation does not match the configured link",
         ));
@@ -552,12 +578,6 @@ enum SupervisorStartup {
     Stopped(Option<InitializedSupervisor>),
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) enum NativeStartupObservation {
-    Systemd(ResolverStartupObservation),
-    NetworkManager(NetworkManagerStartupObservation),
-}
-
 fn abort_failed_activation(
     mut transaction: NativeResolverTransaction,
     activation_error: remap_linux::LinuxError,
@@ -566,263 +586,13 @@ fn abort_failed_activation(
     Err(platform_error(activation_error))
 }
 
-#[derive(Debug)]
-pub(crate) enum NativeResolverTransaction {
-    Systemd {
-        transaction: ResolverTransaction<SystemdResolved, RootRecordStore>,
-        migrate_legacy_manager: bool,
-    },
-    NetworkManager(NetworkManagerTransaction<RootRecordStore>),
-}
-
-impl NativeResolverTransaction {
-    pub(crate) fn connect(config: &SupervisorConfig) -> io::Result<Self> {
-        let lock_directory = crate::authority::resolver_lock_directory()?;
-        let store =
-            RootRecordStore::open_with_lock_directory(&config.record_directory, &lock_directory)
-                .map_err(platform_error)?;
-        Self::connect_with_store(config, store)
-    }
-
-    fn connect_with_store(config: &SupervisorConfig, store: RootRecordStore) -> io::Result<Self> {
-        if let (Some(manager), Some(interface_name)) =
-            (config.manager, config.interface_name.as_deref())
-            && !SystemdResolved::expected_manager_ready(config.link, interface_name, manager)
-                .map_err(platform_error)?
-        {
-            return Err(platform_error(remap_linux::LinuxError::new(
-                remap_linux::LinuxErrorKind::ResolverUnavailable,
-                "the selected native resolver manager is temporarily unavailable",
-            )));
-        }
-        let inspection = SystemdResolved::inspect(config.link).map_err(platform_error)?;
-        if config
-            .manager
-            .is_some_and(|expected| expected != inspection.manager())
-            || config
-                .interface_name
-                .as_deref()
-                .is_some_and(|expected| expected != inspection.interface_name())
-        {
-            return Err(conflict(
-                "the selected resolver link changed its approved native identity",
-            ));
-        }
-        match SystemdResolved::connect(config.link) {
-            Ok(backend)
-                if config
-                    .manager
-                    .is_none_or(|expected| expected == backend.manager())
-                    && config
-                        .interface_name
-                        .as_deref()
-                        .is_none_or(|expected| expected == backend.interface_name()) =>
-            {
-                Ok(Self::Systemd {
-                    transaction: ResolverTransaction::new(backend, store),
-                    migrate_legacy_manager: config.manager.is_some()
-                        && config.interface_name.is_some(),
-                })
-            }
-            Ok(_backend) => Err(conflict(
-                "the selected resolver link changed its approved native manager",
-            )),
-            Err(error)
-                if error.kind() == remap_linux::LinuxErrorKind::UnsupportedResolverManager =>
-            {
-                if config.manager.is_some_and(|manager| {
-                    manager != remap_linux::ResolverLinkManager::NetworkManager
-                }) {
-                    return Err(conflict(
-                        "the selected resolver link changed its approved native manager",
-                    ));
-                }
-                let transaction = match config.interface_name.as_deref() {
-                    Some(expected) => {
-                        NetworkManagerTransaction::connect_expected(config.link, expected, store)
-                    }
-                    None => NetworkManagerTransaction::connect(config.link, store),
-                }
-                .map_err(platform_error)?;
-                Ok(Self::NetworkManager(transaction))
-            }
-            Err(error) => Err(platform_error(error)),
-        }
-    }
-
-    fn activate_observed(
-        &mut self,
-        metadata: RecordMetadata,
-        owned: LinkState,
-        observed: &NativeStartupObservation,
-    ) -> remap_linux::LinuxResult<ActivationRecord> {
-        match (self, observed) {
-            (Self::Systemd { transaction, .. }, NativeStartupObservation::Systemd(observed)) => {
-                transaction.activate_observed(metadata, owned, observed)
-            }
-            (
-                Self::NetworkManager(transaction),
-                NativeStartupObservation::NetworkManager(observed),
-            ) => transaction.activate_observed(metadata, owned, observed),
-            (Self::Systemd { .. }, NativeStartupObservation::NetworkManager(_))
-            | (Self::NetworkManager(_), NativeStartupObservation::Systemd(_)) => {
-                Err(remap_linux::LinuxError::new(
-                    remap_linux::LinuxErrorKind::OwnershipConflict,
-                    "the native resolver manager changed after stabilization",
-                ))
-            }
-        }
-    }
-
-    fn recover(&mut self) -> remap_linux::LinuxResult<Option<ActivationRecord>> {
-        match self {
-            Self::Systemd { transaction, .. } => transaction.recover(),
-            Self::NetworkManager(transaction) => transaction.recover(),
-        }
-    }
-
-    fn abort_activation(&mut self) -> remap_linux::LinuxResult<()> {
-        match self {
-            Self::Systemd { transaction, .. } => transaction.abort_activation(),
-            Self::NetworkManager(transaction) => transaction.abort_activation(),
-        }
-    }
-
-    fn deactivate_observed(
-        &mut self,
-        observed: &NativeStartupObservation,
-    ) -> remap_linux::LinuxResult<()> {
-        match (self, observed) {
-            (
-                Self::Systemd {
-                    transaction,
-                    migrate_legacy_manager,
-                },
-                NativeStartupObservation::Systemd(observed),
-            ) => {
-                if *migrate_legacy_manager {
-                    transaction.deactivate_observed(observed)
-                } else {
-                    transaction.deactivate_observed_preserving_legacy_manager(observed)
-                }
-            }
-            (
-                Self::NetworkManager(transaction),
-                NativeStartupObservation::NetworkManager(observed),
-            ) => transaction.deactivate_observed(observed),
-            (Self::Systemd { .. }, NativeStartupObservation::NetworkManager(_))
-            | (Self::NetworkManager(_), NativeStartupObservation::Systemd(_)) => {
-                Err(remap_linux::LinuxError::new(
-                    remap_linux::LinuxErrorKind::OwnershipConflict,
-                    "the native resolver manager changed after stabilization",
-                ))
-            }
-        }
-    }
-
-    fn rebase_observed(
-        &mut self,
-        generation: u64,
-        created: u64,
-        observed: &NativeStartupObservation,
-    ) -> remap_linux::LinuxResult<ActivationRecord> {
-        match (self, observed) {
-            (
-                Self::Systemd {
-                    transaction,
-                    migrate_legacy_manager,
-                },
-                NativeStartupObservation::Systemd(observed),
-            ) => {
-                if *migrate_legacy_manager {
-                    transaction.rebase_observed(generation, created, observed)
-                } else {
-                    transaction
-                        .rebase_observed_preserving_legacy_manager(generation, created, observed)
-                }
-            }
-            (
-                Self::NetworkManager(transaction),
-                NativeStartupObservation::NetworkManager(observed),
-            ) => transaction.rebase_observed(generation, created, observed),
-            (Self::Systemd { .. }, NativeStartupObservation::NetworkManager(_))
-            | (Self::NetworkManager(_), NativeStartupObservation::Systemd(_)) => {
-                Err(remap_linux::LinuxError::new(
-                    remap_linux::LinuxErrorKind::OwnershipConflict,
-                    "the native resolver manager changed after stabilization",
-                ))
-            }
-        }
-    }
-
-    pub(crate) fn startup_observation(
-        &mut self,
-        link: LinkIndex,
-    ) -> remap_linux::LinuxResult<Option<NativeStartupObservation>> {
-        match self {
-            Self::Systemd { transaction, .. } => transaction
-                .startup_observation(link)
-                .map(|state| state.map(NativeStartupObservation::Systemd)),
-            Self::NetworkManager(transaction) => transaction
-                .startup_observation()
-                .map(|state| state.map(NativeStartupObservation::NetworkManager)),
-        }
-    }
-
-    pub(crate) fn observation_requires_rebase(
-        &mut self,
-        record: &ActivationRecord,
-        observed: &NativeStartupObservation,
-    ) -> remap_linux::LinuxResult<bool> {
-        match (self, observed) {
-            (
-                Self::Systemd {
-                    transaction,
-                    migrate_legacy_manager,
-                },
-                NativeStartupObservation::Systemd(observed),
-            ) => {
-                if *migrate_legacy_manager {
-                    transaction.observation_requires_rebase(record, observed)
-                } else {
-                    transaction
-                        .observation_requires_rebase_preserving_legacy_manager(record, observed)
-                }
-            }
-            (
-                Self::NetworkManager(transaction),
-                NativeStartupObservation::NetworkManager(observed),
-            ) => transaction.observation_requires_rebase(record, observed),
-            (Self::Systemd { .. }, NativeStartupObservation::NetworkManager(_))
-            | (Self::NetworkManager(_), NativeStartupObservation::Systemd(_)) => {
-                Err(remap_linux::LinuxError::new(
-                    remap_linux::LinuxErrorKind::OwnershipConflict,
-                    "the native resolver manager changed after stabilization",
-                ))
-            }
-        }
-    }
-
-    pub(crate) fn load(&mut self) -> remap_linux::LinuxResult<Option<ActivationRecord>> {
-        match self {
-            Self::Systemd { transaction, .. } => transaction.load_record(),
-            Self::NetworkManager(transaction) => transaction.load(),
-        }
-    }
-
-    fn into_store(self) -> RootRecordStore {
-        match self {
-            Self::Systemd { transaction, .. } => transaction.into_parts().1,
-            Self::NetworkManager(transaction) => transaction.into_store(),
-        }
-    }
-}
-
-async fn publish_if_needed(
+/// Publishes the record's plan unless the daemon already holds it, and
+/// returns the daemon's latest result, which carries its upstream verdict.
+pub(crate) async fn publish_if_needed(
     channel: &SystemChannel,
     record: &ActivationRecord,
     upstreams: Vec<SocketAddr>,
-) -> Result<(), PublishFailure> {
+) -> Result<SystemResult, PublishFailure> {
     let health = channel
         .exchange(SystemCommand::ResolverHealth)
         .await
@@ -836,7 +606,9 @@ async fn publish_if_needed(
         _ => false,
     };
     match bound {
-        (Some(active), Some(current)) if active == activation_id && current == generation => Ok(()),
+        (Some(active), Some(current)) if active == activation_id && current == generation => {
+            Ok(health)
+        }
         _ if publish => {
             let published = match channel
                 .exchange(SystemCommand::PublishResolverPlan {
@@ -853,7 +625,7 @@ async fn publish_if_needed(
                 }
             };
             match plan_state(&published, activation_id, generation) {
-                PlanState::Exact => Ok(()),
+                PlanState::Exact => Ok(published),
                 PlanState::Empty => Err(PublishFailure::safe(invalid_data(
                     "daemon did not commit the resolver plan",
                 ))),
@@ -873,13 +645,13 @@ async fn resolve_ambiguous_publish(
     activation_id: Uuid,
     generation: u64,
     exchange_error: io::Error,
-) -> Result<(), PublishFailure> {
+) -> Result<SystemResult, PublishFailure> {
     let health = match channel.exchange(SystemCommand::ResolverHealth).await {
         Ok(health) => health,
         Err(_health_error) => return Err(PublishFailure::ambiguous(exchange_error)),
     };
     match plan_state(&health, activation_id, generation) {
-        PlanState::Exact => Ok(()),
+        PlanState::Exact => Ok(health),
         PlanState::Empty => Err(PublishFailure::safe(exchange_error)),
         PlanState::Other => Err(PublishFailure::ambiguous(conflict(
             "daemon resolver ownership is ambiguous after publication",
@@ -905,8 +677,8 @@ fn plan_state(result: &SystemResult, activation_id: Uuid, generation: u64) -> Pl
 }
 
 #[derive(Debug)]
-struct PublishFailure {
-    error: io::Error,
+pub(crate) struct PublishFailure {
+    pub(crate) error: io::Error,
     rollback_safe: bool,
 }
 

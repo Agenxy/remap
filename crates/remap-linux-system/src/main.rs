@@ -28,6 +28,8 @@ mod lifecycle_contract;
 #[cfg(target_os = "linux")]
 mod lifecycle_effects;
 #[cfg(target_os = "linux")]
+mod lifecycle_hints;
+#[cfg(target_os = "linux")]
 mod lifecycle_install;
 #[cfg(target_os = "linux")]
 mod lifecycle_names;
@@ -38,11 +40,15 @@ mod lifecycle_recovery;
 #[cfg(target_os = "linux")]
 mod manager;
 #[cfg(target_os = "linux")]
+mod native_transaction;
+#[cfg(target_os = "linux")]
 mod publications;
 #[cfg(target_os = "linux")]
 mod resolver_acceptance;
 #[cfg(target_os = "linux")]
 mod resolver_events;
+#[cfg(target_os = "linux")]
+mod resolver_fallback;
 #[cfg(target_os = "linux")]
 mod resolver_generation;
 #[cfg(target_os = "linux")]

@@ -6,8 +6,8 @@ use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use remap_linux::{ActivationRecord, LinkIndex};
 
+use crate::native_transaction::{NativeResolverTransaction, NativeStartupObservation};
 use crate::supervisor::SupervisorConfig;
-use crate::supervisor::{NativeResolverTransaction, NativeStartupObservation};
 
 type NativeOperation<T> = Box<dyn FnOnce(&mut T) + Send + 'static>;
 const NATIVE_READ_CALL_TIMEOUT: Duration = Duration::from_millis(150);

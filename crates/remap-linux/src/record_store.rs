@@ -190,6 +190,14 @@ const fn valid_phase_transition(before: ActivationPhase, after: ActivationPhase)
             ActivationPhase::Restoring {
                 completed_steps: new,
             },
+        )
+        | (
+            ActivationPhase::Bypassing {
+                completed_steps: old,
+            },
+            ActivationPhase::Bypassing {
+                completed_steps: new,
+            },
         ) => new == old || new == old.saturating_add(1),
         (
             ActivationPhase::Aborting {
@@ -217,7 +225,13 @@ const fn valid_phase_transition(before: ActivationPhase, after: ActivationPhase)
         (ActivationPhase::Applying { completed_steps: 3 }, ActivationPhase::Active)
         | (
             ActivationPhase::Active,
-            ActivationPhase::Active | ActivationPhase::Restoring { completed_steps: 0 },
+            ActivationPhase::Active
+            | ActivationPhase::Restoring { completed_steps: 0 }
+            | ActivationPhase::Bypassing { completed_steps: 0 },
+        )
+        | (
+            ActivationPhase::Bypassing { completed_steps: 3 } | ActivationPhase::Bypassed,
+            ActivationPhase::Bypassed,
         ) => true,
         _ => false,
     }
@@ -270,11 +284,7 @@ impl ActivationStore for RootRecordStore {
     ) -> LinuxResult<()> {
         let current = self.read_record()?.ok_or_else(ownership_error)?;
         if current != *expected
-            || expected.phase() != ActivationPhase::Active
-            || !matches!(
-                successor.phase(),
-                ActivationPhase::Applying { completed_steps: 0 } | ActivationPhase::Active
-            )
+            || !replacement_phases_admitted(expected.phase(), successor.phase())
             || successor.metadata().activation_id() != expected.metadata().activation_id()
             || successor.metadata().owner_uid() != expected.metadata().owner_uid()
             || successor.metadata().generation() <= expected.metadata().generation()
@@ -316,6 +326,24 @@ impl ActivationStore for RootRecordStore {
             store_error("the resolver record directory could not be synchronized")
         })
     }
+}
+
+/// An active record is rebased in place or re-applied from a new capture; a
+/// bypassed one is only ever re-armed from a new capture (ADR-0036).
+const fn replacement_phases_admitted(
+    expected: ActivationPhase,
+    successor: ActivationPhase,
+) -> bool {
+    matches!(
+        (expected, successor),
+        (
+            ActivationPhase::Active,
+            ActivationPhase::Applying { completed_steps: 0 } | ActivationPhase::Active
+        ) | (
+            ActivationPhase::Bypassed,
+            ActivationPhase::Applying { completed_steps: 0 }
+        )
+    )
 }
 
 fn active_manager_rebase_compatible(
@@ -451,4 +479,71 @@ const fn ownership_error() -> LinuxError {
         LinuxErrorKind::OwnershipConflict,
         "the resolver activation record replacement violates ownership",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{replacement_phases_admitted, valid_phase_transition};
+    use crate::ActivationPhase;
+
+    #[test]
+    fn a_bypass_is_journaled_like_a_restoration_and_ends_in_a_kept_record() {
+        let bypassing = |completed_steps| ActivationPhase::Bypassing { completed_steps };
+        assert!(valid_phase_transition(
+            ActivationPhase::Active,
+            bypassing(0)
+        ));
+        assert!(valid_phase_transition(bypassing(0), bypassing(1)));
+        assert!(valid_phase_transition(bypassing(2), bypassing(3)));
+        assert!(valid_phase_transition(
+            bypassing(3),
+            ActivationPhase::Bypassed
+        ));
+        assert!(valid_phase_transition(
+            ActivationPhase::Bypassed,
+            ActivationPhase::Bypassed
+        ));
+        assert!(!valid_phase_transition(
+            ActivationPhase::Active,
+            bypassing(1)
+        ));
+        assert!(!valid_phase_transition(bypassing(0), bypassing(2)));
+        assert!(!valid_phase_transition(
+            bypassing(2),
+            ActivationPhase::Bypassed
+        ));
+        assert!(!valid_phase_transition(
+            ActivationPhase::Bypassed,
+            ActivationPhase::Active
+        ));
+        assert!(!valid_phase_transition(
+            ActivationPhase::Restoring { completed_steps: 3 },
+            ActivationPhase::Bypassed
+        ));
+    }
+
+    #[test]
+    fn only_a_fresh_capture_replaces_a_bypassed_record() {
+        let applying = ActivationPhase::Applying { completed_steps: 0 };
+        assert!(replacement_phases_admitted(
+            ActivationPhase::Active,
+            applying
+        ));
+        assert!(replacement_phases_admitted(
+            ActivationPhase::Active,
+            ActivationPhase::Active
+        ));
+        assert!(replacement_phases_admitted(
+            ActivationPhase::Bypassed,
+            applying
+        ));
+        assert!(!replacement_phases_admitted(
+            ActivationPhase::Bypassed,
+            ActivationPhase::Active
+        ));
+        assert!(!replacement_phases_admitted(
+            ActivationPhase::Bypassing { completed_steps: 3 },
+            applying
+        ));
+    }
 }

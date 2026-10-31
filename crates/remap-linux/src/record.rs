@@ -32,6 +32,24 @@ pub enum ActivationPhase {
         /// Number of fields durably verified in the captured state.
         completed_steps: u8,
     },
+    /// The daemon's upstreams stopped answering, so ordinary DNS is being
+    /// restored in order while the record keeps its identity (ADR-0036).
+    Bypassing {
+        /// Number of fields durably verified in the captured state.
+        completed_steps: u8,
+    },
+    /// Ordinary DNS is in effect and Remap owns nothing on the link until it
+    /// re-arms from a fresh capture.
+    Bypassed,
+}
+
+impl ActivationPhase {
+    /// Whether the record is at rest: Remap's state is applied, or ordinary
+    /// DNS was deliberately restored, and no transition needs recovery.
+    #[must_use]
+    pub const fn is_settled(self) -> bool {
+        matches!(self, Self::Active | Self::Bypassed)
+    }
 }
 
 /// Identity and ordering metadata for one activation.
@@ -229,9 +247,11 @@ impl ActivationRecord {
                 transition_state(&partial, &self.before, completed_steps)
             }
             ActivationPhase::Active => Ok(self.owned.clone()),
-            ActivationPhase::Restoring { completed_steps } => {
+            ActivationPhase::Restoring { completed_steps }
+            | ActivationPhase::Bypassing { completed_steps } => {
                 transition_state(&self.owned, &self.before, completed_steps)
             }
+            ActivationPhase::Bypassed => Ok(self.before.clone()),
         }
     }
 
@@ -369,7 +389,8 @@ fn transition_state(from: &LinkState, to: &LinkState, steps: u8) -> LinuxResult<
 fn validate_phase(phase: ActivationPhase) -> LinuxResult<()> {
     match phase {
         ActivationPhase::Applying { completed_steps }
-        | ActivationPhase::Restoring { completed_steps } => validate_steps(completed_steps),
+        | ActivationPhase::Restoring { completed_steps }
+        | ActivationPhase::Bypassing { completed_steps } => validate_steps(completed_steps),
         ActivationPhase::Aborting {
             applied_steps,
             completed_steps,
@@ -383,7 +404,7 @@ fn validate_phase(phase: ActivationPhase) -> LinuxResult<()> {
             }
             Ok(())
         }
-        ActivationPhase::Active => Ok(()),
+        ActivationPhase::Active | ActivationPhase::Bypassed => Ok(()),
     }
 }
 
@@ -413,7 +434,10 @@ mod tests {
 
     use uuid::Uuid;
 
-    use super::{ActivationRecord, RECORD_SCHEMA, RecordCodec, RecordEnvelope, RecordMetadata};
+    use super::{
+        ActivationPhase, ActivationRecord, RECORD_SCHEMA, RecordCodec, RecordEnvelope,
+        RecordMetadata,
+    };
     use crate::{DnsServer, LinkDomain, LinkIndex, LinkState};
 
     #[test]
@@ -446,6 +470,44 @@ mod tests {
 
         assert_eq!(RecordCodec::decode(&encoded)?, record);
         assert_eq!(RecordCodec::decode(&RecordCodec::encode(&record)?)?, record);
+        Ok(())
+    }
+
+    #[test]
+    fn bypass_phases_round_trip_and_only_bypassed_is_settled()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let link = LinkIndex::new(7)?;
+        let before = LinkState::new(
+            link,
+            vec![DnsServer::new(
+                IpAddr::V4(Ipv4Addr::new(192, 0, 2, 53)),
+                53,
+                "",
+            )?],
+            Vec::new(),
+            true,
+        )?;
+        let mut record = ActivationRecord::prepare(
+            RecordMetadata::new(Uuid::new_v4(), 7, 1000, 1)?,
+            std::slice::from_ref(&before),
+            LinkState::remap_loopback(link)?,
+        )?;
+        for phase in [
+            ActivationPhase::Bypassing { completed_steps: 2 },
+            ActivationPhase::Bypassed,
+        ] {
+            record.set_phase(phase)?;
+            assert_eq!(RecordCodec::decode(&RecordCodec::encode(&record)?)?, record);
+        }
+        assert_eq!(record.expected_state()?, before);
+        assert!(ActivationPhase::Bypassed.is_settled());
+        assert!(ActivationPhase::Active.is_settled());
+        assert!(!ActivationPhase::Bypassing { completed_steps: 3 }.is_settled());
+        assert!(
+            record
+                .set_phase(ActivationPhase::Bypassing { completed_steps: 4 })
+                .is_err()
+        );
         Ok(())
     }
 }
