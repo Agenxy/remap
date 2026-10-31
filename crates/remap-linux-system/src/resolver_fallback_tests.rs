@@ -14,6 +14,7 @@ use super::{
 };
 use crate::lifecycle_hints::{UPSTREAM_BYPASS_HINT, bypass_hint};
 use crate::lifecycle_recovery::expected_daemon_plan;
+use crate::resolver_acceptance::accepted;
 
 fn link_with(octet: u8) -> io::Result<LinkState> {
     let link = LinkIndex::new(2).map_err(io::Error::other)?;
@@ -130,6 +131,19 @@ fn a_bypassed_activation_expects_no_daemon_plan() -> io::Result<()> {
     assert_eq!(expected_daemon_plan(Some(&bypassed)), None);
     assert_eq!(expected_daemon_plan(None), None);
     assert!(bypassed.phase().is_settled());
+    Ok(())
+}
+
+#[test]
+fn lifecycle_acceptance_takes_a_bypass_with_no_daemon_plan() -> io::Result<()> {
+    let active = record_in("active")?;
+    let bypassed = record_in("bypassed")?;
+    let serving = SystemResult::new(Some(Uuid::from_u128(7)), Some(11), None);
+    let empty = health(true);
+    assert!(accepted(&active, &serving));
+    assert!(!accepted(&active, &empty));
+    assert!(accepted(&bypassed, &empty));
+    assert!(!accepted(&bypassed, &serving));
     Ok(())
 }
 

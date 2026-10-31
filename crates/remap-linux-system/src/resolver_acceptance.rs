@@ -19,21 +19,14 @@ pub(crate) async fn wait_for_health(daemon_uid: u32) -> io::Result<()> {
     );
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
-        let expected = remap_linux::RootRecordStore::inspect(Path::new(STATE_DIRECTORY))
-            .map_err(platform_error)?
-            .filter(|record| record.phase() == remap_linux::ActivationPhase::Active)
-            .map(|record| {
-                (
-                    record.metadata().activation_id(),
-                    record.metadata().generation(),
-                )
-            });
-        if let (Some(expected), Ok(result)) = (
-            expected,
+        let activation = remap_linux::RootRecordStore::inspect(Path::new(STATE_DIRECTORY))
+            .map_err(platform_error)?;
+        if let (Some(activation), Ok(result)) = (
+            activation,
             channel
                 .exchange(remap_protocol::SystemCommand::ResolverHealth)
                 .await,
-        ) && health_matches(expected, &result)
+        ) && accepted(&activation, &result)
         {
             return Ok(());
         }
@@ -116,6 +109,23 @@ pub(crate) async fn invalidate_plan_identity(
     }
 }
 
+/// A bypass already invalidated the daemon's plan (ADR-0036). Journaling the
+/// bypassed activation's identity lets the restore step's invalidation prove
+/// the daemon still holds none, because the daemon accepts invalidating a plan
+/// it does not hold.
+pub(crate) fn bypassed_plan_identity() -> io::Result<crate::install_model::ResolverPlanIdentity> {
+    remap_linux::RootRecordStore::inspect(Path::new(STATE_DIRECTORY))
+        .map_err(platform_error)?
+        .filter(|activation| activation.phase() == remap_linux::ActivationPhase::Bypassed)
+        .map(|activation| crate::install_model::ResolverPlanIdentity {
+            activation_id: activation.metadata().activation_id(),
+            generation: activation.metadata().generation(),
+        })
+        .ok_or_else(|| {
+            conflict("the active installation has no daemon resolver plan to invalidate")
+        })
+}
+
 pub(crate) fn require_activation_digest(expected: Option<[u8; 32]>) -> io::Result<()> {
     let observed = remap_linux::RootRecordStore::inspect(Path::new(STATE_DIRECTORY))
         .map_err(platform_error)?
@@ -128,6 +138,30 @@ pub(crate) fn require_activation_digest(expected: Option<[u8; 32]>) -> io::Resul
         Err(conflict(
             "the resolver activation changed after lifecycle authorization",
         ))
+    }
+}
+
+/// The daemon serves the active activation's exact plan, or, while ordinary
+/// DNS is in effect after a bypass, holds no plan at all (ADR-0036).
+pub(crate) fn accepted(
+    activation: &remap_linux::ActivationRecord,
+    result: &remap_protocol::SystemResult,
+) -> bool {
+    match activation.phase() {
+        remap_linux::ActivationPhase::Active => health_matches(
+            (
+                activation.metadata().activation_id(),
+                activation.metadata().generation(),
+            ),
+            result,
+        ),
+        remap_linux::ActivationPhase::Bypassed => {
+            result.activation_id.is_none() && result.active_generation.is_none()
+        }
+        remap_linux::ActivationPhase::Applying { .. }
+        | remap_linux::ActivationPhase::Aborting { .. }
+        | remap_linux::ActivationPhase::Restoring { .. }
+        | remap_linux::ActivationPhase::Bypassing { .. } => false,
     }
 }
 

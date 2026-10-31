@@ -293,9 +293,10 @@ pub(crate) async fn uninstall(approval_token: &str) -> io::Result<()> {
             "the active daemon plan became unreachable after lifecycle authorization",
         ));
     }
-    let resolver_plan = second.daemon_plan_identity.ok_or_else(|| {
-        conflict("the active installation has no daemon resolver plan to invalidate")
-    })?;
+    let resolver_plan = match second.daemon_plan_identity {
+        Some(identity) => identity,
+        None => crate::resolver_acceptance::bypassed_plan_identity()?,
+    };
     record.begin_uninstall(resolver_plan)?;
     store.save(&record)?;
     resume_uninstall(&manager, &mut store, record, &mut resolver_authority).await?;

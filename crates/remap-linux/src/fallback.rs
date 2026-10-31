@@ -37,7 +37,6 @@ pub struct ResolverFallback {
     armed_since: Option<Duration>,
     healthy_since: Option<Duration>,
     bypassed: bool,
-    rearm_at_first_probe: bool,
 }
 
 impl ResolverFallback {
@@ -50,18 +49,17 @@ impl ResolverFallback {
             armed_since: None,
             healthy_since: None,
             bypassed: false,
-            rearm_at_first_probe: false,
         }
     }
 
     /// A supervisor that started with a bypassed record. It remembers no
-    /// earlier bypass, so, like a restarted macOS supervisor, it tries to
-    /// re-arm at its first healthy probe.
+    /// earlier bypass, so it owes the base period. Unlike a restarted macOS
+    /// supervisor it does not try at once: a lifecycle start accepts the
+    /// bypassed record as it is, and must not see it rewritten meanwhile.
     #[must_use]
     pub const fn resumed_bypassed(policy: RearmDamping) -> Self {
         Self {
             bypassed: true,
-            rearm_at_first_probe: true,
             ..Self::armed(policy)
         }
     }
@@ -89,7 +87,6 @@ impl ResolverFallback {
             return;
         }
         self.bypassed = false;
-        self.rearm_at_first_probe = false;
         self.armed_since = Some(now);
         self.healthy_since = None;
     }
@@ -111,16 +108,15 @@ impl ResolverFallback {
     /// the same upstreams still do not answer, starts the period again.
     pub const fn restart_period(&mut self) {
         self.healthy_since = None;
-        self.rearm_at_first_probe = false;
     }
 
     /// Whether the daemon has been healthy for long enough to try re-arming.
     #[must_use]
     pub fn rearm_due(&self, now: Duration) -> bool {
         self.bypassed
-            && self.healthy_since.is_some_and(|since| {
-                self.rearm_at_first_probe || now.saturating_sub(since) >= self.required
-            })
+            && self
+                .healthy_since
+                .is_some_and(|since| now.saturating_sub(since) >= self.required)
     }
 
     /// Whether ordinary DNS is in effect.
@@ -232,17 +228,17 @@ mod tests {
     }
 
     #[test]
-    fn a_restarted_supervisor_tries_at_its_first_probe_then_waits_the_base() {
+    fn a_restarted_supervisor_owes_the_base_period() {
         let mut fallback = ResolverFallback::resumed_bypassed(RearmDamping::STANDARD);
         assert!(fallback.is_bypassed());
-        assert!(!fallback.rearm_due(seconds(0)));
-        fallback.note_probe(seconds(1), true);
-        assert!(fallback.rearm_due(seconds(1)));
-        fallback.restart_period();
-        healthy_for(&mut fallback, 2, 6);
-        assert!(!fallback.rearm_due(seconds(6)));
-        fallback.note_probe(seconds(7), true);
-        assert!(fallback.rearm_due(seconds(7)));
+        assert_eq!(fallback.required(), seconds(5));
+        healthy_for(&mut fallback, 1, 5);
+        assert!(!fallback.rearm_due(seconds(5)));
+        fallback.note_probe(seconds(6), true);
+        assert!(fallback.rearm_due(seconds(6)));
+        fallback.note_armed(seconds(6));
+        fallback.note_bypass(seconds(7));
+        assert_eq!(fallback.required(), seconds(10));
     }
 
     #[test]
