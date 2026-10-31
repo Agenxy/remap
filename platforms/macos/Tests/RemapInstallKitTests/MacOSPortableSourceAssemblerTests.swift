@@ -78,8 +78,24 @@ struct MacOSPortableSourceAssemblerTests {
             let (releaseManifest, releaseText) = try manifest(release)
             let (rehearsalManifest, rehearsalText) = try manifest(rehearsal)
             #expect(releaseManifest.packageKind == nil)
+            #expect(releaseManifest.schemaVersion == 1)
             #expect(!releaseText.contains("packageKind"))
             #expect(rehearsalManifest.packageKind == .rehearsal)
+            #expect(rehearsalManifest.schemaVersion == 2)
+            #expect(rehearsalText.contains(#""schemaVersion":2"#))
+            // An installer from before the kind sees version 2 and refuses at its schema check;
+            // a version this installer does not know is refused by name.
+            let future = Data(rehearsalText.replacingOccurrences(
+                of: #""schemaVersion":2"#,
+                with: #""schemaVersion":3"#
+            ).utf8)
+            #expect(
+                throws: InstallError.invalidManifest(
+                    "the install manifest is schema version 3; this installer reads versions 1 and 2"
+                )
+            ) {
+                try InstallManifest.decodeCanonical(future)
+            }
             #expect(rehearsalText.contains(#""packageKind":"rehearsal""#))
             // Identical payloads, different kinds: a release replaces a rehearsal as an update.
             #expect(release.generationID != rehearsal.generationID)
