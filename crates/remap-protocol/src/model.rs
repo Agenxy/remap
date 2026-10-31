@@ -194,6 +194,10 @@ pub struct RegistryStatus {
     /// Retryable retention failure currently blocking new mutations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maintenance: Option<Diagnostic>,
+    /// Present while every upstream DNS resolver has stopped answering the
+    /// names this daemon forwards (ADR-0036).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_upstream: Option<Diagnostic>,
 }
 
 /// Stable presentation of one mapping.

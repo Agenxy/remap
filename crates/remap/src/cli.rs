@@ -26,7 +26,8 @@ const DOCTOR_GUIDANCE: &str = concat!(
     "Checks:\n",
     "  authority identity and registry status\n",
     "  authenticated UDP and TCP DNS listeners\n",
-    "  authenticated HTTP gateway\n\n",
+    "  authenticated HTTP gateway\n",
+    "  whether upstream DNS resolvers still answer forwarded names\n\n",
     "Doctor never changes system state. A collected report exits successfully even when a\n",
     "component is unavailable; automation should inspect the JSON readiness fields.\n\n",
     "Examples:\n",
@@ -408,8 +409,9 @@ fn status_command() -> Command {
     Command::new("status")
         .about("Shows authoritative registry status")
         .long_about(
-            "Reads the registry revision, mapping counts, schema, daemon version, and any\n\
-             maintenance condition that currently blocks mutation. Use 'remap doctor' when\n\
+            "Reads the registry revision, mapping counts, schema, daemon version, any\n\
+             maintenance condition that currently blocks mutation, and whether the upstream\n\
+             DNS resolvers Remap forwards to have stopped answering. Use 'remap doctor' when\n\
              DNS and HTTP runtime identity also need to be proven.",
         )
 }

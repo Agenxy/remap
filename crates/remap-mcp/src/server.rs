@@ -57,6 +57,9 @@ type LegacyWatchers = Arc<Mutex<BTreeMap<String, LegacyWatcher>>>;
 struct WatchState {
     revision: u64,
     maintenance: Option<Diagnostic>,
+    /// Whether upstream DNS is answering; its counts change on every query,
+    /// so only the transition notifies (ADR-0036).
+    dns_upstream_unanswered: bool,
 }
 
 impl RemapMcp {
@@ -115,6 +118,16 @@ fn status_summary(status: &RegistryStatus) -> String {
         "Revision {} contains {} mappings; {} are active.",
         status.revision, status.mapping_count, status.enabled_count
     );
+    let base = match &status.dns_upstream {
+        Some(upstream) => format!(
+            "{base} Upstream DNS {}.",
+            upstream
+                .message
+                .strip_prefix("upstream DNS ")
+                .unwrap_or(&upstream.message)
+        ),
+        None => base,
+    };
     if let Some(error) = &status.maintenance {
         format!(
             "{base} Mutations are blocked by maintenance ({}).",
@@ -708,6 +721,7 @@ async fn current_watch_state(client: &ControlClient) -> Result<WatchState, Error
         CommandResult::Status(status) => Ok(WatchState {
             revision: status.revision,
             maintenance: status.maintenance,
+            dns_upstream_unanswered: status.dns_upstream.is_some(),
         }),
         _ => Err(ErrorData::internal_error(
             "the daemon returned a non-status result to a resource watcher",
@@ -846,7 +860,9 @@ async fn next_watch_state(
 
 fn resource_changed(uri: &str, previous: &WatchState, current: &WatchState) -> bool {
     previous.revision != current.revision
-        || (uri == resources::STATUS_URI && previous.maintenance != current.maintenance)
+        || (uri == resources::STATUS_URI
+            && (previous.maintenance != current.maintenance
+                || previous.dns_upstream_unanswered != current.dns_upstream_unanswered))
 }
 
 fn retryable_watch_error(error: &ErrorData) -> bool {
@@ -920,6 +936,7 @@ mod status_tests {
                 None,
                 true,
             )),
+            dns_upstream: None,
         };
 
         let summary = status_summary(&status);
@@ -928,10 +945,48 @@ mod status_tests {
     }
 
     #[test]
+    fn status_summary_says_upstream_dns_is_not_answering() {
+        let failure = remap_protocol::UpstreamFailure {
+            cause: remap_protocol::UpstreamFailureCause::Refused,
+            unanswered_queries: 5,
+            unanswered_for_ms: 4_000,
+        };
+        let status = RegistryStatus {
+            revision: 8,
+            mapping_count: 2,
+            enabled_count: 1,
+            schema_version: 1,
+            daemon_version: "0.2.0".to_owned(),
+            maintenance: None,
+            dns_upstream: Some(failure.diagnostic()),
+        };
+
+        let summary = status_summary(&status);
+        assert!(summary.contains("Upstream DNS not answering: every upstream resolver"));
+        assert!(summary.contains("refused the queries"));
+        let healthy = WatchState {
+            revision: 8,
+            maintenance: None,
+            dns_upstream_unanswered: false,
+        };
+        let failing = WatchState {
+            dns_upstream_unanswered: true,
+            ..healthy.clone()
+        };
+        assert!(resource_changed(resources::STATUS_URI, &healthy, &failing));
+        assert!(!resource_changed(
+            resources::MAPPINGS_URI,
+            &healthy,
+            &failing
+        ));
+    }
+
+    #[test]
     fn maintenance_only_changes_notify_status_but_not_mappings() {
         let healthy = WatchState {
             revision: 8,
             maintenance: None,
+            dns_upstream_unanswered: false,
         };
         let degraded = WatchState {
             revision: 8,
@@ -941,6 +996,7 @@ mod status_tests {
                 None,
                 true,
             )),
+            dns_upstream_unanswered: false,
         };
 
         assert!(resource_changed(resources::STATUS_URI, &healthy, &degraded));
@@ -952,6 +1008,7 @@ mod status_tests {
         let advanced = WatchState {
             revision: 9,
             maintenance: None,
+            dns_upstream_unanswered: false,
         };
         assert!(resource_changed(
             resources::MAPPINGS_URI,

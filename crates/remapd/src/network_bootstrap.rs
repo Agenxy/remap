@@ -65,6 +65,7 @@ pub(crate) async fn prepare_network(
     };
     let system_control = if let Some(runtime) = dns.as_ref() {
         let plans = runtime.resolver_plans();
+        engine.observe_resolver_plans(plans.clone());
         Some(
             if let Some(listener) = prebound.and_then(|value| value.system_control) {
                 SystemControlRuntime::adopt(listener, plans)?
