@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use serde::{Deserialize, Serialize};
 
 use crate::Diagnostic;
@@ -66,6 +67,9 @@ pub enum Change {
         host_policy: HostPolicy,
         /// Explicit enabled state, or preserve the current state when omitted.
         enabled: Option<bool>,
+        /// Optional same-origin landing path for root GET and HEAD requests.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        landing: Option<String>,
     },
     /// Enable an existing mapping.
     Enable {
@@ -122,6 +126,9 @@ pub enum Command {
         target: String,
         /// HTTP host and SNI behavior.
         host_policy: HostPolicy,
+        /// Optional same-origin landing path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        landing: Option<String>,
     },
     /// Evaluate an atomic change set without committing it.
     Preview {
@@ -193,6 +200,9 @@ pub struct RegistryStatus {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MappingView {
+    /// Optional same-origin landing path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landing: Option<String>,
     /// Canonical exact name or wildcard.
     pub pattern: String,
     /// Canonical destination.
@@ -235,6 +245,12 @@ pub struct ResolutionResult {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ValidationResult {
+    /// Advisory guidance that never changes validation or mutation success.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    /// Optional same-origin landing path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landing: Option<String>,
     /// Canonical exact name or wildcard.
     pub pattern: String,
     /// Canonical destination.
@@ -263,6 +279,10 @@ pub struct ChangeEffect {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PreviewResult {
+    /// Advisory guidance that never blocks the owner's explicit target,
+    /// including reachability of loopback HTTP targets observed now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     /// Registry revision against which the projection ran.
     pub base_revision: u64,
     /// Whether committing this projection would advance the revision.
@@ -275,6 +295,10 @@ pub struct PreviewResult {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ApplyResult {
+    /// Advisory guidance retained in the exact idempotent receipt, followed
+    /// by reachability of loopback HTTP targets observed when answering.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     /// Caller-generated idempotency identifier.
     pub operation_id: String,
     /// Revision observed before the operation.

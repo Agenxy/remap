@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// A normalized path whose components are always relative to an already-open directory descriptor.

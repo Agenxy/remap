@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ use crate::app::{self, Report};
 use crate::cli::{Action, MutationAction, SystemLifecycleCommand};
 use crate::diagnostic::Diagnostic;
 use crate::runtime_health::{RuntimeHealth, installation_ready, valid_challenge, verify};
+use remap_mcp::system_lookup::SystemLookup;
 
 const MAX_CHANGE_DOCUMENT_BYTES: u64 = 512 * 1024;
 
@@ -38,6 +40,9 @@ pub(crate) fn run_native_lifecycle(
             process.arg("--json");
         }
         let status = process.status().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return Diagnostic::missing_lifecycle_client();
+            }
             Diagnostic::native_lifecycle(format!(
                 "could not start the installed lifecycle client: {error}"
             ))
@@ -117,14 +122,16 @@ pub(crate) async fn execute(
         }
         Action::Apply {
             file,
+            landing,
             expected_revision,
             operation_id,
         } => {
-            let changes = read_change_document(&file)?;
+            let changes = read_apply_changes(&file, landing)?;
             mutation_authority(data_dir, "apply", expected_revision, operation_id, changes).await
         }
         Action::Set {
             pattern,
+            landing,
             target,
             host_header_policy,
             enabled,
@@ -132,6 +139,7 @@ pub(crate) async fn execute(
             operation_id,
         } => {
             let change = Change::Set {
+                landing,
                 pattern,
                 target,
                 host_policy: wire_policy(host_header_policy),
@@ -168,6 +176,7 @@ async fn doctor(data_dir: Option<&Path>) -> Result<Report, Diagnostic> {
     let (authority, revision, mapping_count, authority_ready, health) =
         inspect_runtime(data_dir).await;
     let native_install = installation_ready(authority_ready, &health);
+    let system_lookup = system_lookup(data_dir).await;
     Ok(Report::Doctor(app::DoctorReport {
         version: env!("CARGO_PKG_VERSION"),
         operating_system: std::env::consts::OS,
@@ -177,7 +186,30 @@ async fn doctor(data_dir: Option<&Path>) -> Result<Report, Diagnostic> {
         mapping_count,
         health,
         native_install,
+        system_lookup,
     }))
+}
+
+/// Resolves one mapped name the way a browser does and compares the answer
+/// with the registry, so a system that stopped asking Remap is visible.
+async fn system_lookup(data_dir: Option<&Path>) -> SystemLookup {
+    let Ok(client) = client(data_dir) else {
+        return SystemLookup::NotChecked;
+    };
+    let listed = client
+        .execute(Command::List {
+            after: None,
+            limit: 64,
+            include_disabled: false,
+        })
+        .await;
+    let Ok(CommandResult::List(list)) = listed else {
+        return SystemLookup::NotChecked;
+    };
+    let Some((name, expected)) = remap_mcp::system_lookup::candidate(&list.mappings) else {
+        return SystemLookup::NotChecked;
+    };
+    remap_mcp::system_lookup::probe(name, &expected).await
 }
 
 async fn inspect_runtime(
@@ -435,6 +467,18 @@ fn control_paths(data_dir: Option<&Path>) -> Result<ControlPaths, Diagnostic> {
     )
 }
 
+fn read_apply_changes(path: &Path, landing: Option<String>) -> Result<Vec<Change>, Diagnostic> {
+    let mut changes = read_change_document(path)?;
+    if let Some(landing) = landing {
+        for change in &mut changes {
+            if let Change::Set { landing: path, .. } = change {
+                *path = Some(landing.clone());
+            }
+        }
+    }
+    Ok(changes)
+}
+
 fn read_change_document(path: &Path) -> Result<Vec<Change>, Diagnostic> {
     let bytes = if path == Path::new("-") {
         read_bounded(std::io::stdin().lock())?
@@ -479,9 +523,28 @@ mod tests {
     use remap_protocol::{CommandResult, ControlPaths};
     use remapd::DaemonConfig;
 
-    use super::execute;
+    use super::{execute, read_apply_changes};
     use crate::app::Report;
     use crate::cli::Action;
+
+    #[test]
+    fn apply_landing_override_changes_sets_and_preserves_other_changes()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("changes.json");
+        let original = serde_json::json!([
+            {"kind":"set", "pattern":"site.test", "target":"http://127.0.0.1/",
+             "host_policy":"use-upstream", "landing":"/old"},
+            {"kind":"disable", "pattern":"other.test"}
+        ]);
+        std::fs::write(&path, serde_json::to_vec(&original)?)?;
+        let unchanged = serde_json::to_value(read_apply_changes(&path, None)?)?;
+        assert_eq!(unchanged[0]["landing"], "/old");
+        let overridden = serde_json::to_value(read_apply_changes(&path, Some("/new".to_owned()))?)?;
+        assert_eq!(overridden[0]["landing"], "/new");
+        assert_eq!(overridden[1], original[1]);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn human_commands_share_the_authoritative_revision() -> Result<(), Box<dyn Error>> {
@@ -502,6 +565,7 @@ mod tests {
             target: "127.0.0.1".to_owned(),
             host_header_policy: HostHeaderPolicy::PreserveClient,
             enabled: None,
+            landing: None,
             expected_revision: None,
             operation_id: None,
         };
@@ -580,6 +644,7 @@ mod tests {
         let applied = execute(
             Action::Apply {
                 file: changes,
+                landing: None,
                 expected_revision: 0,
                 operation_id: "4df4bb55-93bb-4f99-9707-9761f6a69364".to_owned(),
             },

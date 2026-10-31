@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 @testable import RemapApp
 @testable import RemapControlKit
@@ -158,7 +159,8 @@ private func testMapping(pattern: String, revision: UInt64) -> RemapMapping {
         targetKind: "http",
         hostPolicy: .useUpstream,
         enabled: true,
-        updatedRevision: revision
+        updatedRevision: revision,
+        landing: nil
     )
 }
 

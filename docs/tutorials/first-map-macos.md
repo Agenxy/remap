@@ -25,10 +25,18 @@ Download these files from the same Remap release into one directory:
 - `remap-release-signing-key.pub`
 - `remap-release-installer.pem`
 
+A public release is signed by a P-256 key that was generated inside the building
+Mac's Secure Enclave and cannot leave it; every signature it makes needed its owner's
+Touch ID or login password. Its public key is an `ecdsa-sha2-nistp256` line, and
+`ssh-keygen` lists it as `(ECDSA)`. The name in the line says which key it is: a key
+marked `remap-release-development-only` signs packages built for the machine that
+built them, and is not the key a public release carries. The release key is named
+`remap-release-v2`.
+
 The public-key fingerprint must be exactly:
 
 ```text
-256 SHA256:bG9pik9VV1jT2rZrsC7sYJCZOfc0tiuSrL05/v6FmtI remap-release-v1 (ED25519)
+256 SHA256:UNkUo9rEtVK+N92onnYn1C9d6U2cCkuTOYFvZIW/dgQ remap-release-v2 (ECDSA)
 ```
 
 From that download directory, check it:
@@ -63,8 +71,45 @@ pkgutil --check-signature Remap-0.2.0-arm64.pkg
 The signer must be `Remap Release Installer` with SHA-256 fingerprint
 `44C5C1BFEE4479F03AFF134F1A8E7971EA55C981698CFC6E0E7A100CE4239618`.
 The certificate is self-signed and is therefore not publicly Apple-trusted;
-the exact fingerprint and detached Ed25519 signature provide the release
+the exact fingerprint and detached release-key signature provide the release
 identity without a paid Apple account.
+
+## Trust the release installer certificate, once per Mac
+
+Apple Installer refuses a package whose signer it does not trust, and
+`-allowUntrusted` does not change that: the refusal happens in its preflight, as
+`PKTrustLevelNotTrusted`. So a Mac installing Remap for the first time must be told
+this certificate is trusted, once. That is what `remap-release-installer.pem` is for.
+
+Compare its fingerprint with the one above before trusting anything:
+
+```sh
+openssl x509 -in remap-release-installer.pem -noout -fingerprint -sha256
+```
+
+Continue only if it is exactly
+`44C5C1BFEE4479F03AFF134F1A8E7971EA55C981698CFC6E0E7A100CE4239618`. Then:
+
+```sh
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain remap-release-installer.pem
+```
+
+**This must be run by someone sitting at that Mac.** macOS requires interactive
+approval to change trust settings, and refuses over SSH with "the authorization was
+denied since no user interaction was possible", whatever sudo allows. It is the one
+step in this tutorial that cannot be automated or performed remotely.
+
+This does change system trust, unlike the `ssh-keygen` allow-list above, and it is
+the only step here that does. It says that packages signed by this exact certificate
+may be installed on this Mac. `make uninstall` removes it again, and you can remove it
+yourself at any time:
+
+```sh
+sudo security delete-certificate -Z \
+  44C5C1BFEE4479F03AFF134F1A8E7971EA55C981698CFC6E0E7A100CE4239618 \
+  /Library/Keychains/System.keychain
+```
 
 ## Install
 
@@ -95,7 +140,10 @@ Program, and this workflow does not claim Apple review or public Apple trust.
 
 Apple Installer asks for administrator approval. Remap then verifies its signed
 release manifest and every payload entry. It creates or reuses a durable local
-code-signing identity named `Remap Local Codesign`, signs the verified
+code-signing identity named `Remap Local Codesign`, whose creation records a trust
+setting; macOS will not record one without interactive approval, so this step needs a
+graphical session on that Mac and fails over SSH with `Operation not permitted`. It signs
+the verified
 executables on this Mac, installs the product transactionally, and proves the
 running authority, DNS listeners, and HTTP gateway belong to the same Remap
 instance.
@@ -190,7 +238,7 @@ the private mapping database.
 ## Build from source instead
 
 Contributors can use the source lifecycle, which requires GNU Make, `mise`
-2026.9.8, and the full Xcode version at one of the reviewed builds listed in
+2026.10.23, and the full Xcode version at one of the reviewed builds listed in
 [`platforms/macos/XCODE_VERSION`](../../platforms/macos/XCODE_VERSION):
 
 ```sh

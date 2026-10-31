@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -828,22 +829,14 @@ async fn publish_if_needed(
         .map_err(PublishFailure::safe)?;
     let activation_id = record.metadata().activation_id();
     let generation = record.metadata().generation();
-    let publish = match &health {
-        SystemResult {
-            activation_id: None,
-            active_generation: None,
-        } => true,
-        SystemResult {
-            activation_id: Some(active),
-            active_generation: Some(current),
-        } => *active == activation_id && *current < generation,
+    let bound = (health.activation_id, health.active_generation);
+    let publish = match bound {
+        (None, None) => true,
+        (Some(active), Some(current)) => active == activation_id && current < generation,
         _ => false,
     };
-    match health {
-        SystemResult {
-            activation_id: Some(active),
-            active_generation: Some(current),
-        } if active == activation_id && current == generation => Ok(()),
+    match bound {
+        (Some(active), Some(current)) if active == activation_id && current == generation => Ok(()),
         _ if publish => {
             let published = match channel
                 .exchange(SystemCommand::PublishResolverPlan {
@@ -902,15 +895,11 @@ enum PlanState {
 }
 
 fn plan_state(result: &SystemResult, activation_id: Uuid, generation: u64) -> PlanState {
-    match result {
-        SystemResult {
-            activation_id: None,
-            active_generation: None,
-        } => PlanState::Empty,
-        SystemResult {
-            activation_id: Some(active),
-            active_generation: Some(current),
-        } if *active == activation_id && *current == generation => PlanState::Exact,
+    match (result.activation_id, result.active_generation) {
+        (None, None) => PlanState::Empty,
+        (Some(active), Some(current)) if active == activation_id && current == generation => {
+            PlanState::Exact
+        }
         _ => PlanState::Other,
     }
 }

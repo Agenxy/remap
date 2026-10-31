@@ -1,17 +1,21 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Durable user-owned macOS code-signing identity for Remap artifacts."""
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import secrets
+import ssl
 import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-IDENTITY_NAME = "Remap Local Codesign"
+IDENTITY_NAME = "Remap Build Signing"
 CERTIFICATE_LIFETIME_DAYS = 3_650
-ARCHIVE_TRANSPORT_PASSWORD = "remap-ephemeral-pipe"
 MAXIMUM_COMMAND_OUTPUT_BYTES = 1_048_576
 # Set to "1" where nobody can answer a macOS authorization dialog (a hosted CI
 # runner). `security add-trusted-cert` into the login keychain, and
@@ -24,6 +28,9 @@ SYSTEM_KEYCHAIN = Path("/Library/Keychains/System.keychain")
 SHA1_PATTERN = re.compile(r"[0-9A-F]{40}\Z")
 SHA256_PATTERN = re.compile(r"[0-9A-F]{64}\Z")
 IDENTITY_PATTERN = re.compile(r'^\s*\d+\)\s+([0-9A-F]{40})\s+"([^"]+)"\s*$')
+UNTRUSTED_IDENTITY_PATTERN = re.compile(
+    r'^\s*\d+\)\s+([0-9A-F]{40})\s+"([^"]+)"\s+\(CSSMERR_TP_NOT_TRUSTED\)\s*$'
+)
 CERTIFICATE_SHA1_PATTERN = re.compile(
     r"^SHA-1 hash:\s*([0-9A-F]{40})\s*$", re.MULTILINE
 )
@@ -47,17 +54,74 @@ class LocalCodeSigningIdentity:
     keychain: Path
 
 
+def visible_identity_fingerprints() -> list[str]:
+    """Every usable identity named `IDENTITY_NAME` that codesign can reach, by name.
+
+    `resolve_identity` inspects one keychain, but `codesign --sign <name>` resolves
+    against the whole search list, so a second identity of the same name in another
+    keychain makes signing by name ambiguous and macOS chooses nothing:
+
+        Remap Local Codesign: ambiguous (matches "Remap Local Codesign" in
+        .../login.keychain-db and "Remap Local Codesign" in
+        /Library/Keychains/System.keychain)
+
+    That is how it was observed, when this identity and the one the portable installer
+    creates on a target Mac shared a name across two keychains. They no longer do. This
+    check remains because nothing stops a name colliding again, and because a machine
+    holding two identities of one name is invalid whatever produced it. Remap itself
+    signs by fingerprint with an explicit keychain, so it is never the victim, only ever
+    the cause.
+    """
+    result = _run_result(
+        ("/usr/bin/security", "find-identity", "-v", "-p", "codesigning"),
+        check=False,
+    )
+    if result.returncode not in {0, 1}:
+        raise RuntimeError("macOS could not enumerate usable code signing identities")
+    return [
+        fingerprint
+        for line in result.stdout.splitlines()
+        if (match := IDENTITY_PATTERN.fullmatch(line)) is not None
+        for fingerprint, name in [match.groups()]
+        if name == IDENTITY_NAME
+    ]
+
+
+def require_one_visible_identity() -> None:
+    """Refuse a machine that holds more than one identity under the same name."""
+    fingerprints = visible_identity_fingerprints()
+    if len(fingerprints) <= 1:
+        return
+    listed = ", ".join(fingerprints)
+    raise RuntimeError(
+        f"{len(fingerprints)} usable identities are named {IDENTITY_NAME!r} on this "
+        + f"machine ({listed}). `codesign --sign` by name cannot choose between them. "
+        + "Remove all but the one this machine should sign with, with "
+        + "`sudo security delete-certificate -Z <fingerprint> <keychain>`, and run again."
+    )
+
+
 def ensure_local_codesigning_identity() -> LocalCodeSigningIdentity:
     """Return Remap's durable identity, creating it once when absent."""
+    # Before anything else, and before creating a second one: an ambiguous name is an
+    # invalid configuration, and refusing it here is what stops this tool producing it.
+    require_one_visible_identity()
     keychain = login_keychain()
     existing = resolve_identity(keychain)
     if existing is not None:
         return existing
     if _certificate_hashes(keychain):
-        raise RuntimeError(
-            f"{IDENTITY_NAME!r} exists without one usable private signing key. "
-            + "Repair that exact Keychain item before building Remap."
-        )
+        if not record_pending_trust(keychain):
+            raise RuntimeError(
+                f"{IDENTITY_NAME!r} exists without one usable private signing key. "
+                + "Repair that exact Keychain item before building Remap."
+            )
+        resumed = resolve_identity(keychain)
+        if resumed is None:
+            raise RuntimeError(
+                "macOS did not recognize the Remap identity once it was trusted"
+            )
+        return resumed
     create_identity(keychain)
     created = resolve_identity(keychain)
     if created is None:
@@ -276,26 +340,112 @@ def create_identity(keychain: Path) -> None:
     )
     certificate = _one_pem_block(material, b"CERTIFICATE")
     private_key = _one_private_key(material)
-    archive = _make_archive(certificate, private_key)
-    _ = _run_binary(
-        (
-            "/usr/bin/security",
-            "import",
-            "/dev/stdin",
-            "-k",
-            str(keychain),
-            "-P",
-            ARCHIVE_TRANSPORT_PASSWORD,
-            "-x",
-            "-T",
-            "/usr/bin/codesign",
-            "-f",
-            "pkcs12",
-        ),
-        archive,
+    password = secrets.token_urlsafe(32)
+    archive = _make_archive(certificate, private_key, password)
+    import_identity_archive(
+        keychain,
+        name=IDENTITY_NAME,
+        archive=archive,
+        password=password,
+        tool="/usr/bin/codesign",
+        run=_run_binary,
     )
     allow_apple_tools(keychain, _run_binary)
-    _ = _run_binary(trust_arguments(keychain, "codeSign"), certificate)
+    record_trust(
+        keychain, certificate, policy="codeSign", name=IDENTITY_NAME, run=_run_binary
+    )
+
+
+def import_identity_archive(
+    keychain: Path,
+    *,
+    name: str,
+    archive: bytes,
+    password: str,
+    tool: str,
+    run: Callable[[tuple[str, ...], bytes], bytes],
+) -> None:
+    """Import a PKCS#12 identity so macOS names its key after the identity.
+
+    `security import` names the key in every later "wants to access key"
+    dialog after the file it read, so an archive piped through stdin made
+    macOS ask the owner about a key called "stdin": a request nobody can
+    evaluate. With `-f pkcs12` it also labels the key "Imported Private Key"
+    in Keychain Access. Measured on macOS 27: a file named `<name>.p12`,
+    imported with its format inferred, gives the key both the label and the
+    prompt name `name`. `security import` cannot read a named pipe, so the
+    archive, encrypted under the caller's per-run password, is written to that
+    file in a directory only this user can enter, and removed as soon as the
+    import returns. Only `tool` may use the key without asking.
+    """
+    with tempfile.TemporaryDirectory(prefix="remap-identity-") as directory:
+        source = Path(directory) / f"{name}.p12"
+        descriptor = os.open(
+            source, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            _ = handle.write(archive)
+        _ = run(
+            (
+                "/usr/bin/security",
+                "import",
+                str(source),
+                "-k",
+                str(keychain),
+                "-P",
+                password,
+                "-x",
+                "-T",
+                tool,
+            ),
+            b"",
+        )
+
+
+def record_pending_trust(keychain: Path) -> bool:
+    """Finish a creation that stopped before its trust setting was recorded.
+
+    Trust is creation's last step and the one macOS asks the user about, so an
+    unanswered dialog leaves the certificate and its key imported but untrusted.
+    That exact state, and no other, is completed here: one certificate of this
+    name, whose identity holds its private key and is refused only as untrusted.
+    Returns False, changing nothing, for anything else.
+    """
+    output = _capture(
+        ("/usr/bin/security", "find-identity", "-p", "codesigning", str(keychain))
+    )
+    pending = {
+        match.group(1)
+        for line in output.splitlines()
+        if (match := UNTRUSTED_IDENTITY_PATTERN.fullmatch(line)) is not None
+        and match.group(2) == IDENTITY_NAME
+    }
+    hashes = _certificate_hashes(keychain)
+    if len(pending) != 1 or len(hashes) != 1 or hashes[0][0] not in pending:
+        return False
+    certificate = _capture(
+        (
+            "/usr/bin/security",
+            "find-certificate",
+            "-c",
+            IDENTITY_NAME,
+            "-p",
+            str(keychain),
+        )
+    ).encode("ascii")
+    der = ssl.PEM_cert_to_DER_cert(certificate.decode("ascii"))
+    exported = (
+        hashlib.sha1(der).hexdigest().upper(),
+        hashlib.sha256(der).hexdigest().upper(),
+    )
+    if exported != hashes[0]:
+        raise RuntimeError(
+            "the exported Remap certificate is not the one in the keychain"
+        )
+    record_trust(
+        keychain, certificate, policy="codeSign", name=IDENTITY_NAME, run=_run_binary
+    )
+    return True
 
 
 def headless_trust() -> bool:
@@ -377,6 +527,30 @@ def allow_apple_tools(
         ),
         b"",
     )
+
+
+def record_trust(
+    keychain: Path,
+    certificate: bytes,
+    *,
+    policy: str,
+    name: str,
+    run: Callable[[tuple[str, ...], bytes], bytes],
+) -> None:
+    """Ask macOS, and through it the owner, to trust `name` for `policy`.
+
+    macOS puts this question to the owner in a dialog, and `run` gives it two
+    minutes. An unanswered dialog is an ordinary outcome, so it is reported as
+    what happened and how to resume, never as a stack trace.
+    """
+    try:
+        _ = run(trust_arguments(keychain, policy), certificate)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f'macOS asked to trust the "{name}" certificate, and the dialog was not '
+            + "answered within two minutes. Run the same command again at this Mac "
+            + "and approve it; the build resumes at this step."
+        ) from None
 
 
 def trust_arguments(keychain: Path, policy: str) -> tuple[str, ...]:
@@ -525,7 +699,7 @@ def _run_binary(arguments: tuple[str, ...], input_bytes: bytes) -> bytes:
     return result.stdout
 
 
-def _make_archive(certificate: bytes, private_key: bytes) -> bytes:
+def _make_archive(certificate: bytes, private_key: bytes, password: str) -> bytes:
     certificate_reader, certificate_writer = os.pipe()
     key_reader, key_writer = os.pipe()
     try:
@@ -550,7 +724,7 @@ def _make_archive(certificate: bytes, private_key: bytes) -> bytes:
                 "-out",
                 "/dev/stdout",
                 "-passout",
-                f"pass:{ARCHIVE_TRANSPORT_PASSWORD}",
+                f"pass:{password}",
             ),
             check=False,
             capture_output=True,

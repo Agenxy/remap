@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 @testable import RemapInstallKit
 import Testing
@@ -74,11 +75,55 @@ private final class InstallerServiceLaunchdControllerFake: @unchecked Sendable, 
         }
     }
 
-    func bootout(label _: String) throws {}
-
-    func enable(label _: String) throws {}
+    func bootout(label _: String, expected _: MacOSLaunchdObservation) throws {}
 
     func kickstart(label _: String) throws {
         lock.withLock { recordedKickstartCount += 1 }
+    }
+}
+
+@Test
+func launchdObservationReadsTheServiceFieldsNotANestedSocketPath() throws {
+    // As `launchctl print` renders a daemon whose Sockets include a Unix socket:
+    // the service's own `path` and `program` sit one tab deep, the socket's
+    // `path` three.
+    let output = """
+    system/org.agenxy.Remap.daemon = {
+    \tactive count = 0
+    \tpath = /Library/LaunchDaemons/org.agenxy.Remap.daemon.plist
+    \ttype = LaunchDaemon
+    \tstate = spawn scheduled
+
+    \tprogram = /Library/Application Support/Agenxy/Remap/Install/Generations/g/libexec/remapd
+    \targuments = {
+    \t\t/Library/Application Support/Agenxy/Remap/Install/Generations/g/libexec/remapd
+    \t}
+    \tstdout path = /dev/null
+    \tsockets = {
+    \t\t"remap-system" = {
+    \t\t\ttype = stream
+    \t\t\tpath = /var/run/org.agenxy.Remap.system.sock
+    \t\t}
+    \t}
+    }
+    """
+    let controller = NativeMacOSLaunchdController(
+        runner: FixedLaunchctlRunner(result: LaunchctlResult(exitStatus: 0, output: output))
+    )
+    let observation = try controller.observation(label: "org.agenxy.Remap.daemon")
+    let expected = try MacOSLaunchdObservation.loaded(
+        plistPath: InstallAbsolutePath("/Library/LaunchDaemons/org.agenxy.Remap.daemon.plist"),
+        programPath: InstallAbsolutePath(
+            "/Library/Application Support/Agenxy/Remap/Install/Generations/g/libexec/remapd"
+        )
+    )
+    #expect(observation == expected)
+}
+
+private struct FixedLaunchctlRunner: LaunchctlRunning {
+    let result: LaunchctlResult
+
+    func run(_: LaunchctlCommand) throws -> LaunchctlResult {
+        result
     }
 }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::error::Error;
 use std::io;
 
@@ -6,7 +7,7 @@ use serde_json::{Value, json};
 pub(super) fn assert_modern_tool_catalog(
     tools: &rmcp::model::ListToolsResult,
 ) -> Result<(), Box<dyn Error>> {
-    assert_eq!(tools.tools.len(), 11);
+    assert_eq!(tools.tools.len(), 12);
     assert_eq!(tools.ttl_ms, Some(3_600_000));
     assert_eq!(tools.cache_scope, Some(rmcp::model::CacheScope::Private));
     let names: Vec<&str> = tools.tools.iter().map(|tool| tool.name.as_ref()).collect();
@@ -32,12 +33,13 @@ pub(super) fn assert_modern_tool_catalog(
     Ok(())
 }
 
-fn expected_names() -> [&'static str; 11] {
+fn expected_names() -> [&'static str; 12] {
     [
         "remap_apply",
         "remap_disable",
         "remap_enable",
         "remap_get",
+        "remap_health",
         "remap_list",
         "remap_preview",
         "remap_remove",
@@ -52,6 +54,7 @@ fn assert_tool_contract(tool: &rmcp::model::Tool) -> Result<(), Box<dyn Error>> 
     let read_only = matches!(
         tool.name.as_ref(),
         "remap_get"
+            | "remap_health"
             | "remap_list"
             | "remap_preview"
             | "remap_resolve"
@@ -65,7 +68,16 @@ fn assert_tool_contract(tool: &rmcp::model::Tool) -> Result<(), Box<dyn Error>> 
     assert_eq!(annotations.read_only_hint, Some(read_only));
     assert_eq!(annotations.destructive_hint, Some(!read_only));
     assert_eq!(annotations.idempotent_hint, Some(true));
-    assert_eq!(annotations.open_world_hint, Some(false));
+    // Only the health probe can leave this machine: it asks the system
+    // resolver, which reaches whatever DNS the network supplies when Remap
+    // is bypassed. The reachability probe of preview and the committing
+    // tools (ADR-0028) stays on loopback and sends no bytes, so it keeps
+    // their domain closed; preview stays read-only.
+    assert_eq!(
+        annotations.open_world_hint,
+        Some(tool.name.as_ref() == "remap_health")
+    );
+    assert_probe_disclosure(tool);
     let expected_visibility = if matches!(tool.name.as_ref(), "remap_status" | "remap_list") {
         json!(["model", "app"])
     } else {
@@ -74,6 +86,23 @@ fn assert_tool_contract(tool: &rmcp::model::Tool) -> Result<(), Box<dyn Error>> 
     assert_eq!(ui_property(tool, "visibility"), Some(&expected_visibility));
     assert_output_schema_contract(tool)?;
     Ok(())
+}
+
+/// The tools whose results may carry reachability advice say so, and say
+/// how far the probe reaches; no other tool claims to probe.
+fn assert_probe_disclosure(tool: &rmcp::model::Tool) {
+    let probes = matches!(
+        tool.name.as_ref(),
+        "remap_apply" | "remap_enable" | "remap_preview" | "remap_set"
+    );
+    let description = tool.description.as_deref().unwrap_or_default();
+    assert_eq!(
+        description.contains("loopback HTTP target refuses a TCP connection")
+            && description.contains("no other target is probed and no bytes are sent"),
+        probes,
+        "{}: {description}",
+        tool.name
+    );
 }
 
 fn assert_output_schema_contract(tool: &rmcp::model::Tool) -> Result<(), Box<dyn Error>> {
@@ -145,6 +174,7 @@ fn sample_success(name: &str) -> Value {
         }),
         "remap_list" => json!({"revision": 1, "mappings": [mapping], "next_cursor": null}),
         "remap_get" => mapping,
+        "remap_health" => json!({"system_lookup": "ready", "name": "atlas", "answer": "127.0.0.1"}),
         "remap_resolve" => json!({"name": "atlas", "revision": 1, "mapping": mapping}),
         "remap_validate" => json!({
             "pattern": "atlas",

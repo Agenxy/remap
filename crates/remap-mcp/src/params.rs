@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use remap_protocol::{Change, HostPolicy};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -60,10 +61,14 @@ pub(crate) struct ResolveParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ValidateParams {
+    /// Optional same-origin landing path for root GET and HEAD requests.
+    #[serde(default)]
+    #[schemars(length(max = 2_048))]
+    pub landing: Option<String>,
     /// Exact hostname or leading-label wildcard.
     #[schemars(length(min = 1, max = 255))]
     pub pattern: String,
-    /// IP address, DNS name, or absolute HTTP(S) upstream URL.
+    /// IP address, DNS name, HTTP(S) URL, Supgang service, or `moved://NAME` target.
     #[schemars(length(min = 1, max = 4_096))]
     pub target: String,
     /// Whether routed HTTP(S) traffic preserves the client-facing host.
@@ -77,10 +82,14 @@ pub(crate) struct ValidateParams {
 pub(crate) enum ChangeInput {
     /// Create a mapping or replace its destination.
     Set {
+        /// Optional same-origin landing path for root GET and HEAD requests.
+        #[serde(default)]
+        #[schemars(length(max = 2_048))]
+        landing: Option<String>,
         /// Exact hostname or leading-label wildcard.
         #[schemars(length(min = 1, max = 255))]
         pattern: String,
-        /// IP address, DNS name, or absolute HTTP(S) upstream URL.
+        /// IP address, DNS name, HTTP(S) URL, Supgang service, or `moved://NAME` target.
         #[schemars(length(min = 1, max = 4_096))]
         target: String,
         /// Whether routed HTTP(S) traffic preserves the client-facing host.
@@ -114,11 +123,13 @@ impl From<ChangeInput> for Change {
     fn from(value: ChangeInput) -> Self {
         match value {
             ChangeInput::Set {
+                landing,
                 pattern,
                 target,
                 host_policy,
                 enabled,
             } => Self::Set {
+                landing,
                 pattern,
                 target,
                 host_policy,
@@ -163,6 +174,10 @@ pub(crate) struct MutationParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SetParams {
+    /// Optional same-origin landing path for root GET and HEAD requests.
+    #[serde(default)]
+    #[schemars(length(max = 2_048))]
+    pub landing: Option<String>,
     /// Registry revision observed before deciding to mutate.
     pub expected_revision: u64,
     /// Fresh `UUIDv4` for this logical operation; reuse it only to retry the same request.
@@ -176,7 +191,7 @@ pub(crate) struct SetParams {
     /// Exact hostname or leading-label wildcard.
     #[schemars(length(min = 1, max = 255))]
     pub pattern: String,
-    /// IP address, DNS name, or absolute HTTP(S) upstream URL.
+    /// IP address, DNS name, HTTP(S) URL, Supgang service, or `moved://NAME` target.
     #[schemars(length(min = 1, max = 4_096))]
     pub target: String,
     /// Whether routed HTTP(S) traffic preserves the client-facing host.
@@ -241,6 +256,18 @@ mod tests {
     use remap_protocol::HostPolicy;
 
     use super::SetParams;
+
+    #[test]
+    fn landing_mcp_accepts_and_describes_the_field() -> Result<(), serde_json::Error> {
+        let params: SetParams = serde_json::from_value(serde_json::json!({
+            "expected_revision": 0, "operation_id": "c4d1f8c7-bd38-4a5a-a8ee-bb1f36cd2851",
+            "pattern": "landing.test", "target": "http://127.0.0.1/", "landing": "/page"
+        }))?;
+        assert_eq!(params.pattern, "landing.test");
+        let schema = serde_json::to_value(schemars::schema_for!(SetParams))?;
+        assert!(schema["properties"]["landing"].is_object());
+        Ok(())
+    }
 
     #[test]
     fn omitted_http_host_policy_uses_the_destination() -> Result<(), serde_json::Error> {

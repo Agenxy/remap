@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Explicit, bounded approval input for native lifecycle operations."""
 
 from __future__ import annotations

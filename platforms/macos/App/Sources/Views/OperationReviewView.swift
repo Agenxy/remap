@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import RemapControlKit
 import SwiftUI
 
@@ -43,6 +44,7 @@ struct OperationReviewView: View {
                     Text(AppText.projectedRegistryRevision(preview.baseRevision))
                         .foregroundStyle(.secondary)
                     EffectList(effects: preview.effects)
+                    AdvisoryList(warnings: preview.warnings ?? [])
                 } else if isWorking {
                     ProgressView(AppText.localized("Calculating exact scope…"))
                         .controlSize(.large)

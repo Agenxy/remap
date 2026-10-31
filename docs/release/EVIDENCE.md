@@ -60,10 +60,32 @@ dist/Remap-0.2.0-arm64.pkg
 dist/Remap-0.2.0-arm64.pkg.sig
 ```
 
-The signature uses Remap's dedicated Ed25519 release key, identity
-`remap-release`, and namespace `remap-package-v1`. The corresponding public key
-is committed at `docs/release/remap-release-signing-key.pub`; its SHA-256
-fingerprint is `SHA256:bG9pik9VV1jT2rZrsC7sYJCZOfc0tiuSrL05/v6FmtI`.
+The signature uses Remap's dedicated release key, identity `remap-release`, and
+namespace `remap-package-v1`. That key is a P-256 key generated inside the
+building Mac's Secure Enclave by the build-only `remap-release-key` helper
+(ADR-0029). The Enclave never releases it, and each signature asks the owner for
+Touch ID or the login password. The helper writes an ordinary OpenSSH SSHSIG
+signature, so every verifier is still `ssh-keygen -Y verify`. A release build is
+selected by `REMAP_RELEASE_SE_KEY`, which names the key's device-bound blob; it
+proves that blob's public key equals the release pin before it signs anything,
+and it refuses an exportable private-key file outright. The same signer produces
+the inner `release-manifest.json.sig` under namespace `remap-release`.
+
+The corresponding public key is committed at
+`docs/release/remap-release-signing-key.pub`. It is the Secure Enclave key
+`remap-release-v2`, pinned on 2026-10-27, and its SHA-256 fingerprint is
+`SHA256:UNkUo9rEtVK+N92onnYn1C9d6U2cCkuTOYFvZIW/dgQ`. A release build refuses any
+pin marked `remap-release-development-only`.
+
+A development package, `dist/Remap-0.2.0-arm64-development.pkg`, is built with
+`REMAP_DEVELOPMENT_PACKAGE=1` and signed by the passphrase-less file key named by
+`REMAP_RELEASE_SIGNING_KEY`, against its own pin,
+`docs/release/remap-development-signing-key.pub`. The two pins are never mixed:
+the package builder compiles exactly one of them into the package's installer,
+choosing by the Swift condition `REMAP_DEVELOPMENT_PACKAGE`, and checks the built
+installer embeds that key and not the other. `make install-package-macos` checks
+a development package against the development pin only when
+`REMAP_DEVELOPMENT_PACKAGE=1` is set, and anything else against the release pin.
 
 The builder refuses to overwrite an existing artifact, verifies the complete
 detached signature after publication, rejects noncanonical and AppleDouble
@@ -72,7 +94,7 @@ exact identifier and version, requires native Mach-O installer actions,
 compares the canonical internal release manifest byte for byte, and revalidates
 every expanded payload node. It then signs the complete XAR with the pinned
 self-signed `Remap Release Installer` identity before applying the detached
-Ed25519 signature to those final bytes. The package is intentionally not
+release-key signature to those final bytes. The package is intentionally not
 Developer ID signed or notarized. On the target Mac, a root native installer
 verifies the signed internal manifest and signs the verified executables with a
 durable local System-keychain identity before native publication.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
 @testable import RemapInstallKit
@@ -83,13 +84,16 @@ func onlyInstalledImagesMayUseTheCompleteLegacySystemSocketContract() throws {
         program: resolverProgram.value
     )
 
+    // Images of that age also declare the legacy Background class, which
+    // only an installed generation may carry (ADR-0030).
     #expect(throws: InstallError.self) {
         try MacOSLaunchdPropertyList.validate(
             legacyDaemon,
             kind: .daemon,
             configuration: configuration,
             account: account,
-            programPath: daemonProgram
+            programPath: daemonProgram,
+            scheduling: .installed
         )
     }
     #expect(throws: InstallError.self) {
@@ -98,7 +102,8 @@ func onlyInstalledImagesMayUseTheCompleteLegacySystemSocketContract() throws {
             kind: .resolver,
             configuration: configuration,
             account: account,
-            programPath: resolverProgram
+            programPath: resolverProgram,
+            scheduling: .installed
         )
     }
     try MacOSLaunchdPropertyList.validate(
@@ -107,7 +112,8 @@ func onlyInstalledImagesMayUseTheCompleteLegacySystemSocketContract() throws {
         configuration: configuration,
         account: account,
         programPath: daemonProgram,
-        contract: .legacyDataDirectorySystemSocket
+        contract: .legacyDataDirectorySystemSocket,
+        scheduling: .installed
     )
     try MacOSLaunchdPropertyList.validate(
         legacyResolver,
@@ -115,7 +121,8 @@ func onlyInstalledImagesMayUseTheCompleteLegacySystemSocketContract() throws {
         configuration: configuration,
         account: account,
         programPath: resolverProgram,
-        contract: .legacyDataDirectorySystemSocket
+        contract: .legacyDataDirectorySystemSocket,
+        scheduling: .installed
     )
 }
 
@@ -123,7 +130,7 @@ private func legacyDaemonPlist(
     configuration: MacOSInstallConfiguration,
     program: String
 ) throws -> Data {
-    let data = try daemonPlist(configuration: configuration, program: program)
+    let data = try daemonPlist(configuration: configuration, program: program, processType: "Background")
     var document = try #require(
         PropertyListSerialization.propertyList(from: data, options: [], format: nil)
             as? [String: Any]
@@ -145,7 +152,7 @@ private func legacyResolverPlist(
     configuration: MacOSInstallConfiguration,
     program: String
 ) throws -> Data {
-    let data = try resolverPlist(configuration: configuration, program: program)
+    let data = try resolverPlist(configuration: configuration, program: program, processType: "Background")
     var document = try #require(
         PropertyListSerialization.propertyList(from: data, options: [], format: nil)
             as? [String: Any]
@@ -158,4 +165,30 @@ private func legacyResolverPlist(
         format: .xml,
         options: 0
     )
+}
+
+@Test
+func aGenerationImageDialsTheSystemSocketItsOwnContractNames() throws {
+    let ownerUID = UInt32(getuid())
+    let account = try MacOSAccountLookup.account(for: ownerUID)
+    let dataDirectory = account.homeDirectory.value
+        + "/Library/Application Support/org.Agenxy.Remap"
+    let configuration = try MacOSInstallConfiguration(
+        ownerUID: ownerUID,
+        dataDirectory: InstallAbsolutePath(dataDirectory),
+        controlSocket: InstallAbsolutePath(dataDirectory + "/control.sock"),
+        signingCertificateSHA256: InstallDigest.hash(Data("certificate".utf8))
+    )
+    let launchdOwned = MacOSGenerationImage(
+        configuration: configuration,
+        services: [],
+        contract: .launchdOwnedSystemSocket
+    )
+    let legacy = MacOSGenerationImage(
+        configuration: configuration,
+        services: [],
+        contract: .legacyDataDirectorySystemSocket
+    )
+    #expect(launchdOwned.systemSocketPath == "/var/run/org.agenxy.Remap.system.sock")
+    #expect(legacy.systemSocketPath == dataDirectory + "/system.sock")
 }

@@ -1,10 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU16;
 use std::str::FromStr;
 
-use crate::{RemapName, RemapNameError};
+use crate::template::{self, TemplateNameError};
+use crate::{MovedTarget, MovedTargetError, RemapName, RemapNameError};
 
 /// Supported upstream HTTP schemes.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
@@ -316,6 +318,8 @@ impl FromStr for HttpUpstream {
 /// A validation failure for an inferred mapping destination.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum MappingTargetError {
+    /// A moved destination or expiry is invalid.
+    InvalidMoved(MovedTargetError),
     /// A DNS alias is not a valid Remap hostname.
     InvalidName(RemapNameError),
     /// An HTTP upstream is invalid.
@@ -327,6 +331,7 @@ pub enum MappingTargetError {
 impl Display for MappingTargetError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidMoved(error) => Display::fmt(error, formatter),
             Self::InvalidName(error) => Display::fmt(error, formatter),
             Self::InvalidHttpUpstream(error) => Display::fmt(error, formatter),
             Self::InvalidPeerService(error) => Display::fmt(error, formatter),
@@ -337,6 +342,7 @@ impl Display for MappingTargetError {
 impl Error for MappingTargetError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::InvalidMoved(error) => Some(error),
             Self::InvalidName(error) => Some(error),
             Self::InvalidHttpUpstream(error) => Some(error),
             Self::InvalidPeerService(error) => Some(error),
@@ -355,6 +361,26 @@ pub struct PeerService {
     peer: String,
     service: String,
     host_header_policy: HostHeaderPolicy,
+    transport: PeerTransport,
+}
+
+/// What protects a peer service's bytes inside Supgang's tunnel (ADR-0026).
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+pub enum PeerTransport {
+    /// `supgang://`: TLS to the key the peer advertises, verified end to end.
+    PinnedTls,
+    /// `supgang+http://`: plain HTTP carried only inside the authenticated
+    /// tunnel, chosen explicitly by the owner and never inferred.
+    PlaintextInTunnel,
+}
+
+impl PeerTransport {
+    const fn scheme(self) -> &'static str {
+        match self {
+            Self::PinnedTls => "supgang://",
+            Self::PlaintextInTunnel => "supgang+http://",
+        }
+    }
 }
 
 /// Maximum bytes in a peer selector, the bound Supgang's own names have.
@@ -363,7 +389,8 @@ pub const MAX_PEER_SELECTOR_BYTES: usize = 64;
 pub const MAX_SERVICE_NAME_BYTES: usize = 16;
 
 impl PeerService {
-    /// Parses `supgang://<peer>/<service>` with an explicit host policy.
+    /// Parses `supgang://<peer>/<service>` or `supgang+http://<peer>/<service>`
+    /// with an explicit host policy.
     ///
     /// # Errors
     ///
@@ -373,8 +400,13 @@ impl PeerService {
         input: &str,
         host_header_policy: HostHeaderPolicy,
     ) -> Result<Self, PeerServiceError> {
-        let remainder = input
-            .strip_prefix("supgang://")
+        let (transport, remainder) = [PeerTransport::PinnedTls, PeerTransport::PlaintextInTunnel]
+            .into_iter()
+            .find_map(|transport| {
+                input
+                    .strip_prefix(transport.scheme())
+                    .map(|remainder| (transport, remainder))
+            })
             .ok_or_else(|| PeerServiceError::InvalidUrl(input.to_owned()))?;
         let (peer, service) = remainder
             .split_once('/')
@@ -382,28 +414,18 @@ impl PeerService {
         if service.contains('/') || service.contains('?') || service.contains('#') {
             return Err(PeerServiceError::TrailingInput);
         }
-        let peer_valid = !peer.is_empty()
-            && peer.len() <= MAX_PEER_SELECTOR_BYTES
-            && !peer.starts_with('-')
-            && peer
-                .chars()
-                .all(|character| !character.is_control() && !character.is_whitespace());
-        if !peer_valid {
+        if template::placeholder(peer)?.is_none() && !peer_selector_valid(peer) {
             return Err(PeerServiceError::InvalidPeer(peer.to_owned()));
         }
-        let service_valid = !service.is_empty()
-            && service.len() <= MAX_SERVICE_NAME_BYTES
-            && !service.starts_with('-')
-            && service
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
-        if !service_valid {
+        if template::placeholder(service)?.is_none() && !service_name_valid(service) {
             return Err(PeerServiceError::InvalidService(service.to_owned()));
         }
+        template::arity([peer, service])?;
         Ok(Self {
             peer: peer.to_owned(),
             service: service.to_owned(),
             host_header_policy,
+            transport,
         })
     }
 
@@ -424,11 +446,87 @@ impl PeerService {
     pub const fn host_header_policy(&self) -> HostHeaderPolicy {
         self.host_header_policy
     }
+
+    /// Returns what protects the service's bytes inside the tunnel.
+    #[must_use]
+    pub const fn transport(&self) -> PeerTransport {
+        self.transport
+    }
+
+    /// Returns how many name labels this target's placeholders read, or
+    /// `None` when the peer and service are both literal (ADR-0032).
+    #[must_use]
+    pub fn template_arity(&self) -> Option<usize> {
+        template::arity([&self.peer, &self.service]).ok().flatten()
+    }
+
+    /// Fills the placeholders from a name's labels, nearest the suffix first,
+    /// and validates the result exactly as a literal target is validated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TemplateNameError::LabelCount`] when the name supplies a
+    /// different number of labels than the template reads, and
+    /// [`TemplateNameError::Field`] when a label is not valid in its field.
+    pub fn instantiate(&self, captures: &[&str]) -> Result<Self, TemplateNameError> {
+        let Some(expected) = self.template_arity() else {
+            return Ok(self.clone());
+        };
+        if captures.len() != expected {
+            return Err(TemplateNameError::LabelCount {
+                expected,
+                found: captures.len(),
+            });
+        }
+        let peer = template::fill(&self.peer, captures);
+        let service = template::fill(&self.service, captures);
+        if !peer_selector_valid(&peer) {
+            return Err(TemplateNameError::Field(PeerServiceError::InvalidPeer(
+                peer,
+            )));
+        }
+        if !service_name_valid(&service) {
+            return Err(TemplateNameError::Field(PeerServiceError::InvalidService(
+                service,
+            )));
+        }
+        Ok(Self {
+            peer,
+            service,
+            host_header_policy: self.host_header_policy,
+            transport: self.transport,
+        })
+    }
+}
+
+fn peer_selector_valid(peer: &str) -> bool {
+    !peer.is_empty()
+        && peer.len() <= MAX_PEER_SELECTOR_BYTES
+        && !peer.starts_with('-')
+        && !peer.contains(['{', '}'])
+        && peer
+            .chars()
+            .all(|character| !character.is_control() && !character.is_whitespace())
+}
+
+fn service_name_valid(service: &str) -> bool {
+    !service.is_empty()
+        && service.len() <= MAX_SERVICE_NAME_BYTES
+        && !service.starts_with('-')
+        && service
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 impl Display for PeerService {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        write!(formatter, "supgang://{}/{}", self.peer, self.service)
+        write!(
+            formatter,
+            "{}{}/{}",
+            self.transport.scheme(),
+            self.peer,
+            self.service
+        )
     }
 }
 
@@ -445,12 +543,18 @@ pub enum PeerServiceError {
     InvalidService(String),
     /// Something follows the service name.
     TrailingInput,
+    /// A field starts with `{` but is not `{1}` or `{2}`, or the
+    /// placeholders skip a capture (ADR-0032).
+    InvalidTemplate(String),
 }
 
 impl Display for PeerServiceError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidUrl(value) => write!(formatter, "'{value}' is not a supgang:// target"),
+            Self::InvalidUrl(value) => write!(
+                formatter,
+                "'{value}' is not a supgang:// or supgang+http:// target"
+            ),
             Self::MissingService => formatter.write_str(
                 "a supgang:// target names a peer and a service: supgang://<peer>/<service>",
             ),
@@ -467,6 +571,11 @@ impl Display for PeerServiceError {
             Self::TrailingInput => {
                 formatter.write_str("nothing may follow the service name in a supgang:// target")
             }
+            Self::InvalidTemplate(value) => write!(
+                formatter,
+                "'{value}' is not a target template: a whole peer or service may be {{1}}, the label \
+                 nearest the wildcard's suffix, or {{2}}, the next one, and {{2}} needs {{1}}"
+            ),
         }
     }
 }
@@ -477,6 +586,8 @@ impl Error for PeerServiceError {}
 /// a Supgang peer.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum MappingTarget {
+    /// A permanent redirect to another explicitly chosen Remap name.
+    Moved(MovedTarget),
     /// Return an IPv4 or IPv6 DNS answer directly.
     DnsAddress(IpAddr),
     /// Resolve or return a DNS alias under the finalized DNS policy.
@@ -491,6 +602,8 @@ pub enum MappingTarget {
 /// The stable category of a mapping destination.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub enum MappingTargetKind {
+    /// A permanent redirect to another explicitly chosen Remap name.
+    Moved,
     /// A direct IPv4 or IPv6 DNS answer.
     DnsAddress,
     /// A DNS alias destination.
@@ -506,6 +619,7 @@ impl MappingTargetKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Moved => "moved",
             Self::DnsAddress => "dns-address",
             Self::DnsAlias => "dns-alias",
             Self::Http => "http",
@@ -531,7 +645,12 @@ impl MappingTarget {
         input: &str,
         host_header_policy: HostHeaderPolicy,
     ) -> Result<Self, MappingTargetError> {
-        if input.starts_with("supgang://") {
+        if input.starts_with("moved://") {
+            return MovedTarget::parse(input)
+                .map(Self::Moved)
+                .map_err(MappingTargetError::InvalidMoved);
+        }
+        if input.starts_with("supgang://") || input.starts_with("supgang+http://") {
             return PeerService::parse_with_policy(input, host_header_policy)
                 .map(Self::Peer)
                 .map_err(MappingTargetError::InvalidPeerService);
@@ -549,10 +668,21 @@ impl MappingTarget {
             .map_err(MappingTargetError::InvalidName)
     }
 
+    /// Returns how many name labels this target's placeholders read, or
+    /// `None` for a literal target (ADR-0032).
+    #[must_use]
+    pub fn template_arity(&self) -> Option<usize> {
+        match self {
+            Self::Peer(service) => service.template_arity(),
+            _ => None,
+        }
+    }
+
     /// Returns the stable destination category.
     #[must_use]
     pub const fn kind(&self) -> MappingTargetKind {
         match self {
+            Self::Moved(_) => MappingTargetKind::Moved,
             Self::DnsAddress(_) => MappingTargetKind::DnsAddress,
             Self::DnsAlias(_) => MappingTargetKind::DnsAlias,
             Self::Http(_) => MappingTargetKind::Http,
@@ -564,6 +694,7 @@ impl MappingTarget {
 impl Display for MappingTarget {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Moved(target) => Display::fmt(target, formatter),
             Self::DnsAddress(address) => Display::fmt(address, formatter),
             Self::DnsAlias(name) => Display::fmt(name, formatter),
             Self::Http(upstream) => Display::fmt(upstream, formatter),

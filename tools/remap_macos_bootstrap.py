@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Descriptor-pinned, crash-recoverable macOS source-helper bootstrap."""
 
 from __future__ import annotations
@@ -338,7 +339,11 @@ def run_with_input_descriptor(
             stdin=read_descriptor,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            start_new_session=True,
+            # A process group of its own, so the whole command tree can be
+            # signalled, in the caller's session: a new session would drop the
+            # controlling terminal, and with it the administrator ticket that
+            # `sudo -n` relies on.
+            process_group=0,
         )
     except BaseException:
         os.close(read_descriptor)
@@ -383,7 +388,12 @@ def run_with_input_descriptor(
     finally:
         os.close(write_descriptor)
     if transfer_error is not None:
-        terminate_process_group(process, deadline)
+        try:
+            terminate_process_group(process, deadline)
+        except (OSError, RuntimeError) as cleanup_error:
+            # The transfer error is the one that explains the failure; a
+            # problem ending the sink must never stand in for it.
+            raise transfer_error from cleanup_error
         raise transfer_error
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -436,10 +446,14 @@ def kill_process_group_and_reap(process: subprocess.Popen[bytes]) -> None:
 def signal_process_group(
     process: subprocess.Popen[bytes], value: signal.Signals
 ) -> None:
-    """Signal the session created for exactly one privileged command tree."""
+    """Signal the process group created for exactly one privileged command tree."""
     try:
         os.killpg(process.pid, value)
     except ProcessLookupError:
+        return
+    except PermissionError:
+        # A tree that sudo raised to root cannot be signalled by this user; the
+        # sink ends on its own once its input closes, and reaping is bounded.
         return
 
 

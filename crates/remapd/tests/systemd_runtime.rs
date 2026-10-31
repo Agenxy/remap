@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Opt-in end-to-end Linux proof for remapd's systemd activation path.
 
 #![cfg(target_os = "linux")]

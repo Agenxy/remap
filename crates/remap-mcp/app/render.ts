@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import {
   asMappings,
   asNumber,
@@ -143,6 +144,12 @@ const mappingRow = (mapping: MappingView): HTMLElement => {
     target,
     text("span", `${mapping.target_kind} · ${mapping.host_policy}${updated}`, "mapping-meta"),
   );
+  const landing = asString(mapping.landing);
+  if (landing !== null) {
+    const path = text("span", `landing ${landing}`, "mapping-meta mapping-landing");
+    path.title = landing;
+    destination.append(path);
+  }
   row.append(name, text("span", "→", "arrow"), destination);
   const pill = text("span", mapping.enabled ? "active" : "disabled", "pill");
   pill.classList.toggle("off", !mapping.enabled);
@@ -167,8 +174,19 @@ const renderOutcome = (outcome: Outcome | null): void => {
   }
   const effects = Array.isArray(data?.effects) ? data.effects : [];
   for (const effect of effects) body.append(effectRow(effect));
+  renderWarnings(body, data);
   const hint = asString(data?.hint);
   if (hint !== null) body.append(text("div", hint, "effect"));
+};
+
+const renderWarnings = (body: HTMLElement, data: JsonRecord | null): void => {
+  const warnings = Array.isArray(data?.warnings) ? data.warnings : [];
+  for (const warning of warnings) {
+    if (typeof warning !== "string") continue;
+    const advisory = text("div", `Advisory: ${warning}`, "advisory");
+    advisory.setAttribute("role", "note");
+    body.append(advisory);
+  }
 };
 
 const outcomeFacts = (data: JsonRecord | null): string[] => {
@@ -200,10 +218,11 @@ const namedFacts = (data: JsonRecord): string[] => {
     "target",
     "target_kind",
     "host_policy",
+    "landing",
     "code",
   ] as const) {
     const value = asString(data[key]);
-    if (value !== null) facts.push(value);
+    if (value !== null) facts.push(key === "landing" ? `landing ${value}` : value);
   }
   return facts;
 };
@@ -242,7 +261,7 @@ const effectRow = (value: unknown): HTMLElement => {
   row.append(
     text(
       "span",
-      `${mappingSummary(effect?.before)}  →  ${mappingSummary(effect?.after)}`,
+      `Before: ${mappingSummary(effect?.before)}  →  After: ${mappingSummary(effect?.after)}`,
       "effect-change",
     ),
   );

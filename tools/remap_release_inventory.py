@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Typed package and tool inventory for deterministic release evidence."""
 
 from __future__ import annotations
@@ -69,7 +70,7 @@ def run_dependency_policy(root: Path) -> None:
 
 def swift_inventory(root: Path, metadata_path: Path) -> SwiftInventory:
     """Ask SwiftPM for the exact native graph and reject unaudited externals."""
-    verify_selected_xcode()
+    verify_selected_xcode(required=True)
     result = capture(
         root,
         (

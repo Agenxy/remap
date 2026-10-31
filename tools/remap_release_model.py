@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Pure, deterministic models for Remap release evidence."""
 
 from __future__ import annotations

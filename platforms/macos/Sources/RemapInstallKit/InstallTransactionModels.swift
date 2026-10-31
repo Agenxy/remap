@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// Desired native system states. Adapters must reconcile each state idempotently before verifying it.

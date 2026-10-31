@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import RemapControlKit
 import SwiftUI
 
@@ -44,6 +45,10 @@ struct MappingDetailView: View {
     private var definition: some View {
         Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 14) {
             detailRow(AppText.localized("Destination"), mapping.target, monospaced: true)
+            if let landing = mapping.landing {
+                Divider()
+                detailRow(AppText.localized("Landing path"), landing, monospaced: true)
+            }
             Divider()
             detailRow(AppText.localized("Kind"), mapping.targetKind)
             Divider()

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use crate::LinkState;
 
 /// One fail-closed result from reconciling native resolver link candidates.

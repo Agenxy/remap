@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
 import RemapInstallKit
@@ -125,9 +126,25 @@ struct PortableReleaseVerifier: Sendable {
     static let payloadName = "payload"
     static let signingIdentity = "remap-release"
     static let signingNamespace = "remap-release"
-    static let releasePublicKey = """
-    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGDuwpKP+y7P4EN1/3snVhNRVTugTbFLTRZLvtA5P5kU remap-release-v1
-    """
+    // Exactly one pin is compiled into an installer, so a package can only ever accept the key
+    // of its own kind. The package builder passes `-D REMAP_DEVELOPMENT_PACKAGE` when, and only
+    // when, it builds a development package. Each literal, once its backslash-continued lines
+    // are joined, is byte-identical to its file under `docs/release`, and a test keeps them so.
+    // A P-256 line is longer than a source line may be, hence the continuations.
+    #if REMAP_DEVELOPMENT_PACKAGE
+        static let releasePublicKey = """
+        ssh-ed25519 \
+        AAAAC3NzaC1lZDI1NTE5AAAAIDz/2DGz1HxwE5JHhxzabvtiXAKvV5W8tsBzGV3R15xg \
+        remap-release-development-only
+        """
+    #else
+        static let releasePublicKey = """
+        ecdsa-sha2-nistp256 \
+        AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBDT3ePLJbiA9xE1OHa\
+        sjbK1YJnRIhIiRmS7U0kUi615JcsNjDN82qNATyro57NtdaIZYeBbF1dTk+xa7sHEybeA= \
+        remap-release-v2
+        """
+    #endif
 
     private let runner: PortableCommandRunner
 

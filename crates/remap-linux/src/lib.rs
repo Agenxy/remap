@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Native Linux resolver and service-manager contracts for Remap.
 //!
 //! This crate deliberately separates reversible resolver policy from the

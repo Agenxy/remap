@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use crate::{
     DnsServer, LinkDomain, LinkIndex, LinkState, LinuxError, LinuxErrorKind, LinuxResult,
     ResolverManagerRecord,
@@ -75,7 +76,7 @@ type RawDnsEx = (i32, Vec<u8>, u16, String);
 #[derive(Debug)]
 enum MutationAdapter {
     Resolved,
-    SystemdNetworkd(zbus::zvariant::OwnedObjectPath),
+    SystemdNetworkd(zbus::OwnedObjectPath),
 }
 
 /// Typed operations Remap uses from one systemd-resolved manager.
@@ -131,7 +132,7 @@ pub trait ResolvedBackend {
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct SystemdResolved {
-    connection: zbus::blocking::Connection,
+    connection: zbus::Connection,
     adapter: MutationAdapter,
     interface_name: String,
 }
@@ -308,18 +309,19 @@ impl SystemdResolved {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn system_connection() -> LinuxResult<zbus::blocking::Connection> {
-    zbus::blocking::connection::Builder::system()
-        .map_err(|_error| bus_error())?
-        .method_timeout(NATIVE_METHOD_TIMEOUT)
-        .build()
-        .map_err(|_error| bus_error())
+pub(crate) fn system_connection() -> LinuxResult<zbus::Connection> {
+    zbus::block_on(
+        zbus::connection::Builder::system()
+            .method_timeout(NATIVE_METHOD_TIMEOUT)
+            .build(),
+    )
+    .map_err(|_error| bus_error())
 }
 
 #[cfg(target_os = "linux")]
 fn systemd_startup_ready(
     adapter: &MutationAdapter,
-    networkd: Option<(zbus::zvariant::OwnedObjectPath, String)>,
+    networkd: Option<(zbus::OwnedObjectPath, String)>,
 ) -> LinuxResult<bool> {
     match (adapter, networkd) {
         (MutationAdapter::Resolved, None) => Ok(true),
@@ -355,7 +357,7 @@ fn expected_manager_ready(
 
 #[cfg(target_os = "linux")]
 fn inspect_with_connection(
-    connection: &zbus::blocking::Connection,
+    connection: &zbus::Connection,
     link: LinkIndex,
 ) -> LinuxResult<ResolverLinkInspection> {
     let interface_name = nix::net::if_::if_indextoname(link.get())
@@ -432,18 +434,20 @@ impl ResolvedBackend for SystemdResolved {
             .iter()
             .map(DnsServer::to_resolved)
             .collect::<Vec<_>>();
-        match &self.adapter {
-            MutationAdapter::Resolved => {
-                let proxy =
-                    ResolveManagerProxy::new(&self.connection).map_err(|_error| bus_error())?;
-                proxy
+        zbus::block_on(async {
+            match &self.adapter {
+                MutationAdapter::Resolved => resolve_manager(&self.connection)
+                    .await?
                     .set_link_dns_ex(link.as_i32(), entries)
-                    .map_err(|error| method_error(&error))
+                    .await
+                    .map_err(|error| method_error(&error)),
+                MutationAdapter::SystemdNetworkd(path) => networkd_proxy(&self.connection, path)
+                    .await?
+                    .set_dns_ex(entries)
+                    .await
+                    .map_err(|error| method_error(&error)),
             }
-            MutationAdapter::SystemdNetworkd(path) => networkd_proxy(&self.connection, path)?
-                .set_dns_ex(entries)
-                .map_err(|error| method_error(&error)),
-        }
+        })
     }
 
     fn set_domains(&mut self, link: LinkIndex, domains: &[LinkDomain]) -> LinuxResult<()> {
@@ -451,53 +455,64 @@ impl ResolvedBackend for SystemdResolved {
             .iter()
             .map(|domain| (domain.name().to_owned(), domain.route_only()))
             .collect::<Vec<_>>();
-        match &self.adapter {
-            MutationAdapter::Resolved => {
-                let proxy =
-                    ResolveManagerProxy::new(&self.connection).map_err(|_error| bus_error())?;
-                proxy
+        zbus::block_on(async {
+            match &self.adapter {
+                MutationAdapter::Resolved => resolve_manager(&self.connection)
+                    .await?
                     .set_link_domains(link.as_i32(), entries)
-                    .map_err(|error| method_error(&error))
+                    .await
+                    .map_err(|error| method_error(&error)),
+                MutationAdapter::SystemdNetworkd(path) => networkd_proxy(&self.connection, path)
+                    .await?
+                    .set_domains(entries)
+                    .await
+                    .map_err(|error| method_error(&error)),
             }
-            MutationAdapter::SystemdNetworkd(path) => networkd_proxy(&self.connection, path)?
-                .set_domains(entries)
-                .map_err(|error| method_error(&error)),
-        }
+        })
     }
 
     fn set_default_route(&mut self, link: LinkIndex, enabled: bool) -> LinuxResult<()> {
-        match &self.adapter {
-            MutationAdapter::Resolved => {
-                let proxy =
-                    ResolveManagerProxy::new(&self.connection).map_err(|_error| bus_error())?;
-                proxy
+        zbus::block_on(async {
+            match &self.adapter {
+                MutationAdapter::Resolved => resolve_manager(&self.connection)
+                    .await?
                     .set_link_default_route(link.as_i32(), enabled)
-                    .map_err(|error| method_error(&error))
+                    .await
+                    .map_err(|error| method_error(&error)),
+                MutationAdapter::SystemdNetworkd(path) => networkd_proxy(&self.connection, path)
+                    .await?
+                    .set_default_route(enabled)
+                    .await
+                    .map_err(|error| method_error(&error)),
             }
-            MutationAdapter::SystemdNetworkd(path) => networkd_proxy(&self.connection, path)?
-                .set_default_route(enabled)
-                .map_err(|error| method_error(&error)),
-        }
+        })
     }
 }
 
+// zbus 6 has no blocking API. Each synchronous function below drives its own
+// D-Bus exchange to completion with `zbus::block_on` and is never called from
+// inside another one, which `block_on` forbids.
 #[cfg(target_os = "linux")]
 pub(crate) fn snapshot_resolved(
-    connection: &zbus::blocking::Connection,
+    connection: &zbus::Connection,
     link: LinkIndex,
 ) -> LinuxResult<LinkState> {
-    let manager = ResolveManagerProxy::new(connection).map_err(|_error| bus_error())?;
-    let path = manager
-        .get_link(link.as_i32())
-        .map_err(|_error| bus_error())?;
-    let proxy = ResolveLinkProxy::builder(connection)
-        .path(path)
-        .map_err(|_error| bus_error())?
-        .build()
-        .map_err(|_error| bus_error())?;
-    let raw_dns = proxy.dns_ex().map_err(|_error| bus_error())?;
-    let raw_domains = proxy.domains().map_err(|_error| bus_error())?;
-    let default_route = proxy.default_route().map_err(|_error| bus_error())?;
+    let (raw_dns, raw_domains, default_route) = zbus::block_on(async {
+        let path = resolve_manager(connection)
+            .await?
+            .get_link(link.as_i32())
+            .await
+            .map_err(|_error| bus_error())?;
+        let proxy = ResolveLinkProxy::builder(connection)
+            .path(path)
+            .build()
+            .await
+            .map_err(|_error| bus_error())?;
+        let raw_dns = proxy.dns_ex().await.map_err(|_error| bus_error())?;
+        let raw_domains = proxy.domains().await.map_err(|_error| bus_error())?;
+        let default_route = proxy.default_route().await.map_err(|_error| bus_error())?;
+        Ok::<_, LinuxError>((raw_dns, raw_domains, default_route))
+    })?;
     let dns_servers = raw_dns
         .into_iter()
         .map(|(family, bytes, port, name)| DnsServer::from_resolved(family, &bytes, port, name))
@@ -510,76 +525,94 @@ pub(crate) fn snapshot_resolved(
 }
 
 #[cfg(target_os = "linux")]
-fn network_manager_owns(
-    connection: &zbus::blocking::Connection,
-    interface_name: &str,
-) -> LinuxResult<bool> {
+fn network_manager_owns(connection: &zbus::Connection, interface_name: &str) -> LinuxResult<bool> {
     if !name_has_owner(connection, "org.freedesktop.NetworkManager")? {
         return Ok(false);
     }
-    let proxy = NetworkManagerProxy::new(connection).map_err(|_error| bus_error())?;
-    match proxy.get_device_by_ip_iface(interface_name) {
-        Ok(path) => NetworkManagerDeviceOwnerProxy::builder(connection)
-            .path(path)
-            .map_err(|_error| bus_error())?
-            .build()
-            .map_err(|_error| bus_error())?
-            .managed()
-            .map_err(|_error| bus_error()),
-        Err(zbus::Error::MethodError(name, _detail, _reply))
-            if name.as_str() == "org.freedesktop.NetworkManager.UnknownDevice" =>
-        {
-            Ok(false)
+    zbus::block_on(async {
+        let proxy = NetworkManagerProxy::new(connection)
+            .await
+            .map_err(|_error| bus_error())?;
+        match proxy.get_device_by_ip_iface(interface_name).await {
+            Ok(path) => NetworkManagerDeviceOwnerProxy::builder(connection)
+                .path(path)
+                .build()
+                .await
+                .map_err(|_error| bus_error())?
+                .managed()
+                .await
+                .map_err(|_error| bus_error()),
+            Err(zbus::Error::MethodError(name, _detail, _reply))
+                if name.as_str() == "org.freedesktop.NetworkManager.UnknownDevice" =>
+            {
+                Ok(false)
+            }
+            Err(_error) => Err(bus_error()),
         }
-        Err(_error) => Err(bus_error()),
-    }
+    })
 }
 
 #[cfg(target_os = "linux")]
 fn networkd_link(
-    connection: &zbus::blocking::Connection,
+    connection: &zbus::Connection,
     link: LinkIndex,
-) -> LinuxResult<Option<zbus::zvariant::OwnedObjectPath>> {
+) -> LinuxResult<Option<zbus::OwnedObjectPath>> {
     Ok(networkd_link_state(connection, link)?.map(|(path, _state)| path))
 }
 
 #[cfg(target_os = "linux")]
 fn networkd_link_state(
-    connection: &zbus::blocking::Connection,
+    connection: &zbus::Connection,
     link: LinkIndex,
-) -> LinuxResult<Option<(zbus::zvariant::OwnedObjectPath, String)>> {
+) -> LinuxResult<Option<(zbus::OwnedObjectPath, String)>> {
     if !name_has_owner(connection, "org.freedesktop.network1")? {
         return Ok(None);
     }
-    let manager = NetworkdManagerProxy::new(connection).map_err(|_error| bus_error())?;
-    let (_name, path) = manager
-        .get_link_by_index(link.as_i32())
-        .map_err(|_error| bus_error())?;
-    let state = networkd_proxy(connection, &path)?
-        .administrative_state()
-        .map_err(|_error| bus_error())?;
-    Ok((state != "unmanaged").then_some((path, state)))
+    zbus::block_on(async {
+        let (_name, path) = NetworkdManagerProxy::new(connection)
+            .await
+            .map_err(|_error| bus_error())?
+            .get_link_by_index(link.as_i32())
+            .await
+            .map_err(|_error| bus_error())?;
+        let state = networkd_proxy(connection, &path)
+            .await?
+            .administrative_state()
+            .await
+            .map_err(|_error| bus_error())?;
+        Ok((state != "unmanaged").then_some((path, state)))
+    })
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn name_has_owner(
-    connection: &zbus::blocking::Connection,
-    name: &str,
-) -> LinuxResult<bool> {
-    let proxy = zbus::blocking::fdo::DBusProxy::new(connection).map_err(|_error| bus_error())?;
+pub(crate) fn name_has_owner(connection: &zbus::Connection, name: &str) -> LinuxResult<bool> {
     let name = zbus::names::BusName::try_from(name).map_err(|_error| bus_error())?;
-    proxy.name_has_owner(name).map_err(|_error| bus_error())
+    zbus::block_on(async {
+        zbus::fdo::DBusProxy::new(connection)
+            .await
+            .map_err(|_error| bus_error())?
+            .name_has_owner(name)
+            .await
+            .map_err(|_error| bus_error())
+    })
 }
 
 #[cfg(target_os = "linux")]
-fn networkd_proxy<'a>(
-    connection: &'a zbus::blocking::Connection,
-    path: &zbus::zvariant::OwnedObjectPath,
+async fn resolve_manager(connection: &zbus::Connection) -> LinuxResult<ResolveManagerProxy<'_>> {
+    ResolveManagerProxy::new(connection)
+        .await
+        .map_err(|_error| bus_error())
+}
+
+#[cfg(target_os = "linux")]
+async fn networkd_proxy<'a>(
+    connection: &'a zbus::Connection,
+    path: &zbus::OwnedObjectPath,
 ) -> LinuxResult<NetworkdLinkProxy<'a>> {
     NetworkdLinkProxy::builder(connection)
         .path(path.clone())
-        .map_err(|_error| bus_error())?
         .build()
+        .await
         .map_err(|_error| bus_error())
 }
 
@@ -587,12 +620,11 @@ fn networkd_proxy<'a>(
 #[zbus::proxy(
     interface = "org.freedesktop.resolve1.Manager",
     default_service = "org.freedesktop.resolve1",
-    default_path = "/org/freedesktop/resolve1",
-    gen_async = false
+    default_path = "/org/freedesktop/resolve1"
 )]
 trait ResolveManager {
     #[zbus(name = "GetLink")]
-    fn get_link(&self, interface_index: i32) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
+    fn get_link(&self, interface_index: i32) -> zbus::Result<zbus::OwnedObjectPath>;
 
     #[zbus(name = "SetLinkDNSEx")]
     fn set_link_dns_ex(&self, interface_index: i32, addresses: Vec<RawDnsEx>) -> zbus::Result<()>;
@@ -611,8 +643,7 @@ trait ResolveManager {
 #[cfg(target_os = "linux")]
 #[zbus::proxy(
     interface = "org.freedesktop.resolve1.Link",
-    default_service = "org.freedesktop.resolve1",
-    gen_async = false
+    default_service = "org.freedesktop.resolve1"
 )]
 trait ResolveLink {
     #[zbus(property, name = "DNSEx")]
@@ -629,22 +660,20 @@ trait ResolveLink {
 #[zbus::proxy(
     interface = "org.freedesktop.network1.Manager",
     default_service = "org.freedesktop.network1",
-    default_path = "/org/freedesktop/network1",
-    gen_async = false
+    default_path = "/org/freedesktop/network1"
 )]
 trait NetworkdManager {
     #[zbus(name = "GetLinkByIndex")]
     fn get_link_by_index(
         &self,
         interface_index: i32,
-    ) -> zbus::Result<(String, zbus::zvariant::OwnedObjectPath)>;
+    ) -> zbus::Result<(String, zbus::OwnedObjectPath)>;
 }
 
 #[cfg(target_os = "linux")]
 #[zbus::proxy(
     interface = "org.freedesktop.network1.Link",
-    default_service = "org.freedesktop.network1",
-    gen_async = false
+    default_service = "org.freedesktop.network1"
 )]
 trait NetworkdLink {
     #[zbus(property, name = "AdministrativeState")]
@@ -664,22 +693,17 @@ trait NetworkdLink {
 #[zbus::proxy(
     interface = "org.freedesktop.NetworkManager",
     default_service = "org.freedesktop.NetworkManager",
-    default_path = "/org/freedesktop/NetworkManager",
-    gen_async = false
+    default_path = "/org/freedesktop/NetworkManager"
 )]
 trait NetworkManager {
     #[zbus(name = "GetDeviceByIpIface")]
-    fn get_device_by_ip_iface(
-        &self,
-        interface_name: &str,
-    ) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
+    fn get_device_by_ip_iface(&self, interface_name: &str) -> zbus::Result<zbus::OwnedObjectPath>;
 }
 
 #[cfg(target_os = "linux")]
 #[zbus::proxy(
     interface = "org.freedesktop.NetworkManager.Device",
-    default_service = "org.freedesktop.NetworkManager",
-    gen_async = false
+    default_service = "org.freedesktop.NetworkManager"
 )]
 trait NetworkManagerDeviceOwner {
     #[zbus(property, name = "Managed")]
@@ -693,9 +717,24 @@ const fn bus_error() -> LinuxError {
     )
 }
 
+/// Returns the D-Bus error name of a method's error reply.
+///
+/// zbus reports a reply whose name `zbus::fdo::Error` defines, such as
+/// `org.freedesktop.DBus.Error.AccessDenied`, as `Error::FDO` rather than as
+/// `Error::MethodError`, so both carry a reply name.
+#[cfg(target_os = "linux")]
+pub(crate) fn reply_error_name(error: &zbus::Error) -> Option<String> {
+    use zbus::DBusError as _;
+    match error {
+        zbus::Error::MethodError(name, _detail, _reply) => Some(name.as_str().to_owned()),
+        zbus::Error::FDO(error) => Some(error.name().as_str().to_owned()),
+        _ => None,
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn method_error(error: &zbus::Error) -> LinuxError {
-    let zbus::Error::MethodError(name, _detail, _reply) = error else {
+    let Some(name) = reply_error_name(error) else {
         return bus_error();
     };
     match name.as_str() {
@@ -753,18 +792,16 @@ mod tests {
     #[test]
     fn selected_networkd_outage_retries_but_positive_manager_drift_conflicts()
     -> Result<(), crate::LinuxError> {
-        let selected = zbus::zvariant::OwnedObjectPath::try_from(
-            "/org/freedesktop/network1/link/_2".to_owned(),
-        )
-        .map_err(|_error| {
-            crate::LinuxError::new(LinuxErrorKind::InvalidState, "invalid fixture")
-        })?;
-        let replacement = zbus::zvariant::OwnedObjectPath::try_from(
-            "/org/freedesktop/network1/link/_3".to_owned(),
-        )
-        .map_err(|_error| {
-            crate::LinuxError::new(LinuxErrorKind::InvalidState, "invalid fixture")
-        })?;
+        let selected =
+            zbus::OwnedObjectPath::try_from("/org/freedesktop/network1/link/_2".to_owned())
+                .map_err(|_error| {
+                    crate::LinuxError::new(LinuxErrorKind::InvalidState, "invalid fixture")
+                })?;
+        let replacement =
+            zbus::OwnedObjectPath::try_from("/org/freedesktop/network1/link/_3".to_owned())
+                .map_err(|_error| {
+                    crate::LinuxError::new(LinuxErrorKind::InvalidState, "invalid fixture")
+                })?;
         let adapter = MutationAdapter::SystemdNetworkd(selected.clone());
         let Err(outage) = systemd_startup_ready(&adapter, None) else {
             return Err(crate::LinuxError::new(

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import RemapSystemKit
 
@@ -21,7 +22,8 @@ protocol MacOSResolverControlling: Sendable {
     func observation() throws -> MacOSResolverObservation
     func activate(
         configuration: MacOSInstallConfiguration,
-        productVersion: String
+        productVersion: String,
+        systemSocketPath: String
     ) async throws
     func deactivate() throws
 }
@@ -48,12 +50,13 @@ struct NativeMacOSResolverController: MacOSResolverControlling, Sendable {
 
     func activate(
         configuration: MacOSInstallConfiguration,
-        productVersion: String
+        productVersion: String,
+        systemSocketPath: String
     ) async throws {
         _ = try await resolver.activate(
             ownerUID: configuration.ownerUID,
             productVersion: productVersion,
-            systemSocketPath: configuration.systemSocketPath,
+            systemSocketPath: systemSocketPath,
             store: store
         )
     }

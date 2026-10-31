@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import RemapControlKit
 import SwiftUI
 
@@ -55,10 +56,19 @@ private struct EffectRow: View {
             Text(label)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.tertiary)
-            Text(mapping.target)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(mapping.target)
+                    .font(.callout.monospaced())
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Text(AppText.localized("Landing path"))
+                        .foregroundStyle(.secondary)
+                    Text(mapping.landing ?? AppText.localized("None"))
+                        .textSelection(.enabled)
+                }
                 .font(.callout.monospaced())
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            }
             Text(mapping.enabled ? AppText.localized("enabled") : AppText.localized("disabled"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -84,6 +94,7 @@ private struct EffectRow: View {
 
     private func mappingDescription(_ label: String, mapping: RemapMapping) -> String {
         let state = mapping.enabled ? AppText.localized("enabled") : AppText.localized("disabled")
-        return "\(label): \(mapping.target), \(state)"
+        let landing = mapping.landing ?? AppText.localized("None")
+        return "\(label): \(mapping.target), \(state), \(AppText.localized("Landing path")): \(landing)"
     }
 }

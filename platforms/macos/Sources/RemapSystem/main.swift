@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
 import RemapSystemKit
@@ -39,8 +40,8 @@ enum RemapSystemCommand {
             let plan = try resolver.plan()
             try render(command: command, value: plan, json: json)
         case "status":
-            let record = try resolver.activeRecord()
-            try render(command: command, value: record, json: json)
+            let status = try NativeResolverStatus(record: resolver.activeRecord(), bypassStore: .standard)
+            try render(command: command, value: status, json: json)
         case "activate":
             let ownerUID = try requiredUInt32(values, flag: "--owner-uid")
             let version = try requiredValue(values, flag: "--product-version")
@@ -87,12 +88,18 @@ enum RemapSystemCommand {
             print("  Active services  \(plan.services.count)")
             print("  Upstream servers \(plan.upstreams.joined(separator: ", "))")
         case "status":
-            if let record = value as? ActivationRecord {
+            guard let status = value as? NativeResolverStatus else {
+                throw CommandError("The native status result has the wrong type.")
+            }
+            if let record = status.record {
                 print("Native DNS is \(record.payload.phase == .active ? "active" : "recoverable")")
                 print("  Services \(record.payload.services.count)")
                 print("  Version  \(record.payload.productVersion)")
             } else {
                 print("Native DNS is inactive")
+            }
+            for line in status.bypassLines() {
+                print(line)
             }
         case "activate":
             print("Native DNS activated. Unmapped names still use the captured upstream resolvers.")

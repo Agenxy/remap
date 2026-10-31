@@ -4,6 +4,34 @@ Remap is agent-native: MCP and the human CLI are peer adapters over one
 authoritative per-user daemon. The MCP process owns no registry, performs no
 privileged installation, and cannot grant authority the daemon denied.
 
+Set, validate and set changes in preview/apply accept optional `landing` paths
+for HTTP and Supgang targets. Mapping and validation results include the value
+when present. Root GET/HEAD requests redirect on the same origin; other requests
+keep their original path. The authority rejects unsafe paths and non-root HTTP
+targets rather than changing response bodies.
+
+Moved mappings use a `moved://NEW-NAME` target with optional
+`?until=RFC3339`. They redirect every HTTP request with 301, preserve path and
+query, and stop matching at expiry while remaining listed. Self redirects and
+chains are refused across the complete projected registry. Set, validate and
+preview results may include advisory `warnings` about HTTP base paths; set and
+preview also hint about shared origins under use-upstream. Warnings never change
+the target or the default host policy.
+The dashboard shows landing paths and advisory warnings, including landing-only
+differences and removals in its before/after review.
+
+`remap_preview`, `remap_set`, `remap_enable` and `remap_apply` also probe each
+loopback HTTP target they leave enabled with one TCP connection of at most a
+second, and add a warning such as `api.test: target refused connection; ...`
+when nothing accepts it. The change still succeeds. Peer targets, other names
+and addresses off loopback are never probed, and the probe sends no bytes, so
+these tools keep `openWorldHint: false` and preview stays read-only
+(ADR-0028). A failed routed request answers `502 E_GATEWAY_UPSTREAM` or
+`504 E_GATEWAY_TIMEOUT` with `Mapping:` and `Cause:` lines (`refused`,
+`timeout`, `tls`, `reset`, `unreachable`, `other`) and never the target's
+address; read the target with `remap_get`. `remap://help` also covers choosing
+names.
+
 ## Start and connect
 
 An installed Remap service starts the authority automatically. For an isolated
@@ -84,8 +112,9 @@ A conflict is a request to reconsider, not an invitation to blind retry.
 | `remap_list` | Read a bounded deterministic page |
 | `remap_get` | Read one exact mapping key |
 | `remap_resolve` | Explain exact and wildcard selection without network I/O |
+| `remap_health` | Resolve one mapped name through the system resolver and report whether the answer is Remap's (`ready`, `bypassed`, `unresolved`, `not_checked`) |
 | `remap_validate` | Canonicalize one proposed mapping without state changes |
-| `remap_preview` | Project an ordered atomic batch |
+| `remap_preview` | Project an ordered atomic batch, with loopback reachability advice |
 | `remap_set` | Create or retarget one mapping |
 | `remap_enable` | Enable one existing mapping |
 | `remap_disable` | Disable without deleting |

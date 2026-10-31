@@ -1,9 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::collections::BTreeSet;
 use std::io;
 use std::time::{Duration, Instant};
 
-use zbus::blocking::Connection;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::{Connection, OwnedObjectPath};
 
 const JOB_MODE: &str = "replace";
 const START_STATE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -11,6 +11,9 @@ const STOP_STATE_TIMEOUT: Duration = remap_protocol::NATIVE_DAEMON_TERMINATION_G
 const QUIESCE_GRACE: Duration = remap_protocol::NATIVE_DAEMON_TERMINATION_GRACE;
 const STATE_POLL: Duration = Duration::from_millis(25);
 const JOB_PATH_PREFIX: &str = "/org/freedesktop/systemd1/job/";
+// zbus 6 has no blocking API. Each method drives its D-Bus exchange to
+// completion with `zbus::block_on`, one exchange at a time, and never from
+// inside another, which `block_on` forbids.
 #[derive(Debug)]
 pub(crate) struct SystemdManager {
     connection: Connection,
@@ -19,12 +22,12 @@ pub(crate) struct SystemdManager {
 impl SystemdManager {
     pub(crate) fn connect() -> io::Result<Self> {
         Ok(Self {
-            connection: Connection::system().map_err(manager_error)?,
+            connection: zbus::block_on(Connection::system()).map_err(manager_error)?,
         })
     }
 
     pub(crate) fn reload(&self) -> io::Result<()> {
-        self.proxy()?.reload().map_err(manager_error)
+        zbus::block_on(self.proxy()?.reload()).map_err(manager_error)
     }
 
     pub(crate) fn start(&self, unit: &str) -> io::Result<()> {
@@ -65,7 +68,7 @@ impl SystemdManager {
         F: FnMut() -> io::Result<()>,
     {
         let proxy = self.proxy()?;
-        let root_path = match proxy.start_unit(unit, JOB_MODE) {
+        let root_path = match zbus::block_on(proxy.start_unit(unit, JOB_MODE)) {
             Ok(path) => path,
             Err(error) => {
                 self.finish_failed_start(&proxy, unit, dependencies, &mut failure_handoff);
@@ -94,10 +97,8 @@ impl SystemdManager {
         if initial != StopAction::Request {
             return self.finalize_stop_action(unit, initial);
         }
-        let stopped = self
-            .proxy()?
-            .stop_unit(unit, JOB_MODE)
-            .map_err(manager_error);
+        let stopped =
+            zbus::block_on(self.proxy()?.stop_unit(unit, JOB_MODE)).map_err(manager_error);
         if let Err(error) = stopped {
             let action = stop_action(&self.observed_state(unit)?);
             if action == StopAction::Request {
@@ -120,21 +121,19 @@ impl SystemdManager {
                 return Ok(());
             }
             if let Some((id, _path)) = job {
-                let _result = proxy.cancel_job(id);
+                let _result = zbus::block_on(proxy.cancel_job(id));
             }
             match action {
                 StopAction::Settled => termination_sent = false,
                 StopAction::ResetFailed => self.reset_failed(unit)?,
                 StopAction::Request if !termination_sent => {
-                    proxy
-                        .kill_unit(unit, "all", nix::libc::SIGTERM)
+                    zbus::block_on(proxy.kill_unit(unit, "all", nix::libc::SIGTERM))
                         .map_err(manager_error)?;
                     termination_sent = true;
                     escalation = Instant::now() + QUIESCE_GRACE;
                 }
                 StopAction::Request if Instant::now() >= escalation => {
-                    proxy
-                        .kill_unit(unit, "all", nix::libc::SIGKILL)
+                    zbus::block_on(proxy.kill_unit(unit, "all", nix::libc::SIGKILL))
                         .map_err(manager_error)?;
                     escalation = Instant::now() + STOP_STATE_TIMEOUT;
                 }
@@ -145,21 +144,19 @@ impl SystemdManager {
     }
 
     pub(crate) fn observed_state(&self, unit: &str) -> io::Result<String> {
-        match self.proxy()?.get_unit(unit) {
-            Ok(path) => SystemdUnitProxy::builder(&self.connection)
-                .path(path)
-                .map_err(manager_error)?
-                .build()
-                .map_err(manager_error)?
-                .active_state()
-                .map_err(manager_error),
-            Err(zbus::Error::MethodError(name, _detail, _reply))
-                if name.as_str() == "org.freedesktop.systemd1.NoSuchUnit" =>
-            {
-                Ok("not_found".to_owned())
+        let proxy = self.proxy()?;
+        zbus::block_on(async {
+            match proxy.get_unit(unit).await {
+                Ok(path) => self
+                    .unit_proxy(path)
+                    .await?
+                    .active_state()
+                    .await
+                    .map_err(manager_error),
+                Err(error) if is_no_such_unit(&error) => Ok("not_found".to_owned()),
+                Err(error) => Err(manager_error(error)),
             }
-            Err(error) => Err(manager_error(error)),
-        }
+        })
     }
 
     pub(crate) fn quiesce_failed_start(&self, unit: &str) {
@@ -287,7 +284,7 @@ impl SystemdManager {
             let Ok(Some((id, _path))) = self.unit_job(required) else {
                 continue;
             };
-            let _result = proxy.cancel_job(id);
+            let _result = zbus::block_on(proxy.cancel_job(id));
         }
     }
 
@@ -300,11 +297,11 @@ impl SystemdManager {
     ) {
         for required in std::iter::once(unit).chain(dependencies.iter().copied()) {
             if force {
-                let _result = proxy.kill_unit(required, "all", nix::libc::SIGKILL);
+                let _result = zbus::block_on(proxy.kill_unit(required, "all", nix::libc::SIGKILL));
             }
-            let _result = proxy.stop_unit(required, JOB_MODE);
+            let _result = zbus::block_on(proxy.stop_unit(required, JOB_MODE));
             if matches!(self.observed_state(required).as_deref(), Ok("failed")) {
-                let _result = proxy.reset_failed_unit(required);
+                let _result = zbus::block_on(proxy.reset_failed_unit(required));
             }
         }
     }
@@ -323,18 +320,19 @@ impl SystemdManager {
     }
 
     fn unit_job(&self, unit: &str) -> io::Result<Option<(u32, OwnedObjectPath)>> {
-        let path = match self.proxy()?.get_unit(unit) {
-            Ok(path) => path,
-            Err(error) if is_no_such_unit(&error) => return Ok(None),
-            Err(error) => return Err(manager_error(error)),
+        let proxy = self.proxy()?;
+        let Some((id, job_path)) = zbus::block_on(async {
+            let path = match proxy.get_unit(unit).await {
+                Ok(path) => path,
+                Err(error) if is_no_such_unit(&error) => return Ok(None),
+                Err(error) => return Err(manager_error(error)),
+            };
+            let job = self.unit_proxy(path).await?.job().await;
+            job.map(Some).map_err(manager_error)
+        })?
+        else {
+            return Ok(None);
         };
-        let (id, job_path) = SystemdUnitProxy::builder(&self.connection)
-            .path(path)
-            .map_err(manager_error)?
-            .build()
-            .map_err(manager_error)?
-            .job()
-            .map_err(manager_error)?;
         if id == 0 {
             return Ok(None);
         }
@@ -363,9 +361,7 @@ impl SystemdManager {
     }
 
     fn reset_inactive_start_limit(&self, unit: &str) -> io::Result<()> {
-        self.proxy()?
-            .reset_failed_unit(unit)
-            .map_err(manager_error)?;
+        zbus::block_on(self.proxy()?.reset_failed_unit(unit)).map_err(manager_error)?;
         if self.observed_state(unit)? == "inactive" && self.unit_job(unit)?.is_none() {
             Ok(())
         } else {
@@ -410,7 +406,7 @@ impl SystemdManager {
             StopAction::ResetFailed => {}
             StopAction::Request => return Err(unit_reactivated_error()),
         }
-        let reset = self.proxy()?.reset_failed_unit(unit).map_err(manager_error);
+        let reset = zbus::block_on(self.proxy()?.reset_failed_unit(unit)).map_err(manager_error);
         if let Err(error) = reset
             && stop_action(&self.observed_state(unit)?) != StopAction::Settled
         {
@@ -424,15 +420,22 @@ impl SystemdManager {
     }
 
     fn proxy(&self) -> io::Result<SystemdManagerApiProxy<'_>> {
-        SystemdManagerApiProxy::new(&self.connection).map_err(manager_error)
+        zbus::block_on(SystemdManagerApiProxy::new(&self.connection)).map_err(manager_error)
+    }
+
+    async fn unit_proxy(&self, path: OwnedObjectPath) -> io::Result<SystemdUnitProxy<'_>> {
+        SystemdUnitProxy::builder(&self.connection)
+            .path(path)
+            .build()
+            .await
+            .map_err(manager_error)
     }
 }
 
 #[zbus::proxy(
     interface = "org.freedesktop.systemd1.Manager",
     default_service = "org.freedesktop.systemd1",
-    default_path = "/org/freedesktop/systemd1",
-    gen_async = false
+    default_path = "/org/freedesktop/systemd1"
 )]
 trait SystemdManagerApi {
     #[zbus(name = "Reload")]
@@ -462,8 +465,7 @@ trait SystemdManagerApi {
 
 #[zbus::proxy(
     interface = "org.freedesktop.systemd1.Unit",
-    default_service = "org.freedesktop.systemd1",
-    gen_async = false
+    default_service = "org.freedesktop.systemd1"
 )]
 trait SystemdUnit {
     #[zbus(property, name = "ActiveState")]
@@ -489,7 +491,7 @@ impl JobIdentity {
 }
 
 fn job_pending(proxy: &SystemdManagerApiProxy<'_>, expected: &JobIdentity) -> io::Result<bool> {
-    match proxy.get_job(expected.id) {
+    match zbus::block_on(proxy.get_job(expected.id)) {
         Ok(observed) if observed == expected.path => Ok(true),
         Ok(_substitution) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -571,7 +573,7 @@ fn stop_action(state: &str) -> StopAction {
 
 #[cfg(test)]
 mod tests {
-    use zbus::zvariant::OwnedObjectPath;
+    use zbus::OwnedObjectPath;
 
     use super::{StartAction, StopAction, parse_job_path, start_action, stop_action};
 

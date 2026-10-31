@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::io;
 use std::net::SocketAddr;
 use std::net::{TcpListener as StdTcpListener, UdpSocket as StdUdpSocket};

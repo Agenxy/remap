@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Bounded, terminal-safe decoding for the native Linux lifecycle helper."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import RemapControlKit
 import SwiftUI
 
@@ -18,6 +19,7 @@ struct ReceiptView: View {
                 .font(.body.monospacedDigit())
                 .foregroundStyle(.secondary)
             EffectList(effects: receipt.effects)
+            AdvisoryList(warnings: receipt.warnings ?? [])
             VStack(alignment: .leading, spacing: 4) {
                 Text(AppText.localized("Operation ID"))
                     .font(.caption.weight(.medium))

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
@@ -231,6 +232,62 @@ test("renders preview diffs and all five mutation receipts", async ({ page }) =>
     await expect(outcome).toContainText("previous 3");
     await expect(outcome).toContainText("revision 4");
   }
+  expect(errors).toEqual([]);
+});
+
+test("shows landing-only changes and advisories", async ({ page }) => {
+  const errors = runtimeErrors(page);
+  await mount(page);
+  const frame = page.frameLocator("#app");
+  const outcome = frame.locator("#outcome");
+  const before = { ...mapping("site.test", "http://127.0.0.1/"), landing: "/old" };
+  const after = { ...before, landing: "/new?token=A%2Fb" };
+  const warning = 'Use preserve-client for <img src=x onerror="window.hostile=true">.';
+  const preview = {
+    base_revision: 3,
+    will_change: true,
+    effects: [{ pattern: "site.test", action: "updated", before, after }],
+    warnings: [warning],
+  };
+  await send(page, "ui/notifications/tool-result", toolResult("Landing changed.", preview));
+  await expect(outcome.locator(".effect-change")).toContainText("landing /old");
+  await expect(outcome.locator(".effect-change")).toContainText("landing /new?token=A%2Fb");
+  await expect(outcome.locator(".advisory")).toHaveText(`Advisory: ${warning}`);
+  await expect(outcome.locator(".advisory")).toBeVisible();
+  expect(await frame.locator("img").count()).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test("shows landing in lists, direct results, and removal reviews", async ({ page }) => {
+  const errors = runtimeErrors(page);
+  await mount(page);
+  const frame = page.frameLocator("#app");
+  const outcome = frame.locator("#outcome");
+  const after = { ...mapping("site.test", "http://127.0.0.1/"), landing: "/new?token=A%2Fb" };
+  await send(
+    page,
+    "ui/notifications/tool-result",
+    toolResult("List.", {
+      revision: 3,
+      mappings: [after],
+    }),
+  );
+  await expect(frame.locator("#mappings")).toContainText("landing /new?token=A%2Fb");
+  await send(page, "ui/notifications/tool-result", toolResult("Validated.", after));
+  await expect(outcome.locator(".facts")).toContainText("landing /new?token=A%2Fb");
+  const cleared: JsonRecord = { ...after };
+  delete cleared.landing;
+  await send(
+    page,
+    "ui/notifications/tool-result",
+    toolResult("Landing cleared.", {
+      base_revision: 3,
+      will_change: true,
+      effects: [{ pattern: "site.test", action: "updated", before: after, after: cleared }],
+    }),
+  );
+  await expect(outcome.locator(".effect-change")).toContainText("landing none");
+  await expect(outcome.locator(".advisory")).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 

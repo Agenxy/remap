@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
 
@@ -49,10 +50,25 @@ public enum ResolverSystemCommand: Encodable, Sendable {
 public struct ResolverSystemResult: Decodable, Equatable, Sendable {
     public let activationID: UUID?
     public let activeGeneration: UInt64?
+    /// Highest generation the daemon has accepted since it started. A daemon
+    /// sends it only when it exceeds `activeGeneration`, and a daemon older
+    /// than ADR-0025 never sends it, so absence is decoded as nil.
+    public let highestAcceptedGeneration: UInt64?
+
+    public init(
+        activationID: UUID?,
+        activeGeneration: UInt64?,
+        highestAcceptedGeneration: UInt64? = nil
+    ) {
+        self.activationID = activationID
+        self.activeGeneration = activeGeneration
+        self.highestAcceptedGeneration = highestAcceptedGeneration
+    }
 
     enum CodingKeys: String, CodingKey {
         case activationID = "activation_id"
         case activeGeneration = "active_generation"
+        case highestAcceptedGeneration = "highest_accepted_generation"
     }
 }
 
@@ -154,10 +170,9 @@ private func connectUnixSocket(path: String) throws -> Int32 {
         }
         var address = sockaddr_un()
         let bytes = Array(path.utf8CString)
-        guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
-            throw ResolverChannelError.transport
-        }
-        guard let pathOffset = MemoryLayout.offset(of: \sockaddr_un.sun_path) else {
+        guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path),
+              let pathOffset = MemoryLayout.offset(of: \sockaddr_un.sun_path)
+        else {
             throw ResolverChannelError.transport
         }
         let addressLength = pathOffset + bytes.count
@@ -192,10 +207,17 @@ private func connectUnixSocket(path: String) throws -> Int32 {
     }
 }
 
+/// The peer a client sees is whoever called `listen` on the socket: the daemon
+/// itself when it bound its own socket in the data directory, or launchd (root)
+/// when the socket is launchd-owned and handed to the daemon already listening.
+/// Root is accepted for that reason; nobody but root can listen as root, and a
+/// root-listened socket at a root-only path is launchd's by construction.
 private func authenticatePeer(descriptor: Int32, expectedUID: uid_t) throws {
     var userID: uid_t = 0
     var groupID: gid_t = 0
-    guard getpeereid(descriptor, &userID, &groupID) == 0, userID == expectedUID else {
+    guard getpeereid(descriptor, &userID, &groupID) == 0,
+          userID == expectedUID || userID == 0
+    else {
         throw ResolverChannelError.peerMismatch
     }
 }

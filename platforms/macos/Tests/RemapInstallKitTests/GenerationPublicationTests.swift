@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
 @testable import RemapInstallKit
@@ -26,6 +27,35 @@ func generationIsStagedPublishedAndClassifiedByManifest() throws {
     #expect(try generations.loadManifest(for: manifest.generationID) == manifest)
     let generationPath = try InstallRelativePath("Generations/generation-1")
     #expect(try destination.metadata(at: generationPath)?.mode == GenerationStore.generationRootMode)
+}
+
+@Test
+func generationPublicationRefusesADeclaredExecutableMissingAfterStaging() throws {
+    let tree = try TemporaryInstallTree()
+    let sourceURL = try tree.directory("source")
+    let destinationURL = try tree.directory("destination")
+    let bytes = Data("lifecycle client fixture".utf8)
+    try writeTestFile(bytes, to: sourceURL.appending(path: "remap-lifecycle"))
+    let manifest = try testManifest(entries: [
+        testEntry(path: "remap-lifecycle", data: bytes, role: .commandLineTool)
+    ])
+    let authority = try testAuthority(at: destinationURL)
+    let store = try GenerationStore(
+        authority: authority,
+        generationsPath: InstallRelativePath("Generations"),
+        ownerUID: UInt32(geteuid()),
+        groupGID: UInt32(getegid())
+    )
+    let staging = try store.stage(manifest, from: testAuthority(at: sourceURL), transactionID: "missing-client")
+    let stagedURL = destinationURL.appending(path: staging.description)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stagedURL.path)
+    try FileManager.default.removeItem(at: stagedURL.appending(path: "remap-lifecycle"))
+    try FileManager.default.setAttributes([.posixPermissions: 0o511], ofItemAtPath: stagedURL.path)
+
+    #expect(throws: InstallError.self) {
+        try store.publish(staging, manifest: manifest)
+    }
+    #expect(try store.classify(manifest) == .missing)
 }
 
 @Test

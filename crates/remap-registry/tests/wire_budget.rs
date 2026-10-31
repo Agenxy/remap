@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Worst-case executable proof that valid results fit the control wire.
 
 use remap_protocol::{
@@ -52,6 +53,7 @@ fn changes(start: usize, end: usize, fill: char) -> Vec<Change> {
             target: maximum_target(fill),
             host_policy: HostPolicy::PreserveClient,
             enabled: None,
+            landing: None,
         })
         .collect()
 }

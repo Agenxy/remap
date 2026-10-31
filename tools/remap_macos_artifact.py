@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Release metadata checks for native macOS executables."""
 
 from __future__ import annotations

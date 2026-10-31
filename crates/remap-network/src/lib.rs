@@ -1,15 +1,21 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Portable, bounded network runtime for Remap.
 
 mod dns;
 mod error;
+mod failure;
 mod forward;
 mod gateway;
 mod health;
 mod peer;
 mod proxy;
+mod reachability;
 mod resolver;
 mod server;
 mod snapshot;
+mod stream_route;
+mod supgang_stream;
+mod tunnel;
 
 pub use dns::{DnsDecision, DnsEngine, DnsPolicy};
 pub use error::NetworkError;
@@ -20,8 +26,10 @@ pub use health::{
 };
 pub use peer::{
     PEER_CACHE_LIMIT, PeerResolveError, PeerResolver, PinnedVerifier, RESOLVE_TIMEOUT,
-    ResolvedPeerService, SupgangResolver, parse_resolution, subject_public_key_info,
+    ResolvedPeerService, SupgangResolver, parse_node, parse_resolution, subject_public_key_info,
 };
+pub use reachability::{PROBE_DEADLINE, Reachability, loopback_addresses, probe};
 pub use resolver::ResolverPlanStore;
 pub use server::{DnsBindings, DnsRuntime, DnsRuntimeConfig};
 pub use snapshot::SnapshotStore;
+pub use supgang_stream::{StreamError, SupgangStreams};

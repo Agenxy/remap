@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Linux source-lifecycle protocol and orchestration contracts."""
 
 from __future__ import annotations

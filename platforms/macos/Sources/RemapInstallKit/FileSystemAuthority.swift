@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import CryptoKit
 import Darwin
 import Foundation
@@ -938,11 +939,11 @@ extension FileSystemAuthority {
     private func nodeKind(_ mode: mode_t) throws -> InstallNodeKind {
         switch mode & S_IFMT {
         case S_IFDIR:
-            return .directory
+            .directory
         case S_IFREG:
-            return .regularFile
+            .regularFile
         case S_IFLNK:
-            return .symbolicLink
+            .symbolicLink
         default:
             throw InstallError.metadata("unsupported filesystem node type")
         }

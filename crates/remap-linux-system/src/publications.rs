@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io;
@@ -921,7 +922,7 @@ mod tests {
             added[0].0,
             std::path::Path::new("/usr/share/man/man1/remap-system.1")
         );
-        assert!(public_link_removals(&previous, &current).is_empty());
+        assert_eq!(public_link_removals(&previous, &current), Vec::new());
         assert_eq!(public_link_removals(&current, &previous), added);
     }
 }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;

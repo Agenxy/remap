@@ -2,8 +2,8 @@
 
 Remap changes system-wide name resolution and may terminate local TLS. A flaw
 can redirect traffic, disclose routing configuration, weaken trust, or disrupt
-network access. Security work is therefore ordinary product work, not a final
-release phase.
+network access. Security work is therefore ordinary product work,
+scheduled like any other.
 
 ## Reporting a vulnerability
 

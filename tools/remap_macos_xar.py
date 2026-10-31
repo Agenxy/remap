@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Bounded deterministic XAR normalization for native macOS packages."""
 
 from __future__ import annotations

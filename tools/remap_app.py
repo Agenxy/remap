@@ -1,3 +1,9 @@
+#!/usr/bin/env -S uv run --script
+# SPDX-License-Identifier: GPL-3.0-or-later
+# /// script
+# requires-python = ">=3.14"
+# dependencies = []
+# ///
 """Build and stage the native Remap macOS application bundle."""
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from tools.remap_macos_artifact import (
     normalize_macos_sdk_metadata,
 )
 from tools.remap_macos_signing import (
+    HARDENED_RUNTIME_PATTERN,
     LocalCodeSigningIdentity,
     ensure_local_codesigning_identity,
     sign_path,
@@ -33,7 +40,9 @@ def run(arguments: tuple[str, ...], *, root: Path) -> None:
     _ = subprocess.run(arguments, cwd=root, check=True)
 
 
-def capture(arguments: tuple[str, ...], *, root: Path) -> str:
+def capture(
+    arguments: tuple[str, ...], *, root: Path, include_standard_error: bool = False
+) -> str:
     """Capture one explicit native build result."""
     result = subprocess.run(
         arguments,
@@ -42,7 +51,7 @@ def capture(arguments: tuple[str, ...], *, root: Path) -> str:
         capture_output=True,
         text=True,
     )
-    return result.stdout.strip()
+    return (result.stdout + (result.stderr if include_standard_error else "")).strip()
 
 
 def build(
@@ -56,7 +65,7 @@ def build(
     """Build, bundle, sign, and verify the native macOS application."""
     configuration = "release" if release else "debug"
     identity = signing_identity or (
-        ensure_local_codesigning_identity() if sign else None
+        ensure_local_codesigning_identity() if release and sign else None
     )
     run(
         (
@@ -103,6 +112,25 @@ def build(
     if identity is not None:
         _ = sign_path(destination, identity, APP_BUNDLE_ID)
         verify(root, destination, identity)
+    elif sign:
+        # An ad-hoc signature identifies nobody to others: enough for a bundle
+        # that stays on its build machine, insufficient for one distributed to others.
+        run(
+            (
+                "/usr/bin/codesign",
+                "--force",
+                "--sign",
+                "-",
+                "--timestamp=none",
+                "--options",
+                "runtime",
+                "--identifier",
+                APP_BUNDLE_ID,
+                str(destination),
+            ),
+            root=root,
+        )
+        verify(root, destination)
     else:
         verify_structure(root, destination)
     return destination
@@ -113,14 +141,31 @@ def verify(
     bundle: Path,
     signing_identity: LocalCodeSigningIdentity | None = None,
 ) -> None:
-    """Verify the staged bundle's signature, metadata, and executable."""
+    """Verify ad-hoc signing, or the exact durable identity when supplied."""
     run(
         ("/usr/bin/codesign", "--verify", "--strict", "--verbose=2", str(bundle)),
         root=root,
     )
-    identity = signing_identity or ensure_local_codesigning_identity()
-    _ = verify_local_signature(bundle, identity, APP_BUNDLE_ID)
+    if signing_identity is not None:
+        _ = verify_local_signature(bundle, signing_identity, APP_BUNDLE_ID)
+    else:
+        _verify_ad_hoc_signature(root, bundle)
     verify_structure(root, bundle)
+
+
+def _verify_ad_hoc_signature(root: Path, bundle: Path) -> None:
+    details = capture(
+        ("/usr/bin/codesign", "-d", "--verbose=4", str(bundle)),
+        root=root,
+        include_standard_error=True,
+    )
+    lines = details.splitlines()
+    if f"Identifier={APP_BUNDLE_ID}" not in lines:
+        raise RuntimeError("the development bundle has the wrong signing identifier")
+    if "Signature=adhoc" not in lines:
+        raise RuntimeError("the development bundle does not use an ad-hoc signature")
+    if HARDENED_RUNTIME_PATTERN.search(details) is None:
+        raise RuntimeError("the development bundle does not use the hardened runtime")
 
 
 def verify_structure(root: Path, bundle: Path) -> None:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::fs::Permissions;
 use std::io;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
@@ -199,10 +200,11 @@ fn activation_matches(current: Option<Uuid>, requested: Uuid) -> bool {
 }
 
 fn system_result(state: &ControllerState, plans: &ResolverPlanStore) -> SystemResult {
-    SystemResult {
-        activation_id: state.activation_id,
-        active_generation: plans.active_generation(),
-    }
+    SystemResult::new(
+        state.activation_id,
+        plans.active_generation(),
+        plans.highest_accepted_generation(),
+    )
 }
 
 async fn serve_connection(
@@ -502,6 +504,18 @@ mod tests {
                 .map(|result| (result.activation_id, result.active_generation)),
             Some((None, None))
         );
+        assert_eq!(
+            controller
+                .execute(SystemRequest {
+                    protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
+                    request_id: Uuid::new_v4(),
+                    command: SystemCommand::ResolverHealth,
+                })
+                .await
+                .result
+                .and_then(|result| result.highest_accepted_generation),
+            Some(8)
+        );
         let restarted = SystemController::new(ResolverPlanStore::dormant());
         let response = restarted
             .execute(SystemRequest {
@@ -519,5 +533,81 @@ mod tests {
             Some(8)
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn health_after_invalidation_reports_the_generation_a_new_supervisor_must_exceed()
+    -> Result<(), Box<dyn Error>> {
+        let controller = SystemController::new(ResolverPlanStore::dormant());
+        let first = Uuid::new_v4();
+        for generation in 1..=3 {
+            let published = controller.execute(publish(first, generation)).await;
+            assert!(published.error.is_none());
+        }
+        let steady = controller.execute(health()).await;
+        let steady = steady
+            .result
+            .ok_or_else(|| io::Error::other("health returned no result"))?;
+        assert_eq!(steady.active_generation, Some(3));
+        assert_eq!(steady.highest_accepted_generation, None);
+        let invalidated = controller
+            .execute(SystemRequest {
+                protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
+                request_id: Uuid::new_v4(),
+                command: SystemCommand::InvalidateResolverPlan {
+                    activation_id: first,
+                    generation: 3,
+                },
+            })
+            .await;
+        assert!(invalidated.error.is_none());
+        let after = controller
+            .execute(health())
+            .await
+            .result
+            .ok_or_else(|| io::Error::other("health returned no result"))?;
+        assert_eq!(
+            (
+                after.activation_id,
+                after.active_generation,
+                after.highest_accepted_generation
+            ),
+            (None, None, Some(3))
+        );
+        let second = Uuid::new_v4();
+        let stale = controller.execute(publish(second, 1)).await;
+        assert_eq!(
+            stale.error.map(|error| error.code),
+            Some("E_RESOLVER_PLAN".to_owned())
+        );
+        let next = after.highest_accepted_generation.unwrap_or_default() + 1;
+        let rearmed = controller
+            .execute(publish(second, next))
+            .await
+            .result
+            .ok_or_else(|| io::Error::other("publication returned no result"))?;
+        assert_eq!(rearmed.activation_id, Some(second));
+        assert_eq!(rearmed.active_generation, Some(4));
+        Ok(())
+    }
+
+    fn publish(activation_id: Uuid, generation: u64) -> SystemRequest {
+        SystemRequest {
+            protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
+            request_id: Uuid::new_v4(),
+            command: SystemCommand::PublishResolverPlan {
+                activation_id,
+                generation,
+                upstreams: vec![endpoint(1)],
+            },
+        }
+    }
+
+    fn health() -> SystemRequest {
+        SystemRequest {
+            protocol: SYSTEM_PROTOCOL_VERSION.to_owned(),
+            request_id: Uuid::new_v4(),
+            command: SystemCommand::ResolverHealth,
+        }
     }
 }

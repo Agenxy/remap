@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import CryptoKit
 import Foundation
 
@@ -92,14 +93,26 @@ public struct ActivationPayload: Codable, Equatable, Sendable {
     public let createdAtMilliseconds: UInt64
     public let productVersion: String
     public let phase: ActivationPhase
+    /// Every service whose DNS configuration Remap captured and may have
+    /// changed. Restoration covers all of them; outside a handoff there is one.
     public let services: [DNSServiceRecord]
+    /// Stable activation identity, carried across service handoffs
+    /// (ADR-0024). A record that has never moved omits it, keeps the digest
+    /// older builds verify, and keeps its digest-derived identity; the first
+    /// handoff records that derived identity here.
+    public let activationID: UUID?
+    /// The service a handoff in progress is moving to. Present only while
+    /// `services` still lists the service being left as well.
+    public let handoffTargetServiceID: String?
 
     public init(
         ownerUID: UInt32,
         createdAtMilliseconds: UInt64,
         productVersion: String,
         phase: ActivationPhase,
-        services: [DNSServiceRecord]
+        services: [DNSServiceRecord],
+        activationID: UUID? = nil,
+        handoffTargetServiceID: String? = nil
     ) {
         schemaVersion = 1
         self.ownerUID = ownerUID
@@ -107,18 +120,45 @@ public struct ActivationPayload: Codable, Equatable, Sendable {
         self.productVersion = productVersion
         self.phase = phase
         self.services = services
+        self.activationID = activationID
+        self.handoffTargetServiceID = handoffTargetServiceID
     }
 
+    /// The same activation in another phase. A phase change ends any handoff
+    /// marker, because only an active record may describe one.
     public func withPhase(_ phase: ActivationPhase) -> ActivationPayload {
         ActivationPayload(
             ownerUID: ownerUID,
             createdAtMilliseconds: createdAtMilliseconds,
             productVersion: productVersion,
             phase: phase,
-            services: services
+            services: services,
+            activationID: activationID
+        )
+    }
+
+    /// The same activation, owner, and product with a new service set.
+    public func replacing(
+        services: [DNSServiceRecord],
+        phase: ActivationPhase,
+        activationID: UUID,
+        handoffTargetServiceID: String?
+    ) -> ActivationPayload {
+        ActivationPayload(
+            ownerUID: ownerUID,
+            createdAtMilliseconds: createdAtMilliseconds,
+            productVersion: productVersion,
+            phase: phase,
+            services: services,
+            activationID: activationID,
+            handoffTargetServiceID: handoffTargetServiceID
         )
     }
 }
+
+/// Bounds the services one activation may own, so a corrupted or adversarial
+/// record cannot grow restoration without limit.
+let maximumOwnedServices = 8
 
 /// Root-owned activation record with a canonical SHA-256 integrity value.
 public struct ActivationRecord: Codable, Equatable, Sendable {
@@ -135,11 +175,28 @@ public struct ActivationRecord: Codable, Equatable, Sendable {
         guard sha256 == expected else {
             throw ResolverError.activationRecordIntegrity
         }
+        let serviceIDs = payload.services.map(\.serviceID)
+        guard !serviceIDs.isEmpty,
+              serviceIDs.count <= maximumOwnedServices,
+              Set(serviceIDs).count == serviceIDs.count
+        else {
+            throw ResolverError.invalidActivationRecord
+        }
+        if let target = payload.handoffTargetServiceID {
+            guard payload.phase == .active, serviceIDs.contains(target) else {
+                throw ResolverError.invalidActivationRecord
+            }
+        }
     }
 
-    /// Stable activation identity derived from the verified record digest.
+    /// Stable activation identity. A record that carries `activationID` is
+    /// that activation whatever its services; an older record's identity is
+    /// derived from its verified digest until it is re-recorded.
     public func activationIdentifier() throws -> UUID {
         try verify()
+        if let activationID = payload.activationID {
+            return activationID
+        }
         // A prepared activation is deliberately published to the daemon before
         // SystemConfiguration points the Mac at loopback. Bind both phases to
         // the final active record so committing the phase cannot change the
@@ -188,6 +245,7 @@ public enum ResolverError: Error, CustomStringConvertible, Equatable {
     case activeUserMismatch
     case configurationConflict([String])
     case invalidActivationRecord
+    case invalidBypassRecord
     case listenerUnavailable
     case noEnabledDNSService
     case noUsableUpstream
@@ -195,6 +253,15 @@ public enum ResolverError: Error, CustomStringConvertible, Equatable {
     case preferences(String)
     case secureStorage(String)
     case unsupportedResolverScope(Int)
+
+    /// True when the network exposed no usable resolver at the moment it was
+    /// observed: the service is asleep, rejoining, or down. In reconciliation
+    /// these come only from the network observation, never from a refusal,
+    /// a conflict, or storage, so they alone may preserve the last complete
+    /// generation for a bounded time (ADR-0006).
+    public var isIncompleteNetworkObservation: Bool {
+        self == .noUsableUpstream || self == .noEnabledDNSService
+    }
 
     public var description: String {
         switch self {
@@ -210,6 +277,8 @@ public enum ResolverError: Error, CustomStringConvertible, Equatable {
             "DNS changed outside Remap for service IDs: \(services.joined(separator: ", "))."
         case .invalidActivationRecord:
             "The native activation record is malformed or unsupported."
+        case .invalidBypassRecord:
+            "The resolver bypass record is malformed or failed its integrity check."
         case .listenerUnavailable:
             "The local Remap DNS listener did not answer a valid loopback query."
         case .noEnabledDNSService:

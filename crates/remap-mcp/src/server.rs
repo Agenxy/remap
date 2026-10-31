@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+use crate::health::{self, HealthReport};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -15,7 +17,7 @@ use rmcp::model::{
     CacheScope, CallToolResult, ClientCapabilities, DiscoverResult, ExtensionCapabilities,
     Implementation, InitializeRequestParams, InitializeResult, ListResourceTemplatesResult,
     ListResourcesResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
-    ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities, ServerInfo,
+    ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities, ServerConfig,
     SubscribeRequestParams, SubscriptionFilter, UnsubscribeRequestParams,
 };
 use rmcp::service::{RequestContext, SubscriptionContext};
@@ -142,6 +144,21 @@ impl RemapMcp {
         }
     }
 
+    /// Check whether the operating system's resolver returns Remap's answer for a mapped name.
+    #[tool(
+        name = "remap_health",
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<HealthReport>>(),
+        annotations(title = "Remap resolver health", read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
+        meta = ui::model_tool_meta()
+    )]
+    async fn health(
+        &self,
+        Parameters(_params): Parameters<EmptyParams>,
+    ) -> Result<ToolSuccess<HealthReport>, CallToolResult> {
+        let report = health::report(&self.client).await;
+        Ok(success(report.summary(), report))
+    }
+
     /// List a bounded deterministic page of mappings from the authoritative registry.
     #[tool(
         name = "remap_list",
@@ -247,6 +264,7 @@ impl RemapMcp {
         Parameters(params): Parameters<ValidateParams>,
     ) -> Result<ToolSuccess<ValidationResult>, CallToolResult> {
         let command = Command::Validate {
+            landing: params.landing,
             pattern: params.pattern,
             target: params.target,
             host_policy: params.host_policy,
@@ -260,7 +278,7 @@ impl RemapMcp {
         }
     }
 
-    /// Project an ordered atomic change set. Always preview unfamiliar or multi-change work.
+    /// Project an ordered atomic change set. Always preview unfamiliar or multi-change work. Warns, without refusing, when a loopback HTTP target refuses a TCP connection; no other target is probed and no bytes are sent.
     #[tool(
         name = "remap_preview",
         output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<PreviewResult>>(),
@@ -291,7 +309,7 @@ impl RemapMcp {
         }
     }
 
-    /// Create or retarget one mapping using optimistic concurrency and idempotent retry.
+    /// Create or retarget one mapping using optimistic concurrency and idempotent retry. Warns, without refusing, when a loopback HTTP target refuses a TCP connection; no other target is probed and no bytes are sent.
     #[tool(
         name = "remap_set",
         output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<ApplyResult>>(),
@@ -303,6 +321,7 @@ impl RemapMcp {
         Parameters(params): Parameters<SetParams>,
     ) -> Result<ToolSuccess<ApplyResult>, CallToolResult> {
         let change = Change::Set {
+            landing: params.landing,
             pattern: params.pattern,
             target: params.target,
             host_policy: params.host_policy,
@@ -312,7 +331,7 @@ impl RemapMcp {
             .await
     }
 
-    /// Enable one existing mapping using optimistic concurrency and idempotent retry.
+    /// Enable one existing mapping using optimistic concurrency and idempotent retry. Warns, without refusing, when a loopback HTTP target refuses a TCP connection; no other target is probed and no bytes are sent.
     #[tool(
         name = "remap_enable",
         output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<ApplyResult>>(),
@@ -366,7 +385,7 @@ impl RemapMcp {
             .await
     }
 
-    /// Commit an ordered change set atomically using revision and idempotency guards.
+    /// Commit an ordered change set atomically using revision and idempotency guards. Warns, without refusing, when a loopback HTTP target refuses a TCP connection; no other target is probed and no bytes are sent.
     #[tool(
         name = "remap_apply",
         output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<ApplyResult>>(),
@@ -425,7 +444,7 @@ impl ServerHandler for RemapMcp {
         Cow::Borrowed(&SUPPORTED_PROTOCOL_VERSIONS)
     }
 
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let mut extensions = ExtensionCapabilities::new();
         let mut app_settings = Map::new();
         app_settings.insert(
@@ -439,7 +458,7 @@ impl ServerHandler for RemapMcp {
             .enable_resources_subscribe()
             .enable_tools()
             .build();
-        ServerInfo::new(capabilities)
+        ServerConfig::new(capabilities)
             .with_server_info(server_implementation())
             .with_instructions(
                 "Read remap://help first. Observe remap_status, preview changes, then mutate with the observed expected_revision and a fresh UUIDv4 operation_id. Reuse an operation ID only to retry the identical request.",
@@ -596,11 +615,57 @@ impl ServerHandler for RemapMcp {
     }
 }
 
+/// Remap's mark, as a client can render it without fetching anything.
+///
+/// The bytes are the crate's vector master, included at build time, so the icon a
+/// client shows and the mark on disk cannot drift. It lives inside this crate:
+/// `cargo package` carries only what is under the crate root, and an `include_str!`
+/// reaching outside it would publish a crate that does not build.
+///
+/// It is kept small on purpose. `serverInfo` travels in `server/discover`, and
+/// `live_service_remains_bounded_when_output_stops_draining` showed that a mark of
+/// a couple of kilobytes was enough to stop this service making progress against a
+/// reader that had stopped draining: the bound is sized against the payload rather
+/// than held independently of it. Shrinking the mark makes the test pass again and
+/// does not fix that; see the note in the transport's tests.
+const MARK: &str = include_str!("../assets/remap-mark.svg");
+
+/// One hexadecimal digit, upper case. Total over a nibble, so there is nothing to
+/// index and nothing to unwrap.
+fn hex_digit(nibble: u8) -> char {
+    match nibble {
+        0..=9 => char::from(b'0' + nibble),
+        _ => char::from(b'A' + nibble - 10),
+    }
+}
+
+fn mark_data_uri() -> String {
+    let mut out = String::from("data:image/svg+xml,");
+    for byte in MARK.bytes() {
+        // Unreserved characters (RFC 3986) pass through; everything else is escaped,
+        // including the `#` of a colour, which would otherwise end the URI.
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            out.push('%');
+            out.push(hex_digit(byte >> 4));
+            out.push(hex_digit(byte & 0x0f));
+        }
+    }
+    out
+}
+
 pub(crate) fn server_implementation() -> Implementation {
-    Implementation::new("remap", env!("CARGO_PKG_VERSION"))
+    // Reverse-DNS, as the installed launchd label and Supgang's server already are.
+    Implementation::new("org.agenxy.remap", env!("CARGO_PKG_VERSION"))
         .with_title("Remap")
         .with_description("Local authority for arbitrary name-to-service mappings")
         .with_website_url("https://github.com/agenxy/remap")
+        .with_icons(vec![
+            rmcp::model::Icon::new(mark_data_uri())
+                .with_mime_type("image/svg+xml")
+                .with_sizes(vec!["any".to_owned()]),
+        ])
 }
 
 fn supports_cache_hints(context: &RequestContext<rmcp::RoleServer>) -> bool {

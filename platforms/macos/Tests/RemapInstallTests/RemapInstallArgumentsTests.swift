@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 @testable import RemapInstall
 import RemapInstallKit
 import Testing
@@ -82,5 +83,13 @@ func bootstrapRecoveryHasASeparateTypedApprovalHandshake() throws {
         "recover-bootstrap-helpers requires --approval-token from its exact preview"
     )) {
         try RemapInstallArguments.parse(["recover-bootstrap-helpers"])
+    }
+}
+
+@Test
+func presenceTakesNoArgumentsButJSON() throws {
+    #expect(try RemapInstallArguments.parse(["presence", "--json"]).command == .presence)
+    #expect(throws: InstallError.self) {
+        try RemapInstallArguments.parse(["presence", "--approval-token", String(repeating: "a", count: 64)])
     }
 }

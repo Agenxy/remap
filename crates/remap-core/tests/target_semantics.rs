@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Executable specifications for typed mapping destinations.
 
 use std::error::Error;

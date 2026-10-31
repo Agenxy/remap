@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Adversarial tests for the unprivileged native package image."""
 
 from __future__ import annotations
@@ -5,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import pwd
 import sys
 import tempfile
 import unittest
@@ -23,7 +25,7 @@ from pathlib import Path
 from typing import cast
 from unittest import mock
 
-from tools import remap_native_package
+from tools import remap_native_model, remap_native_package
 from tools.remap_native_package import (
     CURRENT_ROOT,
     DAEMON_LABEL,
@@ -41,6 +43,23 @@ from tools.remap_native_package import (
 
 class NativePackageTests(unittest.TestCase):
     """Verify determinism, ownership metadata, and hostile input rejection."""
+
+    def test_executable_package_copy_never_truncates_an_existing_destination(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            _ = source.write_bytes(b"replacement")
+            destination = root / "remap"
+            _ = destination.write_bytes(b"installed")
+            inode = destination.stat().st_ino
+            with self.assertRaises(FileExistsError):
+                remap_native_package.stage_package_file(
+                    source, destination, executable=True
+                )
+            self.assertEqual(destination.read_bytes(), b"installed")
+            self.assertEqual(destination.stat().st_ino, inode)
 
     def test_manifest_is_deterministic_complete_and_immutable(self) -> None:
         with tempfile.TemporaryDirectory(prefix="remap-native-package-") as directory:
@@ -68,6 +87,9 @@ class NativePackageTests(unittest.TestCase):
             self.assertIn("bin/remap", paths)
             self.assertIn(INSTALL_CONFIGURATION, paths)
             self.assertIn("libexec/remap-install", paths)
+            # The source product uses repository lifecycle orchestration; it
+            # must not claim the prebuilt package's self-management client.
+            self.assertNotIn("libexec/remap-lifecycle", paths)
             self.assertIn("libexec/remap-resolver", paths)
             self.assertIn("app/Remap.app/Contents/MacOS/Remap", paths)
             self.assertIn("share/man/man1/remap-doctor.1", paths)
@@ -212,9 +234,7 @@ class NativePackageTests(unittest.TestCase):
                 account_name="the maintainer",
                 owner_uid=501,
                 group_name="staff",
-                data_directory=Path(
-                    "~/Library/Application Support/org.Agenxy.Remap"
-                ),
+                data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
                 upstreams=["198.51.100.53:53"],
                 previous_generation_id=None,
             )
@@ -244,17 +264,13 @@ class NativePackageTests(unittest.TestCase):
             generation_id="0.1.0-a1b2c3d4",
             account_name="the maintainer",
             group_name="staff",
-            data_directory=Path(
-                "~/Library/Application Support/org.Agenxy.Remap"
-            ),
+            data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
             upstreams=["192.0.2.53:53"],
         )
         resolver = resolver_launchd_document(
             generation_id="0.1.0-a1b2c3d4",
             owner_uid=501,
-            data_directory=Path(
-                "~/Library/Application Support/org.Agenxy.Remap"
-            ),
+            data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
         )
         self.assertEqual(daemon["Label"], DAEMON_LABEL)
         self.assertEqual(daemon["UserName"], "the maintainer")
@@ -292,6 +308,49 @@ class NativePackageTests(unittest.TestCase):
             0,
         )
 
+    def test_launchd_documents_keep_the_dns_path_out_of_the_background_band(
+        self,
+    ) -> None:
+        # ADR-0030: under heavy load a Background job missed the supervisor's
+        # 250 ms channel deadline and Remap DNS flapped. mDNSResponder, the
+        # system resolver, declares Interactive.
+        daemon = daemon_launchd_document(
+            generation_id="0.1.0-a1b2c3d4",
+            account_name="the maintainer",
+            group_name="staff",
+            data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
+            upstreams=["192.0.2.53:53"],
+        )
+        resolver = resolver_launchd_document(
+            generation_id="0.1.0-a1b2c3d4",
+            owner_uid=501,
+            data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
+        )
+        self.assertEqual(daemon["ProcessType"], "Interactive")
+        self.assertEqual(resolver["ProcessType"], "Interactive")
+
+    def test_assembled_package_publishes_interactive_launchd_definitions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="remap-native-package-") as directory:
+            base = Path(directory)
+            files = _fixture_files(base / "inputs")
+            package = _assemble(_private_directory(base / "package"), files)
+            for label in (DAEMON_LABEL, RESOLVER_LABEL):
+                with self.subTest(label=label):
+                    document = plist_document(
+                        package.payload / f"launchd/{label}.plist"
+                    )
+                    self.assertEqual(document["ProcessType"], "Interactive")
+
+    def test_legacy_system_launchd_document_is_interactive(self) -> None:
+        document = remap_native_model.launchd_document(
+            pwd.getpwuid(os.getuid()),
+            Path("~/Library/Application Support/org.Agenxy.Remap"),
+            ["192.0.2.53:53"],
+        )
+        self.assertEqual(document["ProcessType"], "Interactive")
+
     def test_launchd_document_rejects_noncanonical_or_unsafe_upstreams(self) -> None:
         for upstream in (
             "192.0.2.53",
@@ -319,9 +378,7 @@ class NativePackageTests(unittest.TestCase):
             generation_id="0.1.0-a1b2c3d4",
             account_name="the maintainer",
             group_name="staff",
-            data_directory=Path(
-                "~/Library/Application Support/org.Agenxy.Remap"
-            ),
+            data_directory=Path("~/Library/Application Support/org.Agenxy.Remap"),
             upstreams=["192.0.2.53:53", "[2001:db8::53]:53"],
         )
 

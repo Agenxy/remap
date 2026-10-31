@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// Stable local-control protocol understood by this client.
@@ -26,6 +27,7 @@ public struct RemapMapping: Codable, Equatable, Identifiable, Sendable {
     public let hostPolicy: RemapHostPolicy
     public let enabled: Bool
     public let updatedRevision: UInt64
+    public let landing: String?
 
     enum CodingKeys: String, CodingKey {
         case pattern
@@ -34,6 +36,7 @@ public struct RemapMapping: Codable, Equatable, Identifiable, Sendable {
         case hostPolicy = "host_policy"
         case enabled
         case updatedRevision = "updated_revision"
+        case landing
     }
 }
 
@@ -82,12 +85,16 @@ public struct RemapValidation: Codable, Equatable, Sendable {
     public let target: String
     public let targetKind: String
     public let hostPolicy: RemapHostPolicy
+    public let landing: String?
+    public let warnings: [String]?
 
     enum CodingKeys: String, CodingKey {
         case pattern
         case target
         case targetKind = "target_kind"
         case hostPolicy = "host_policy"
+        case landing
+        case warnings
     }
 }
 
@@ -104,11 +111,13 @@ public struct RemapPreview: Codable, Equatable, Sendable {
     public let baseRevision: UInt64
     public let willChange: Bool
     public let effects: [RemapChangeEffect]
+    public let warnings: [String]?
 
     enum CodingKeys: String, CodingKey {
         case baseRevision = "base_revision"
         case willChange = "will_change"
         case effects
+        case warnings
     }
 }
 
@@ -119,6 +128,7 @@ public struct RemapApplyReceipt: Codable, Equatable, Sendable {
     public let revision: UInt64
     public let changed: Bool
     public let effects: [RemapChangeEffect]
+    public let warnings: [String]?
 
     enum CodingKeys: String, CodingKey {
         case operationID = "operation_id"
@@ -126,6 +136,7 @@ public struct RemapApplyReceipt: Codable, Equatable, Sendable {
         case revision
         case changed
         case effects
+        case warnings
     }
 }
 

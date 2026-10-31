@@ -4,10 +4,10 @@ NATIVE_TASK = MISE_AUTO_INSTALL=0 \
 	"$$(MISE_AUTO_INSTALL=0 mise which uv)" run \
 	--python "$$(MISE_AUTO_INSTALL=0 mise which python)" \
 	python -m tools.remap_tasks
-MISE_VERSION := 2026.9.8
+MISE_VERSION := 2026.10.23
 export PREFIX REMAP_INSTALL_ROOT REMAP_LINUX_LINK
 
-.PHONY: help setup setup-install _require-mise format check test quality dependencies docs package-macos release-evidence release-evidence-verify install install-cli install-system install-check install-package-macos recover run-macos verify-macos update uninstall uninstall-cli uninstall-system
+.PHONY: help setup setup-install _require-mise format check release-check test quality dependencies docs package-macos release-evidence release-evidence-verify install install-cli install-system install-check install-package-macos recover run-macos verify-macos update uninstall uninstall-cli uninstall-system
 
 help:
 	@printf '%s\n' \
@@ -16,8 +16,9 @@ help:
 		'  make setup-install Install only the pinned tools needed for native install' \
 		'  make setup         Install all pinned contributor and browser tools' \
 		'  make format        Format first-party Rust, Swift, Python, and TypeScript code' \
-		'  make check         Run the complete local release and evidence gate' \
-		'  make test          Run all Rust, Swift, Python, and browser tests' \
+		'  make check         Run the development gate without installation or signing trust' \
+		'  make release-check Add release audits, signed native image and install checks' \
+		'  make test          Run Rust, Swift, Python, and browser development tests' \
 		'  make quality       Enforce structural and repository policy' \
 		'  make dependencies  Audit advisories, licenses, sources, and versions' \
 		'  make docs          Build warning-free API documentation' \
@@ -30,7 +31,7 @@ help:
 		'  make recover       Preview lifecycle recovery and verified crash cleanup' \
 		'  make uninstall     Remove native Remap while preserving user data' \
 		'  make install-cli   Install only the portable remap CLI for development' \
-		'  make install-check Verify install and uninstall in an isolated prefix' \
+		'  make install-check Verify CLI install and uninstall in an isolated prefix' \
 		'  make run-macos     Build and launch a project-local native Remap.app' \
 		'  make verify-macos  Build, launch, and prove the native app remains running' \
 		'' \
@@ -61,32 +62,34 @@ _require-mise:
 		'For a package-managed install, update it through that manager.' >&2; \
 		exit 2; \
 	fi
+	@mise trust --quiet
 
 setup-install: _require-mise
 	@mise install rust python uv
 	@$(NATIVE_TASK) setup-install
 
 setup: _require-mise
-	@mise install
-	@mise exec -- bun install --frozen-lockfile
-	@mise exec -- bunx playwright install chromium webkit
+	@$(TASK) setup
 
-format:
+format: _require-mise
 	@$(TASK) format
 
-check:
+check: _require-mise
 	@$(TASK) check
 
-test:
+release-check: _require-mise
+	@$(TASK) release-check
+
+test: _require-mise
 	@$(TASK) test
 
-quality:
+quality: _require-mise
 	@$(TASK) quality
 
-dependencies:
+dependencies: _require-mise
 	@$(TASK) dependencies
 
-docs:
+docs: _require-mise
 	@$(TASK) docs
 
 package-macos: _require-mise
@@ -113,10 +116,10 @@ install-system: _require-mise
 install-check: _require-mise
 	@$(NATIVE_TASK) install-check
 
-run-macos:
+run-macos: _require-mise
 	@$(TASK) run-macos
 
-verify-macos:
+verify-macos: _require-mise
 	@$(TASK) verify-macos
 
 update: _require-mise

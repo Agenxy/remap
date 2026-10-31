@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import RemapInstallKit
 import RemapSystemKit
@@ -78,9 +79,12 @@ enum RemapInstallOutput {
             )
         }
         guard let installError = error as? InstallError else {
+            // Not one of the installer's own errors: say what it was, within
+            // bounds, so the failure can be understood without a debugger.
+            let described = String(describing: error).prefix(512)
             return RemapInstallFailureDetail(
                 category: "internal",
-                message: "The native installer failed without a stable diagnostic.",
+                message: "The native installer failed without a stable diagnostic: \(described)",
                 hint: "Run remap-install status --json and preserve the local output for inspection."
             )
         }

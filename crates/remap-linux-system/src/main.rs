@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Privileged Linux resolver lifecycle entry point.
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]

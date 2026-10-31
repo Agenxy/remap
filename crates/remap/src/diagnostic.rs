@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
 
@@ -96,6 +97,20 @@ impl Diagnostic {
         }
     }
 
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn missing_lifecycle_client() -> Self {
+        let mut diagnostic = Self::native_lifecycle(
+            "the installed libexec/remap-lifecycle client is missing; source installations \
+             omit it, while a prebuilt installation requires it",
+        );
+        diagnostic.hint = "For a source installation, use the repository's make recover, \
+                           make update or make uninstall. For a prebuilt installation, \
+                           use its verified installer to repair the missing component. \
+                           Both paths require the owner's approval."
+            .into();
+        diagnostic
+    }
+
     pub(crate) fn service(error: remap_protocol::Diagnostic) -> Self {
         let detail = if error
             .context
@@ -192,6 +207,18 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::Diagnostic;
+
+    #[test]
+    fn missing_lifecycle_client_names_both_install_types_without_a_circular_remedy() {
+        let diagnostic = Diagnostic::missing_lifecycle_client();
+        assert_eq!(diagnostic.code(), "R701");
+        assert!(diagnostic.detail().contains("libexec/remap-lifecycle"));
+        assert!(diagnostic.detail().contains("source installations"));
+        assert!(diagnostic.detail().contains("prebuilt installation"));
+        assert!(diagnostic.hint().contains("make recover"));
+        assert!(diagnostic.hint().contains("verified installer"));
+        assert!(!diagnostic.hint().contains("remap system recover"));
+    }
 
     #[test]
     fn uncertain_mutation_preserves_exact_retry_guards_without_claiming_rollback() {

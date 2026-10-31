@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Adversarial contracts for macOS source-helper bootstrap and recovery."""
 
 from __future__ import annotations
@@ -258,6 +259,83 @@ class MacOSBootstrapTests(unittest.TestCase):
             self.assertLess(elapsed, 1.5)
             self.require_process_gone(parent_id)
             self.require_process_gone(child_id)
+
+    def test_privileged_sink_keeps_the_caller_session_in_its_own_group(
+        self,
+    ) -> None:
+        """`sudo -n` honours an administrator ticket only on the caller's
+        terminal: the sink must stay in this session, in a group of its own so
+        the whole tree can still be signalled."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contents = b"reviewed"
+            source = self.source(root, contents)
+            descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+            report = root / "ids"
+            script = 'printf "%s %s" "$(ps -o sess= -p $$)" "$(ps -o pgid= -p $$)" > "$1"; /bin/cat >/dev/null'
+            try:
+                remap_macos_bootstrap.run_with_input_descriptor(
+                    ("/bin/sh", "-c", script, "remap-sink", str(report)),
+                    descriptor,
+                    len(contents),
+                    root=root,
+                )
+            finally:
+                os.close(descriptor)
+            session, group = report.read_text(encoding="utf-8").split()
+            own_session = subprocess.run(
+                ("/bin/ps", "-o", "sess=", "-p", str(os.getpid())),
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(session, own_session)
+            self.assertNotEqual(int(group), os.getpgrp())
+
+    def test_a_sink_that_cannot_be_signalled_never_hides_the_transfer_error(
+        self,
+    ) -> None:
+        """A tree sudo raised to root refuses this user's signals; the reason
+        the transfer failed is still what is reported."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # More than a pipe holds, so the sink closing its input is met.
+            contents = b"x" * 1_048_576
+            source = self.source(root, contents)
+            # A sink that closes its input at once and lingers, as `sudo -n`
+            # refusing does before its tree is reaped.
+            sink = ("/bin/sh", "-c", "exec 0<&-; /bin/sleep 0.2")
+            refused = PermissionError(1, "Operation not permitted")
+            descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                with (
+                    mock.patch.object(os, "killpg", side_effect=refused),
+                    self.assertRaises(BrokenPipeError),
+                ):
+                    remap_macos_bootstrap.run_with_input_descriptor(
+                        sink, descriptor, len(contents), root=root
+                    )
+
+                def reap_then_fail(
+                    process: subprocess.Popen[bytes], _deadline: float
+                ) -> None:
+                    _ = process.communicate(timeout=1)
+                    raise RuntimeError("could not be reaped")
+
+                with (
+                    mock.patch.object(
+                        remap_macos_bootstrap,
+                        "terminate_process_group",
+                        side_effect=reap_then_fail,
+                    ),
+                    self.assertRaises(BrokenPipeError) as context,
+                ):
+                    remap_macos_bootstrap.run_with_input_descriptor(
+                        sink, descriptor, len(contents), root=root
+                    )
+                self.assertIsInstance(context.exception.__cause__, RuntimeError)
+            finally:
+                os.close(descriptor)
 
     def test_oversized_private_stage_stops_before_hash_or_code_review(self) -> None:
         expected = remap_macos_bootstrap.MAX_BOOTSTRAP_BYTES

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::io;
 use std::net::SocketAddr;
 
@@ -73,6 +74,35 @@ pub struct SystemResult {
     pub activation_id: Option<Uuid>,
     /// Active resolver generation, absent while forwarding is invalidated.
     pub active_generation: Option<u64>,
+    /// Highest generation the daemon has accepted since it started, sent only
+    /// when it exceeds `active_generation` (for example after invalidation).
+    ///
+    /// Absent means the daemon is older than this field, has accepted
+    /// nothing, or its high-water equals the active generation. In every one
+    /// of those cases a supervisor that publishes above
+    /// `max(active_generation, highest_accepted_generation, its own memory)`
+    /// chooses a generation the daemon accepts. Omitting the equal case keeps
+    /// steady-state responses byte-identical to the original v1 contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highest_accepted_generation: Option<u64>,
+}
+
+impl SystemResult {
+    /// Builds a result, reporting the high-water only when it adds information.
+    #[must_use]
+    pub fn new(
+        activation_id: Option<Uuid>,
+        active_generation: Option<u64>,
+        highest_accepted_generation: Option<u64>,
+    ) -> Self {
+        let highest_accepted_generation = highest_accepted_generation
+            .filter(|highest| active_generation.is_none_or(|active| *highest > active));
+        Self {
+            activation_id,
+            active_generation,
+            highest_accepted_generation,
+        }
+    }
 }
 
 impl SystemResponse {
@@ -134,7 +164,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest, read_system_frame,
+        SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest, SystemResult, read_system_frame,
         write_system_frame,
     };
 
@@ -157,6 +187,49 @@ mod tests {
         write_system_frame(&mut writer, &request).await?;
         let decoded: SystemRequest = read_system_frame(&mut reader).await?;
         assert_eq!(decoded, request);
+        Ok(())
+    }
+
+    #[test]
+    fn high_water_is_sent_only_when_it_exceeds_the_active_generation() -> Result<(), Box<dyn Error>>
+    {
+        let activation_id = Uuid::new_v4();
+        let steady = SystemResult::new(Some(activation_id), Some(5), Some(5));
+        assert_eq!(steady.highest_accepted_generation, None);
+        let steady_json = serde_json::to_value(&steady)?;
+        assert_eq!(
+            steady_json,
+            serde_json::json!({
+                "activation_id": activation_id,
+                "active_generation": 5,
+            })
+        );
+        let dormant = SystemResult::new(None, None, None);
+        assert_eq!(
+            serde_json::to_value(&dormant)?,
+            serde_json::json!({"activation_id": null, "active_generation": null})
+        );
+        let invalidated = SystemResult::new(None, None, Some(9));
+        assert_eq!(
+            serde_json::to_value(&invalidated)?,
+            serde_json::json!({
+                "activation_id": null,
+                "active_generation": null,
+                "highest_accepted_generation": 9,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_result_from_a_daemon_without_the_high_water_still_decodes() -> Result<(), Box<dyn Error>> {
+        let decoded: SystemResult =
+            serde_json::from_str(r#"{"activation_id":null,"active_generation":3}"#)?;
+        assert_eq!(decoded, SystemResult::new(None, Some(3), None));
+        let current: SystemResult = serde_json::from_str(
+            r#"{"activation_id":null,"active_generation":null,"highest_accepted_generation":3}"#,
+        )?;
+        assert_eq!(current.highest_accepted_generation, Some(3));
         Ok(())
     }
 

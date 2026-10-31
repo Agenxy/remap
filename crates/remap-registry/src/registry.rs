@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -138,7 +139,8 @@ impl Registry {
                 pattern,
                 target,
                 host_policy,
-            } => Self::validate(&pattern, &target, host_policy),
+                landing,
+            } => Self::validate(&pattern, &target, host_policy, landing.as_deref()),
             Command::Preview { changes } => {
                 let projection = project(&self.mappings, self.revision, &changes)?;
                 ensure_mapping_capacity(projection.mappings.len())?;
@@ -259,9 +261,18 @@ impl Registry {
         pattern: &str,
         target: &str,
         host_policy: HostPolicy,
+        landing: Option<&str>,
     ) -> Result<CommandResult, Diagnostic> {
-        let record = StoredMapping::validate(pattern, target, host_policy, true, 0)?;
+        let record = StoredMapping::validate(pattern, target, host_policy, true, 0, landing)?;
         Ok(CommandResult::Validation(ValidationResult {
+            warnings: remap_core::target_advisories(
+                &MappingTarget::parse_with_http_policy(
+                    &record.target,
+                    core_host_policy(record.host_policy),
+                )
+                .map_err(corrupt_record)?,
+            ),
+            landing: record.landing,
             pattern: record.pattern,
             target: record.target,
             target_kind: record.target_kind,
@@ -351,6 +362,7 @@ impl Registry {
             previous_revision
         };
         let receipt = ApplyResult {
+            warnings: projection.result.warnings.clone(),
             operation_id: operation_id.to_owned(),
             previous_revision,
             revision,
@@ -416,7 +428,7 @@ impl Registry {
     }
 }
 
-fn build_snapshot(
+pub(crate) fn build_snapshot(
     revision: u64,
     records: &BTreeMap<String, StoredMapping>,
 ) -> Result<RegistrySnapshot, Diagnostic> {
@@ -429,10 +441,31 @@ fn build_snapshot(
                 core_host_policy(record.host_policy),
             )
             .map_err(corrupt_record)?;
-            Ok(Mapping::new(pattern, target).with_enabled(record.enabled))
+            Mapping::new(pattern, target)
+                .with_enabled(record.enabled)
+                .with_landing(
+                    record
+                        .landing
+                        .as_deref()
+                        .map(remap_core::LandingPath::parse)
+                        .transpose()
+                        .map_err(corrupt_record)?,
+                )
+                .map_err(corrupt_record)
         })
         .collect::<Result<Vec<_>, Diagnostic>>()?;
-    RegistrySnapshot::new(revision, mappings).map_err(corrupt_record)
+    RegistrySnapshot::new(revision, mappings).map_err(|error| match error {
+        remap_core::SnapshotError::MovedSelf(_) | remap_core::SnapshotError::MovedChain(_) => {
+            Diagnostic::new(
+                "E_MOVED_CHAIN",
+                error.to_string(),
+                Some("choose a distinct destination that is not another moved mapping".to_owned()),
+                false,
+            )
+        }
+        remap_core::SnapshotError::DuplicatePattern(_)
+        | remap_core::SnapshotError::TemplateNeedsWildcard(_) => corrupt_record(error),
+    })
 }
 
 fn prune_on_connection(connection: &mut Connection) -> Result<(), Diagnostic> {
@@ -583,7 +616,7 @@ fn load_mappings(
 ) -> Result<BTreeMap<String, StoredMapping>, Diagnostic> {
     let mut statement = connection
         .prepare(
-            "SELECT pattern, target, host_policy, enabled, updated_revision
+            "SELECT pattern, target, host_policy, enabled, updated_revision, landing
              FROM mappings ORDER BY pattern",
         )
         .map_err(database_error)?;
@@ -595,12 +628,14 @@ fn load_mappings(
                 row.get::<_, String>(2)?,
                 row.get::<_, bool>(3)?,
                 row.get::<_, i64>(4)?,
+                row.get::<_, Option<String>>(5)?,
             ))
         })
         .map_err(database_error)?;
     let mut mappings = BTreeMap::new();
     for row in rows {
-        let (pattern, target, policy, enabled, stored_revision) = row.map_err(database_error)?;
+        let (pattern, target, policy, enabled, stored_revision, landing) =
+            row.map_err(database_error)?;
         let updated_revision = u64::try_from(stored_revision)
             .map_err(|_| corrupt_record("a mapping revision is negative"))?;
         if updated_revision > revision {
@@ -609,8 +644,14 @@ fn load_mappings(
             ));
         }
         let host_policy = parse_host_policy(&policy)?;
-        let record =
-            StoredMapping::validate(&pattern, &target, host_policy, enabled, updated_revision)?;
+        let record = StoredMapping::validate(
+            &pattern,
+            &target,
+            host_policy,
+            enabled,
+            updated_revision,
+            landing.as_deref(),
+        )?;
         if mappings.insert(record.pattern.clone(), record).is_some() {
             return Err(corrupt_record("the registry contains a duplicate pattern"));
         }
@@ -642,11 +683,12 @@ fn persist_touched(
             let updated_revision = database_integer(record.updated_revision)?;
             transaction
                 .execute(
-                    "INSERT INTO mappings(pattern, target, host_policy, enabled, updated_revision)
-                     VALUES (?1, ?2, ?3, ?4, ?5)
+                    "INSERT INTO mappings(pattern, target, host_policy, enabled, updated_revision, landing)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                      ON CONFLICT(pattern) DO UPDATE SET
                        target = excluded.target,
                        host_policy = excluded.host_policy,
+                       landing = excluded.landing,
                        enabled = excluded.enabled,
                        updated_revision = excluded.updated_revision",
                     params![
@@ -654,7 +696,8 @@ fn persist_touched(
                         record.target,
                         record.host_policy.as_str(),
                         record.enabled,
-                        updated_revision
+                        updated_revision,
+                        record.landing
                     ],
                 )
                 .map_err(database_error)?;

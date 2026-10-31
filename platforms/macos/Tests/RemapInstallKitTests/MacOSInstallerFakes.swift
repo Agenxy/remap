@@ -1,9 +1,13 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 @testable import RemapInstallKit
 
+/// A daemon definition as this build generates it. `processType` is
+/// `Background` only to model a generation installed before ADR-0030.
 func daemonPlist(
     configuration: MacOSInstallConfiguration,
-    program: String
+    program: String,
+    processType: String = "Interactive"
 ) throws -> Data {
     let stream: [String: Any] = [
         "SockFamily": "IPv4",
@@ -18,7 +22,7 @@ func daemonPlist(
         "HardResourceLimits": ["Core": 0, "NumberOfFiles": 4096],
         "KeepAlive": true,
         "Label": MacOSLaunchdServiceKind.daemon.label,
-        "ProcessType": "Background",
+        "ProcessType": processType,
         "ProgramArguments": [
             program,
             "--data-dir",
@@ -60,13 +64,14 @@ func daemonPlist(
 
 func resolverPlist(
     configuration: MacOSInstallConfiguration,
-    program: String
+    program: String,
+    processType: String = "Interactive"
 ) throws -> Data {
     try propertyListData([
         "HardResourceLimits": ["Core": 0, "NumberOfFiles": 128],
         "KeepAlive": true,
         "Label": MacOSLaunchdServiceKind.resolver.label,
-        "ProcessType": "Background",
+        "ProcessType": processType,
         "ProgramArguments": [
             program,
             "run",
@@ -132,7 +137,7 @@ final class FakeMacOSLaunchdController: @unchecked Sendable, MacOSLaunchdControl
         }
     }
 
-    func bootout(label: String) throws {
+    func bootout(label: String, expected _: MacOSLaunchdObservation) throws {
         lock.withLock {
             recordedBootouts += 1
             if pendingBootouts[label] == nil {
@@ -140,8 +145,6 @@ final class FakeMacOSLaunchdController: @unchecked Sendable, MacOSLaunchdControl
             }
         }
     }
-
-    func enable(label _: String) throws {}
 
     func kickstart(label _: String) throws {
         lock.withLock { recordedKickstarts += 1 }
@@ -153,6 +156,20 @@ final class FakeMacOSLaunchdController: @unchecked Sendable, MacOSLaunchdControl
                 plistPath: foreignPath(),
                 programPath: foreignPath()
             )
+        }
+    }
+
+    /// What launchd shows after a restart: every job loaded from the copy the
+    /// manifest published under LaunchDaemons, not from the generation's plist.
+    func reloadFromPublishedPlists() throws {
+        for kind in MacOSLaunchdServiceKind.allCases {
+            let program = try programPath(for: kind)
+            let published = try InstallAbsolutePath(
+                systemRoot + "/Library/LaunchDaemons/\(kind.label).plist"
+            )
+            lock.withLock {
+                observations[kind.label] = .loaded(plistPath: published, programPath: program)
+            }
         }
     }
 
@@ -223,16 +240,21 @@ final class FakeMacOSResolverController: @unchecked Sendable, MacOSResolverContr
         lock.withLock { events }
     }
 
+    /// Every system-socket path an activation was asked to dial.
+    var activatedSocketPaths: [String] = []
+
     func failNextActivation() {
         lock.withLock { rejectNextActivation = true }
     }
 
     func activate(
         configuration: MacOSInstallConfiguration,
-        productVersion: String
+        productVersion: String,
+        systemSocketPath: String
     ) async throws {
         try lock.withLock {
             events.append("publish-plan-before-dns")
+            activatedSocketPaths.append(systemSocketPath)
             if rejectNextActivation {
                 rejectNextActivation = false
                 state = MacOSResolverObservation(

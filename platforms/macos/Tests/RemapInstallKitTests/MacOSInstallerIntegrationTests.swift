@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
 @testable import RemapInstallKit
@@ -33,6 +34,8 @@ func nativeEffectAdapterInstallsAndUninstallsThroughAFakeSystemRoot() async thro
     #expect(installed.dns.effectiveRemapServiceCount == 1)
     #expect(installed.transactions.isEmpty)
     #expect(fixture.launchd.kickstartCount == 0)
+    // Activation dials the socket this generation's resolver actually serves.
+    #expect(fixture.resolver.activatedSocketPaths == ["/var/run/org.agenxy.Remap.system.sock"])
     let uninstallPreview = try fixture.installer.previewUninstall(generationID: fixture.manifest.generationID)
     #expect(uninstallPreview.publicationChangeDetails.allSatisfy { $0.action == .remove })
     #expect(!uninstallPreview.publicationChangeDetails.contains {

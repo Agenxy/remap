@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use remap_network::{DnsBindings, DnsRuntime, GatewayBindings, GatewayRuntime, SnapshotStore};
 use remap_protocol::Diagnostic;
 

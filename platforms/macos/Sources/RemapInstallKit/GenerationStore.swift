@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
 /// Ownership classification for a generation destination.
@@ -249,6 +250,8 @@ public struct GenerationStore: Sendable {
     }
 
     public func publish(_ staging: InstallRelativePath, manifest: InstallManifest) throws {
+        try manifest.validate()
+        try verifyGeneration(manifest, at: staging)
         guard case .missing = try classify(manifest) else {
             throw try InstallError.collision(generationPath(manifest).description)
         }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -95,6 +96,12 @@ impl Engine {
                 .wait_for_revision(request.request_id.clone(), *after, *timeout_ms)
                 .await;
         }
+        // A preview or receipt gains advisory reachability once the writer
+        // has answered; the writer is never held for it (ADR-0028).
+        let advisable = matches!(
+            request.command,
+            Command::Preview { .. } | Command::Apply { .. }
+        );
         let (response_sender, response_receiver) = oneshot::channel();
         self.sender()?
             .send(Job::Request {
@@ -103,7 +110,11 @@ impl Engine {
             })
             .await
             .map_err(|_| writer_unavailable())?;
-        response_receiver.await.map_err(|_| writer_unavailable())
+        let mut response = response_receiver.await.map_err(|_| writer_unavailable())?;
+        if advisable && let Some(result) = response.result.as_mut() {
+            crate::reachability::advise(result).await;
+        }
+        Ok(response)
     }
 
     /// Runs retention maintenance on the registry writer.
@@ -335,7 +346,16 @@ fn mapping_from_view(view: &MappingView) -> Result<Mapping, Diagnostic> {
     };
     let target = MappingTarget::parse_with_http_policy(&view.target, policy)
         .map_err(|error| snapshot_error(&error.to_string()))?;
-    Ok(Mapping::new(pattern, target).with_enabled(view.enabled))
+    Mapping::new(pattern, target)
+        .with_enabled(view.enabled)
+        .with_landing(
+            view.landing
+                .as_deref()
+                .map(remap_core::LandingPath::parse)
+                .transpose()
+                .map_err(|error| snapshot_error(&error.to_string()))?,
+        )
+        .map_err(|error| snapshot_error(&error.to_string()))
 }
 
 fn snapshot_error(detail: &str) -> Diagnostic {
@@ -457,6 +477,7 @@ mod tests {
                     target: format!("10.0.0.{}", index % 254 + 1),
                     host_policy: HostPolicy::PreserveClient,
                     enabled: Some(*index != 128),
+                    landing: None,
                 })
                 .collect();
             let response = engine
@@ -511,6 +532,7 @@ mod tests {
                             target: "10.0.0.8".to_owned(),
                             host_policy: HostPolicy::PreserveClient,
                             enabled: None,
+                            landing: None,
                         }],
                     },
                 },

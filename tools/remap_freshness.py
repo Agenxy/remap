@@ -1,11 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Fail when an exact first-party tool or dependency pin is no longer current."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+import tomllib
 from http.client import HTTPResponse
 from pathlib import Path
 from typing import cast
@@ -13,42 +16,56 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-import tomllib
-
 ROOT = Path(__file__).resolve().parent.parent
 MAXIMUM_RESPONSE_BYTES = 1_048_576
 REQUEST_TIMEOUT_SECONDS = 10.0
+ACTION_PIN = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)\s*(?:#.*)?$")
+ACTION_REFERENCE = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@([0-9a-f]{40})$")
 
 
 def main() -> int:
     """Verify every exact project pin against its authoritative public registry."""
     try:
-        verify_workspace_dependencies()
-        verify_javascript_dependencies()
-        verify_mise_tools()
-        verify_mise_release()
-        verify_selected_xcode()
+        # Every stale pin is reported in one run, so a bump is one edit, not one
+        # edit per rerun. A malformed pin or an unreachable registry still stops it.
+        stale = [
+            *verify_workspace_dependencies(),
+            *verify_javascript_dependencies(),
+            *verify_mise_tools(),
+            *verify_mise_release(),
+            *verify_workflow_actions(),
+        ]
+        # The freshness audit is a release concern in its own right, so it holds the
+        # pin whatever mode the process is in.
+        verify_selected_xcode(required=True)
     except (OSError, RuntimeError, TypeError, ValueError, HTTPError, URLError) as error:
         print(f"Dependency freshness failed: {error}", file=sys.stderr)
+        return 1
+    if stale:
+        print(f"Dependency freshness failed: {len(stale)} stale pins", file=sys.stderr)
+        for message in stale:
+            print(f"  {message}", file=sys.stderr)
         return 1
     print("Dependency freshness: every direct pin is current")
     return 0
 
 
-def verify_workspace_dependencies() -> None:
+def verify_workspace_dependencies() -> list[str]:
     """Compare exact Cargo workspace dependencies with crates.io stable maxima."""
     document = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     workspace = object_table(document, "workspace")
     dependencies = object_table(workspace, "dependencies")
+    stale: list[str] = []
     for name, specification in sorted(dependencies.items()):
         pinned = cargo_version(specification, name)
         payload = fetch_json(f"https://crates.io/api/v1/crates/{quote(name, safe='')}")
         crate = object_table(payload, "crate")
         latest = string_value(crate, "max_stable_version")
-        require_current(f"crate {name}", pinned, latest)
+        stale += stale_pin(f"crate {name}", pinned, latest)
+    return stale
 
 
-def verify_javascript_dependencies() -> None:
+def verify_javascript_dependencies() -> list[str]:
     """Compare exact Bun package pins with the npm latest distribution tag."""
     document = cast(
         "object", json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
@@ -56,13 +73,15 @@ def verify_javascript_dependencies() -> None:
     if not isinstance(document, dict):
         raise TypeError("package.json root must be an object")
     dependencies = object_table(cast("dict[str, object]", document), "devDependencies")
+    stale: list[str] = []
     for name, specification in sorted(dependencies.items()):
         if not isinstance(specification, str) or not exact_semver(specification):
             raise ValueError(f"npm package {name} is not pinned to an exact version")
         encoded = quote(name, safe="")
         payload = fetch_json(f"https://registry.npmjs.org/{encoded}/latest")
         latest = string_value(payload, "version")
-        require_current(f"npm package {name}", specification, latest)
+        stale += stale_pin(f"npm package {name}", specification, latest)
+    return stale
 
 
 def mise_tool_version(specification: object) -> str:
@@ -76,26 +95,90 @@ def mise_tool_version(specification: object) -> str:
     raise TypeError("mise tool pins must be a version string or a table with one")
 
 
-def verify_mise_tools() -> None:
+def verify_mise_tools() -> list[str]:
     """Compare exact mise pins with each plugin's current stable release."""
     document = tomllib.loads((ROOT / "mise.toml").read_text(encoding="utf-8"))
     tools = object_table(document, "tools")
+    stale: list[str] = []
     for name, specification in sorted(tools.items()):
         pinned = mise_tool_version(specification)
         latest = capture(("mise", "latest", name))
-        require_current(f"mise tool {name}", pinned, latest)
+        stale += stale_pin(f"mise tool {name}", pinned, latest)
+    return stale
 
 
-def verify_mise_release() -> None:
+def verify_mise_release() -> list[str]:
     """Require the bootstrap binary itself to match mise's latest GitHub release."""
     installed = capture(("mise", "--version")).split(maxsplit=1)[0]
     payload = fetch_json("https://api.github.com/repos/jdx/mise/releases/latest")
     latest = string_value(payload, "tag_name").removeprefix("v")
-    require_current("mise", installed, latest)
+    return stale_pin("mise", installed, latest)
 
 
-def verify_selected_xcode() -> None:
+def workflow_action_pins(text: str, source: str) -> list[tuple[str, str]]:
+    """Read every `uses:` pin, refusing any that is not an immutable commit."""
+    pins: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        match = ACTION_PIN.match(line)
+        if match is None:
+            continue
+        reference = ACTION_REFERENCE.match(match.group(1))
+        if reference is None:
+            raise ValueError(
+                f"{source} uses {match.group(1)}, which is not pinned to a commit"
+            )
+        pins.append((reference.group(1), reference.group(2)))
+    return pins
+
+
+def verify_workflow_actions() -> list[str]:
+    """Require each pinned workflow action to be its latest release's commit."""
+    pins: set[tuple[str, str]] = set()
+    for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+        source = str(workflow.relative_to(ROOT))
+        pins.update(workflow_action_pins(workflow.read_text(encoding="utf-8"), source))
+    stale: list[str] = []
+    for repository, pinned in sorted(pins):
+        release = fetch_json(
+            f"https://api.github.com/repos/{repository}/releases/latest"
+        )
+        tag = string_value(release, "tag_name")
+        commit = fetch_json(
+            f"https://api.github.com/repos/{repository}/commits/{quote(tag, safe='')}"
+        )
+        latest = string_value(commit, "sha")
+        stale += stale_pin(f"action {repository} ({tag})", pinned, latest)
+    return stale
+
+
+_release_toolchain_required = False
+
+
+def require_release_toolchain() -> None:
+    """Make the reviewed-toolchain pin refuse for the rest of this process.
+
+    Release and packaging paths call this. Everything else reports a mismatch and
+    continues, so that a machine whose Xcode has moved can still build, test and
+    install locally. What the pin buys is the ability to say which compiler produced
+    an artifact, which matters to whoever installs it, not to the person writing it.
+    """
+    global _release_toolchain_required
+    _release_toolchain_required = True
+
+
+def release_toolchain_required() -> bool:
+    """Whether the reviewed-toolchain pin refuses rather than reports."""
+    return _release_toolchain_required
+
+
+def verify_selected_xcode(*, required: bool | None = None) -> None:
     """Require macOS builds to use one of the repository's reviewed Xcode builds.
+
+    `required=False` reports the mismatch and continues. A local build is judged by
+    the same tests either way; what an unreviewed toolchain costs is the ability to
+    say which compiler produced an artifact, which matters only for something
+    someone else installs. Refusing a developer's build for it blocks work and
+    protects nobody, so the release paths pass `required=True` and keep the pin.
 
     The pin file names one Xcode version and then every reviewed build of it,
     one per line. More than one build is allowed because Apple withdraws beta
@@ -105,6 +188,8 @@ def verify_selected_xcode() -> None:
     """
     if sys.platform != "darwin":
         return
+    if required is None:
+        required = _release_toolchain_required
     expected = (
         (ROOT / "platforms/macos/XCODE_VERSION")
         .read_text(encoding="utf-8")
@@ -119,8 +204,13 @@ def verify_selected_xcode() -> None:
         [f"Xcode {expected[0]}", f"Build version {build}"] for build in expected[1:]
     ]
     if actual not in accepted:
-        raise RuntimeError(
-            f"selected Xcode is {actual!r}; the reviewed builds are {accepted!r}"
+        message = f"selected Xcode is {actual!r}; the reviewed builds are {accepted!r}"
+        if required:
+            raise RuntimeError(message)
+        advice = "This build is for local use and must not be distributed;"
+        print(
+            f"warning: {message}. {advice} `make release-check` enforces the pin.",
+            file=sys.stderr,
         )
 
 
@@ -206,10 +296,11 @@ def string_value(document: dict[str, object], key: str) -> str:
     return value
 
 
-def require_current(name: str, pinned: str, latest: str) -> None:
-    """Reject a stale or unexpectedly ahead version pin."""
+def stale_pin(name: str, pinned: str, latest: str) -> list[str]:
+    """Name a stale or unexpectedly ahead version pin, or nothing when it is current."""
     if pinned != latest:
-        raise RuntimeError(f"{name} is pinned to {pinned}; current stable is {latest}")
+        return [f"{name} is pinned to {pinned}; current stable is {latest}"]
+    return []
 
 
 if __name__ == "__main__":

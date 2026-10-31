@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Opt-in live descriptor-adoption proof for a Linux systemd-shaped host.
 
 #![cfg(target_os = "linux")]

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build Remap's native Apple Installer product from exact reviewed inputs."""
 
 from __future__ import annotations

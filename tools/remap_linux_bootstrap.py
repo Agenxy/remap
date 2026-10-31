@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Root-owned bootstrap boundary for Remap's native Linux lifecycle helper."""
 
 from __future__ import annotations

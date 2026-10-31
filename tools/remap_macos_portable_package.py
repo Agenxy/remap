@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build Remap's prebuilt, target-Mac-self-signed Apple Installer package."""
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from tools.remap_macos_artifact import expected_macos_sdk, normalize_macos_sdk_m
 from tools.remap_macos_package_metadata import (
     normalize_package_extended_attributes,
     normalize_package_timestamps,
+    removable_extended_attributes,
     verify_payload_member_names,
 )
 from tools.remap_macos_release_installer_signing import (
@@ -33,11 +35,23 @@ from tools.remap_macos_release_installer_signing import (
 )
 from tools.remap_macos_xar import canonicalize_xar_metadata
 from tools.remap_native_package import MANPAGE_NAMES
+from tools.remap_package import cargo_target_directory
 from tools.remap_release_artifacts import (
     MAXIMUM_FILE_BYTES,
     MAXIMUM_SIGNATURE_BYTES,
     open_release_artifact,
     publish_release_artifacts,
+)
+from tools.remap_release_signing import (
+    PackageKind,
+    PackageSigning,
+    Signer,
+    canonical_public_key,
+    open_signer,
+    pinned_public_key,
+    preflight,
+    swift_build_arguments,
+    verify_embedded_pin,
 )
 
 PACKAGE_IDENTIFIER = "org.agenxy.Remap.PortableInstaller"
@@ -65,14 +79,27 @@ def build(
     *,
     product_version: str,
     output: Path,
-    signing_key: Path,
-    installer_identity: ReleaseInstallerSigningIdentity,
+    signing: PackageSigning,
+    installer_identity: ReleaseInstallerSigningIdentity | None,
 ) -> PortablePackage:
-    """Build and verify one no-shell portable package without a paid identity."""
-    verify_selected_xcode()
+    """Build and verify one no-shell portable package without a paid identity.
+
+    `signing` says which kind of package this is and which key signs it: the development
+    file key, or the release key in the Secure Enclave. The kind also selects the one pin
+    compiled into the package's installer, and the pin both signatures are checked against.
+
+    `installer_identity` is `None` for a development package. Apple's installer
+    signature is what lets another Mac accept the package, so it is required for
+    anything distributed; producing one needs a private key in a keychain, and macOS
+    asks a human for the keychain password when the key's access list does not name the
+    signer. A package built to be installed on the machine that built it does not need
+    that signature and must not need that person.
+    """
+    verify_selected_xcode(required=True)
     architecture = _architecture()
     validate_version(product_version)
-    _validate_signing_key(signing_key, root=root)
+    preflight(root, signing)
+    pinned_key = pinned_public_key(root, signing.kind)
     output_signature = output.with_suffix(output.suffix + ".sig")
     for artifact in (output, output_signature):
         if artifact.exists() or artifact.is_symlink():
@@ -81,7 +108,11 @@ def build(
     with tempfile.TemporaryDirectory(prefix="remap-portable-package-") as directory:
         workspace = Path(directory)
         os.chmod(workspace, 0o700)
-        products = _build_products(root, product_version, workspace)
+        products = _build_products(root, product_version, workspace, kind=signing.kind)
+        verify_embedded_pin(products / "remap-portable-installer", root, signing.kind)
+        signer = open_signer(
+            root, signing, release_key_tool=products / "remap-release-key"
+        )
         package_root = workspace / "package-root"
         scripts = workspace / "scripts"
         package_root.mkdir(mode=0o700)
@@ -100,7 +131,13 @@ def build(
         manifest_path = staged / "release-manifest.json"
         _ = manifest_path.write_bytes(manifest_bytes)
         os.chmod(manifest_path, 0o400)
-        _sign_file(manifest_path, signing_key, namespace=RELEASE_NAMESPACE)
+        _sign_file(manifest_path, signer, namespace=RELEASE_NAMESPACE)
+        verify_detached_package_signature(
+            manifest_path,
+            manifest_path.with_suffix(manifest_path.suffix + ".sig"),
+            public_key=pinned_key,
+            namespace=RELEASE_NAMESPACE,
+        )
         portable_installer = products / "remap-portable-installer"
         for script in ("preinstall", "postinstall"):
             _copy_file(portable_installer, scripts / script, mode=0o555)
@@ -131,6 +168,21 @@ def build(
                 "recommended",
                 "--component-plist",
                 str(component_plist),
+                # macOS 27 stamps every created file with `com.apple.provenance`, which
+                # cannot be removed even as root, and pkgbuild carries an unremovable
+                # attribute into the payload as an AppleDouble `._` sidecar.
+                # `COPYFILE_DISABLE` below does not prevent it. Excluding the sidecars
+                # keeps the payload to the files Remap actually installs. Specifying a
+                # filter at all inhibits pkgbuild's own defaults, so those are restated
+                # here rather than silently lost.
+                "--filter",
+                r"(^|/)\._[^/]*$",
+                "--filter",
+                r"(^|/)\.DS_Store$",
+                "--filter",
+                r"(^|/)\.svn(/|$)",
+                "--filter",
+                r"(^|/)CVS(/|$)",
                 str(unsigned),
             ),
             root=root,
@@ -143,30 +195,30 @@ def build(
             product_version=product_version,
             expected_manifest=manifest_bytes,
         )
-        signed = workspace / "Remap-signed.pkg"
-        sign_release_installer_package(unsigned, signed, installer_identity)
-        canonicalize_xar_metadata(
-            signed,
-            signature_signer=products / "remap-release-xar-signer",
-            certificate_sha256=installer_identity.sha256,
-            keychain=installer_identity.keychain,
-        )
-        _verify_package(
-            signed,
-            workspace / "signed-expanded",
-            product_version=product_version,
-            expected_manifest=manifest_bytes,
-            require_unsigned=False,
-        )
-        _sign_file(signed, signing_key, namespace=PACKAGE_NAMESPACE)
+        if installer_identity is None:
+            signed = unsigned
+        else:
+            signed = workspace / "Remap-signed.pkg"
+            sign_release_installer_package(unsigned, signed, installer_identity)
+            canonicalize_xar_metadata(
+                signed,
+                signature_signer=products / "remap-release-xar-signer",
+                certificate_sha256=installer_identity.sha256,
+                keychain=installer_identity.keychain,
+            )
+            _verify_package(
+                signed,
+                workspace / "signed-expanded",
+                product_version=product_version,
+                expected_manifest=manifest_bytes,
+                require_unsigned=False,
+            )
+        _sign_file(signed, signer, namespace=PACKAGE_NAMESPACE)
         signed_signature = signed.with_suffix(signed.suffix + ".sig")
-        pinned_public_key = (
-            root / "docs/release/remap-release-signing-key.pub"
-        ).read_text(encoding="utf-8")
         verify_detached_package_signature(
             signed,
             signed_signature,
-            public_key=pinned_public_key,
+            public_key=pinned_key,
         )
         publish_release_artifacts(
             package=signed,
@@ -177,7 +229,7 @@ def build(
         verify_detached_package_signature(
             output,
             output_signature,
-            public_key=pinned_public_key,
+            public_key=pinned_key,
         )
     return PortablePackage(
         path=output,
@@ -190,7 +242,9 @@ def build(
     )
 
 
-def _build_products(root: Path, version: str, workspace: Path) -> Path:
+def _build_products(
+    root: Path, version: str, workspace: Path, *, kind: PackageKind
+) -> Path:
     rust_environment = dict(os.environ)
     _ = rust_environment.pop("RUSTFLAGS", None)
     rust_environment["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(
@@ -226,6 +280,7 @@ def _build_products(root: Path, version: str, workspace: Path) -> Path:
             "release",
             "--package-path",
             "platforms/macos",
+            *swift_build_arguments(kind),
         ),
         root=root,
     )
@@ -263,8 +318,9 @@ def _build_products(root: Path, version: str, workspace: Path) -> Path:
     app = build_app(root, version, release=True, sign=False)
     verify_app_structure(root, app)
     binaries = {
-        "remap": root / "target/release/remap",
-        "remapd": root / "target/release/remapd",
+        "remap": cargo_target_directory(root) / "release/remap",
+        "remapd": cargo_target_directory(root) / "release/remapd",
+        "remap-release-key": swift_bin / "remap-release-key",
         "remap-release-xar-signer": swift_bin / "remap-release-xar-signer",
         **{name: swift_bin / name for name in swift_names},
     }
@@ -279,6 +335,7 @@ def _build_products(root: Path, version: str, workspace: Path) -> Path:
         "remap-installer-service": "org.agenxy.Remap.installer-service",
         "remap-lifecycle": "org.agenxy.Remap.lifecycle-cli",
         "remap-portable-installer": "org.agenxy.Remap.portable-installer",
+        "remap-release-key": "org.agenxy.Remap.release-key",
         "remap-release-xar-signer": "org.agenxy.Remap.release-xar-signer",
         "remap-resolver": "org.agenxy.Remap.resolver",
         "remap-system": "org.agenxy.Remap.system",
@@ -469,28 +526,13 @@ def release_manifest(
     }
 
 
-def _sign_file(path: Path, private_key: Path, *, namespace: str) -> None:
+def _sign_file(path: Path, signer: Signer, *, namespace: str) -> None:
     signature = path.with_suffix(path.suffix + ".sig")
     with path.open("rb") as input_file:
-        result = subprocess.run(
-            (
-                "/usr/bin/ssh-keygen",
-                "-Y",
-                "sign",
-                "-f",
-                str(private_key),
-                "-n",
-                namespace,
-            ),
-            cwd=path.parent,
-            check=True,
-            stdin=input_file,
-            capture_output=True,
-            timeout=120,
-        )
-    if not result.stdout or len(result.stdout) > MAXIMUM_SIGNATURE_BYTES:
-        raise RuntimeError("ssh-keygen returned an unsafe release signature")
-    _write_generated_signature(signature, result.stdout)
+        data = signer.sign(input_file, namespace=namespace)
+    if not data or len(data) > MAXIMUM_SIGNATURE_BYTES:
+        raise RuntimeError("the release signer returned an unsafe signature")
+    _write_generated_signature(signature, data)
 
 
 def _write_generated_signature(signature: Path, data: bytes) -> None:
@@ -560,7 +602,7 @@ def _generated_signature_matches(path: Path, data: bytes) -> bool:
         and information.st_uid == os.getuid()
         and stat.S_IMODE(information.st_mode) == 0o400
         and information.st_size == len(data)
-        and not _extended_attribute_names(path)
+        and not removable_extended_attributes(_extended_attribute_names(path))
         and hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(data).digest()
     )
 
@@ -583,9 +625,10 @@ def verify_detached_package_signature(
     *,
     public_key: str,
     expected_package_owner_uid: int | None = None,
+    namespace: str = PACKAGE_NAMESPACE,
 ) -> None:
-    """Verify the complete package bytes under Remap's package namespace."""
-    canonical_key = canonical_release_public_key(public_key)
+    """Verify the complete bytes under one namespace, by default the package's."""
+    canonical_key = canonical_public_key(public_key)
     with (
         open_release_artifact(
             package,
@@ -621,7 +664,7 @@ def verify_detached_package_signature(
                 "-I",
                 RELEASE_SIGNER_IDENTITY,
                 "-n",
-                PACKAGE_NAMESPACE,
+                namespace,
                 "-s",
                 str(private_signature),
             ),
@@ -778,45 +821,6 @@ def _payload_path(root: Path, absolute: Path) -> Path:
     if not absolute.is_absolute():
         raise RuntimeError("portable package payload path must be absolute")
     return root.joinpath(*absolute.parts[1:])
-
-
-def _validate_signing_key(path: Path, *, root: Path) -> None:
-    information = path.lstat()
-    public_only = path.suffix == ".pub"
-    mode = stat.S_IMODE(information.st_mode)
-    if (
-        not path.is_absolute()
-        or path.is_symlink()
-        or not path.is_file()
-        or information.st_nlink != 1
-        or information.st_uid != os.getuid()
-        or (mode & 0o022 if public_only else mode & 0o077)
-    ):
-        raise RuntimeError("the SSH release signing key has unsafe metadata")
-    expected = canonical_release_public_key(
-        (root / "docs/release/remap-release-signing-key.pub").read_text(
-            encoding="utf-8"
-        )
-    )
-    if public_only:
-        observed = canonical_release_public_key(path.read_text(encoding="utf-8"))
-    else:
-        observed = canonical_release_public_key(
-            _capture(("/usr/bin/ssh-keygen", "-y", "-f", str(path)), root=root)
-        )
-    if observed != expected:
-        raise RuntimeError(
-            "the SSH release signing key does not match Remap's pinned public key"
-        )
-
-
-def canonical_release_public_key(value: str) -> str:
-    fields = value.strip().split()
-    if len(fields) not in {2, 3} or fields[0] != "ssh-ed25519":
-        raise RuntimeError(
-            "the Remap release public key is not one canonical Ed25519 key"
-        )
-    return " ".join(fields[:2])
 
 
 def _architecture() -> str:

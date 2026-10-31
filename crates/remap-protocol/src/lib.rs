@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Versioned, bounded messages shared by Remap control surfaces and `remapd`.
 
 use std::time::Duration;

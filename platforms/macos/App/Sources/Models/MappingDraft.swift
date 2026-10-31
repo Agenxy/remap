@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import RemapControlKit
 
 struct MappingDraft: Equatable {
@@ -5,6 +6,7 @@ struct MappingDraft: Equatable {
     var target = ""
     var hostPolicy = RemapHostPolicy.useUpstream
     var enabled = true
+    var landing = ""
 
     init() {}
 
@@ -13,6 +15,7 @@ struct MappingDraft: Equatable {
         target = mapping.target
         hostPolicy = mapping.hostPolicy
         enabled = mapping.enabled
+        landing = mapping.landing ?? ""
     }
 
     var change: RemapChange {
@@ -20,7 +23,8 @@ struct MappingDraft: Equatable {
             pattern: pattern,
             target: target,
             hostPolicy: hostPolicy,
-            enabled: enabled
+            enabled: enabled,
+            landing: landing.isEmpty ? nil : landing
         )
     }
 }

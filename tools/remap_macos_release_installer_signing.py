@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Dedicated self-signed release authority for complete Remap Installer XARs."""
 
 from __future__ import annotations
@@ -5,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import plistlib
 import re
+import secrets
 import ssl
 import subprocess
 import tempfile
@@ -292,27 +294,20 @@ def _create(keychain: Path) -> None:
     )
     certificate = local_signing.one_pem_block(material, b"CERTIFICATE")
     private_key = local_signing.one_private_key(material)
+    password = secrets.token_urlsafe(32)
     archive = local_signing.make_archive(
         certificate,
         private_key,
+        password,
         identity_name=IDENTITY_NAME,
     )
-    _ = local_signing.run_binary(
-        (
-            "/usr/bin/security",
-            "import",
-            "/dev/stdin",
-            "-k",
-            str(keychain),
-            "-P",
-            local_signing.ARCHIVE_TRANSPORT_PASSWORD,
-            "-x",
-            "-T",
-            "/usr/bin/productsign",
-            "-f",
-            "pkcs12",
-        ),
-        archive,
+    codesigning.import_identity_archive(
+        keychain,
+        name=IDENTITY_NAME,
+        archive=archive,
+        password=password,
+        tool="/usr/bin/productsign",
+        run=local_signing.run_binary,
     )
 
 

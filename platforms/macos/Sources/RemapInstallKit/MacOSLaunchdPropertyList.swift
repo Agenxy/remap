@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
 
@@ -15,6 +16,33 @@ enum MacOSLaunchdAuthorityContract: Equatable {
     }
 }
 
+/// Which launchd scheduling class a definition may declare (ADR-0030).
+///
+/// Remap's daemon and resolver supervisor sit in the system DNS path, so
+/// every definition this build generates is `Interactive`, as the system
+/// resolver's own is. Generations installed before ADR-0030 declare
+/// `Background`; rollback and recovery must still read them, so only an
+/// already-installed, manifest-owned generation may carry that legacy value.
+/// No other value is ever accepted.
+enum MacOSLaunchdSchedulingAdmission: Equatable, Sendable {
+    /// A definition generated or about to be installed: `Interactive` only.
+    case generated
+    /// A definition in an installed generation: `Interactive`, or legacy `Background`.
+    case installed
+
+    static let generatedProcessType = "Interactive"
+    static let legacyProcessType = "Background"
+
+    var processTypes: Set<String> {
+        switch self {
+        case .generated:
+            [Self.generatedProcessType]
+        case .installed:
+            [Self.generatedProcessType, Self.legacyProcessType]
+        }
+    }
+}
+
 enum MacOSLaunchdPropertyList {
     static func validate(
         _ data: Data,
@@ -22,7 +50,8 @@ enum MacOSLaunchdPropertyList {
         configuration: MacOSInstallConfiguration,
         account: MacOSAccount,
         programPath: InstallAbsolutePath,
-        contract: MacOSLaunchdAuthorityContract = .launchdOwnedSystemSocket
+        contract: MacOSLaunchdAuthorityContract = .launchdOwnedSystemSocket,
+        scheduling: MacOSLaunchdSchedulingAdmission = .generated
     ) throws {
         let document: Any
         do {
@@ -35,6 +64,18 @@ enum MacOSLaunchdPropertyList {
         }
         guard string(values, "Label") == kind.label else {
             throw InstallError.invalidManifest("the launchd label does not match the managed service")
+        }
+        let declaredProgram = (values["ProgramArguments"] as? [String])?.first
+        if let program = declaredProgram, program != programPath.value {
+            let displayed = String(reflecting: String(program.prefix(4096)))
+            throw InstallError.invalidManifest(
+                "launchd program \(displayed) must be installed at \(programPath.value)"
+            )
+        }
+        guard let processType = string(values, "ProcessType"),
+              scheduling.processTypes.contains(processType)
+        else {
+            throw InstallError.invalidManifest("the launchd scheduling class is not one Remap declares")
         }
         switch kind {
         case .daemon:
@@ -161,7 +202,6 @@ enum MacOSLaunchdPropertyList {
     private static func validateLifecycle(_ values: [String: Any], fileLimit: Int) throws {
         guard boolean(values, "RunAtLoad") == true,
               boolean(values, "KeepAlive") == true,
-              string(values, "ProcessType") == "Background",
               string(values, "StandardOutPath") == "/dev/null",
               string(values, "StandardErrorPath") == "/dev/null",
               integer(values, "ThrottleInterval") == 5,

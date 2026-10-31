@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+use crate::resolved::reply_error_name;
 use crate::{LinuxError, LinuxErrorKind, LinuxResult, ResolverLinkManager};
 
 pub(super) fn manager_identity_ready(
@@ -16,7 +18,7 @@ pub(super) fn manager_identity_ready(
 }
 
 pub(super) fn method_error(error: &zbus::Error) -> LinuxError {
-    let zbus::Error::MethodError(name, _detail, _reply) = error else {
+    let Some(name) = reply_error_name(error) else {
         return bus_error();
     };
     match name.as_str() {

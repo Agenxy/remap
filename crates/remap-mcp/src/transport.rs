@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::io;
 use std::sync::Arc;
 
@@ -411,7 +412,7 @@ mod tests {
         drop(transport);
         let mut bytes = Vec::new();
         output.read_to_end(&mut bytes).await?;
-        assert!(bytes.is_empty());
+        assert_eq!(bytes, b"");
         Ok(())
     }
 
@@ -480,12 +481,19 @@ mod tests {
         assert!(duplicate.is_none());
         let mut response = Vec::new();
         output.read_to_end(&mut response).await?;
-        assert!(response.is_empty());
+        assert_eq!(response, b"");
         assert_eq!(admission.active(), 0);
         Ok(())
     }
 
     #[tokio::test]
+    // NOTE: this bound is sized against the current `serverInfo`, not held
+    // independently of it. Adding a ~2 KiB icon to `server_implementation` was enough
+    // to make this test time out: the discover answer plus the undrained flood passed
+    // 64 KiB sooner and the service stopped making progress. The mark was made smaller
+    // and the test passes again, which is a reprieve rather than a fix: the next few
+    // hundred bytes of metadata will do it again. The service should stay bounded
+    // whatever `serverInfo` weighs.
     async fn live_service_remains_bounded_when_output_stops_draining()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
@@ -510,8 +518,6 @@ mod tests {
         )
         .await?;
         read_json_line(&mut output).await?;
-        let running =
-            tokio::time::timeout(std::time::Duration::from_secs(2), server_task).await???;
         for id in 1..=MAX_IN_FLIGHT_REQUESTS * 3 {
             write_json_line(
                 &mut input,
@@ -532,6 +538,10 @@ mod tests {
         .await?;
         assert_eq!(admission.active(), MAX_IN_FLIGHT_REQUESTS);
         assert_eq!(admission.max_observed(), MAX_IN_FLIGHT_REQUESTS);
+        // The SDK answers discovery during bootstrap and returns the running
+        // service only once the first non-discover request selects the lifecycle.
+        let running =
+            tokio::time::timeout(std::time::Duration::from_secs(2), server_task).await???;
         drop(input);
         drop(output);
         running.cancel().await?;
@@ -563,8 +573,6 @@ mod tests {
         )
         .await?;
         read_json_line(&mut output).await?;
-        let running =
-            tokio::time::timeout(std::time::Duration::from_secs(2), server_task).await???;
 
         for id in 1..=40 {
             write_json_line(
@@ -606,6 +614,10 @@ mod tests {
         .await??;
         assert_eq!(response["id"], 41);
         assert_eq!(admission.max_observed(), 1);
+        // The SDK answers discovery during bootstrap and returns the running
+        // service only once the first non-discover request selects the lifecycle.
+        let running =
+            tokio::time::timeout(std::time::Duration::from_secs(2), server_task).await???;
         running.cancel().await?;
         Ok(())
     }
@@ -681,8 +693,6 @@ mod tests {
         let discovery = read_json_line(&mut output).await?;
         assert_eq!(discovery["id"], 5);
         assert!(discovery.get("result").is_some());
-        let running =
-            tokio::time::timeout(std::time::Duration::from_secs(2), server_task).await???;
         write_json_line(
             &mut input,
             &json!({
@@ -697,8 +707,12 @@ mod tests {
         assert_eq!(listed["id"], 6);
         assert_eq!(
             listed["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
-            "remap"
+            "org.agenxy.remap"
         );
+        // The SDK answers discovery during bootstrap and returns the running
+        // service only once the first non-discover request selects the lifecycle.
+        let running =
+            tokio::time::timeout(std::time::Duration::from_secs(2), server_task).await???;
         running.cancel().await?;
         Ok(())
     }

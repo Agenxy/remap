@@ -1,10 +1,13 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MCP tools, resources, and compatibility policy for Remap.
 
+mod health;
 mod lifecycle;
 mod output;
 mod params;
 mod resources;
 mod server;
+pub mod system_lookup;
 mod transport;
 mod ui;
 

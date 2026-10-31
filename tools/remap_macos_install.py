@@ -1,7 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build and orchestrate Remap's transactional native macOS source install."""
 
 from __future__ import annotations
 
+import json
 import os
 import pwd
 import re
@@ -10,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -58,6 +61,7 @@ from tools.remap_native_package import (
     NativeProductFiles,
     assemble,
 )
+from tools.remap_package import cargo_target_directory
 
 SYSTEM_CLI = Path("/usr/local/bin/remap")
 SYSTEM_APP = Path("/Applications/Remap.app")
@@ -84,7 +88,14 @@ SYSTEM_PUBLIC_DIRECTORIES = (
     Path("/usr/local/share/zsh/site-functions"),
 )
 MAX_HELPER_OUTPUT_BYTES = 1_048_576
-HELPER_TIMEOUT_SECONDS = 120
+# A mutation waits, inside the helper, for the runtime to reach each required
+# state: up to five minutes per transition, since macOS assesses a newly
+# signed daemon before it even starts, and an update has several. The helper's
+# own bounds decide how long a bad start is given; this only says when the
+# helper itself is presumed hung.
+HELPER_TIMEOUT_SECONDS = 1800
+# How long a just-committed runtime is given to answer doctor completely.
+DOCTOR_SETTLE_SECONDS = 60
 # A cold release build of remap and remapd on a hosted runner takes longer than
 # the helper timeout above, which is sized for a native helper answering, not
 # for cargo; the portable-package tool already allows twenty minutes.
@@ -198,31 +209,31 @@ def build_native_products(root: Path, version: str, staging: Path) -> NativeBuil
     products.mkdir(mode=0o700)
     signing_directory = products / "signing"
     signing_directory.mkdir(mode=0o700)
-    cli_staging = _unsigned_copy(
-        root / "target/release/remap",
+    cli_staging = stage_unsigned_executable(
+        cargo_target_directory(root) / "release/remap",
         signing_directory / "cli",
     )
-    daemon_staging = _unsigned_copy(
-        root / "target/release/remapd",
+    daemon_staging = stage_unsigned_executable(
+        cargo_target_directory(root) / "release/remapd",
         signing_directory / "daemon",
     )
-    installer_staging = _unsigned_copy(
+    installer_staging = stage_unsigned_executable(
         swift_bin / "remap-install",
         signing_directory / "install-bootstrap",
     )
-    installer_service_staging = _unsigned_copy(
+    installer_service_staging = stage_unsigned_executable(
         swift_bin / "remap-installer-service",
         signing_directory / "installer-service",
     )
-    installer_bootstrap_staging = _unsigned_copy(
+    installer_bootstrap_staging = stage_unsigned_executable(
         swift_bin / "remap-installer-bootstrap",
         signing_directory / "installer-bootstrap",
     )
-    resolver_staging = _unsigned_copy(
+    resolver_staging = stage_unsigned_executable(
         swift_bin / "remap-resolver",
         signing_directory / "resolver",
     )
-    system_staging = _unsigned_copy(
+    system_staging = stage_unsigned_executable(
         swift_bin / "remap-system",
         signing_directory / "system",
     )
@@ -623,31 +634,59 @@ def verify_installed_product(root: Path, version: str, data_directory: Path) -> 
     selected = shutil.which("remap", path=clean_path)
     if selected != str(SYSTEM_CLI):
         raise RuntimeError("a clean shell does not select /usr/local/bin/remap")
-    document = _json_command(
-        (
-            str(SYSTEM_CLI),
-            "--json",
-            "--data-dir",
-            str(data_directory),
-            "doctor",
-        ),
-        root=root,
+    # The daemon was proved ready before the transaction committed, but doctor
+    # asks it end to end, through the resolver and the gateway, and a daemon a
+    # few seconds old can still be settling: ask again for a while before
+    # calling the runtime incomplete.
+    deadline = time.monotonic() + DOCTOR_SETTLE_SECONDS
+    last = "doctor was not asked"
+    while time.monotonic() < deadline:
+        document, last = _doctor(root, data_directory)
+        if runtime_is_complete(document, version):
+            return
+        time.sleep(1)
+    raise RuntimeError(
+        "the installed command did not authenticate the complete runtime "
+        + f"within {DOCTOR_SETTLE_SECONDS} seconds; last answer: {last}"
     )
+
+
+def _doctor(root: Path, data_directory: Path) -> tuple[dict[str, object], str]:
+    """Doctor's answer, and what to say about it if it is not the one wanted."""
+    try:
+        document = _json_command(
+            (
+                str(SYSTEM_CLI),
+                "--json",
+                "--data-dir",
+                str(data_directory),
+                "doctor",
+            ),
+            root=root,
+        )
+    except subprocess.CalledProcessError as error:
+        # Not an answer: doctor refuses while the runtime is short of complete.
+        said = cast("bytes | None", error.stderr) or b""
+        return {}, said.decode("utf-8", "replace")[:512].strip()
+    except subprocess.TimeoutExpired:
+        return {}, "doctor did not answer within ten seconds"
+    return document, json.dumps(document.get("result"))[:512]
+
+
+def runtime_is_complete(document: dict[str, object], version: str) -> bool:
+    """Whether doctor's answer says the whole native runtime is up and this build."""
     result = document.get("result")
     result_data = (
         cast("dict[str, object]", result) if isinstance(result, dict) else None
     )
-    if (
-        document.get("ok") is not True
-        or result_data is None
-        or result_data.get("version") != version
-        or result_data.get("native_install") is not True
-        or result_data.get("dns_listener") is not True
-        or result_data.get("http_gateway") is not True
-    ):
-        raise RuntimeError(
-            "the installed command did not authenticate the complete runtime"
-        )
+    return (
+        document.get("ok") is True
+        and result_data is not None
+        and result_data.get("version") == version
+        and result_data.get("native_install") is True
+        and result_data.get("dns_listener") is True
+        and result_data.get("http_gateway") is True
+    )
 
 
 def verify_installed_assets(root: Path) -> None:
@@ -857,10 +896,7 @@ def _signed_copy(
     identifier: str,
     signing_identity: LocalCodeSigningIdentity,
 ) -> Path:
-    if not source.is_file() or not os.access(source, os.X_OK):
-        raise RuntimeError(f"the native build did not produce {source}")
-    _ = shutil.copyfile(source, destination)
-    os.chmod(destination, 0o500)
+    _ = stage_unsigned_executable(source, destination)
     _ = sign_path(destination, signing_identity, identifier)
     actual_identifier, _cdhash = _verified_code_identity(destination)
     if actual_identifier != identifier:
@@ -870,10 +906,12 @@ def _signed_copy(
     return destination
 
 
-def _unsigned_copy(source: Path, destination: Path) -> Path:
+def stage_unsigned_executable(source: Path, destination: Path) -> Path:
+    """Stage executable bytes into a fresh inode, refusing any existing path."""
     if not source.is_file() or not os.access(source, os.X_OK):
         raise RuntimeError(f"the native build did not produce {source}")
-    _ = shutil.copyfile(source, destination)
+    with source.open("rb") as reader, destination.open("xb") as writer:
+        shutil.copyfileobj(reader, writer)
     os.chmod(destination, 0o500)
     return destination
 

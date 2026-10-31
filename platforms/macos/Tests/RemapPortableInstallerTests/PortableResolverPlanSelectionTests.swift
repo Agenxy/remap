@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 @testable import RemapPortableInstaller
 import RemapSystemKit
 import Testing

@@ -15,4 +15,4 @@ The source was generated with the built-in OpenAI image generator on
 > tiny interface elements.
 
 The icon is an original project asset. It is distributed under the repository's
-Apache-2.0 license.
+GPL-3.0-or-later license.

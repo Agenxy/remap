@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
 import RemapInstallKit
@@ -133,7 +134,7 @@ struct PortableCodeSigningIdentityStore: Sendable {
         let configuration = workspace.url.appendingPathComponent("codesign.cnf")
         let privateKey = workspace.url.appendingPathComponent("codesign.key.pem")
         let certificate = workspace.url.appendingPathComponent("codesign.cert.pem")
-        let archive = workspace.url.appendingPathComponent("codesign.p12")
+        let archive = workspace.url.appendingPathComponent(Self.archiveFileName)
         let password = try Self.randomHex(byteCount: 32)
         try Data(Self.opensslConfiguration.utf8).write(
             to: configuration,
@@ -168,14 +169,7 @@ struct PortableCodeSigningIdentityStore: Sendable {
         try Self.requirePrivateFile(archive.path, mode: 0o600, setMode: true)
         try requireSuccess(
             executable: "/usr/bin/security",
-            arguments: [
-                "import", archive.path,
-                "-k", PortableCodeSigningIdentity.systemKeychain,
-                "-P", password,
-                "-x",
-                "-T", "/usr/bin/codesign",
-                "-f", "pkcs12"
-            ],
+            arguments: Self.importArguments(archive: archive.path, password: password),
             operation: "store Remap's local signing key"
         )
         try requireSuccess(
@@ -187,6 +181,21 @@ struct PortableCodeSigningIdentityStore: Sendable {
             ],
             operation: "trust Remap's local signing certificate"
         )
+    }
+
+    /// macOS takes the key's label and its access-prompt description from the
+    /// archive's file name, and keeps the name only while it infers the format,
+    /// so the archive is named for the identity and no `-f` is passed.
+    static let archiveFileName = "\(PortableCodeSigningIdentity.name).p12"
+
+    static func importArguments(archive: String, password: String) -> [String] {
+        [
+            "import", archive,
+            "-k", PortableCodeSigningIdentity.systemKeychain,
+            "-P", password,
+            "-x",
+            "-T", "/usr/bin/codesign"
+        ]
     }
 
     private func requireSuccess(

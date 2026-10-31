@@ -1,7 +1,8 @@
+<img src="docs/icon.svg" width="72" height="72" alt="">
+
 # Remap
 
-Remap is a serious, cross-platform name override and service-routing utility
-for technical users.
+A cross-platform name override and service-routing utility for technical users.
 
 Its contract is direct:
 
@@ -54,11 +55,13 @@ Download these four files from the same Remap release:
 - `remap-release-installer.pem`
 
 Verify the public-key fingerprint is
-`SHA256:bG9pik9VV1jT2rZrsC7sYJCZOfc0tiuSrL05/v6FmtI`, then verify the detached
-package signature under the `remap-package-v1` namespace. The complete commands
-are in [the macOS tutorial](docs/tutorials/first-map-macos.md). This signature
-authenticates the downloaded package without relying on Apple or another paid
-certificate authority. The complete XAR also carries the pinned self-signed
+`SHA256:UNkUo9rEtVK+N92onnYn1C9d6U2cCkuTOYFvZIW/dgQ`, then verify the detached
+package signature under the `remap-package-v1` namespace. That key is a P-256
+key held in the release-building Mac's Secure Enclave, and every signature it
+made needed the owner's Touch ID or login password. The complete commands are
+in [the macOS tutorial](docs/tutorials/first-map-macos.md).
+This signature authenticates the downloaded package without relying on Apple or
+another paid certificate authority. The complete XAR also carries the pinned self-signed
 `Remap Release Installer` certificate so Apple Installer validates every
 package action before root execution.
 
@@ -67,7 +70,10 @@ a root-owned staging directory, re-verifies those exact bytes, and invokes
 Apple Installer on that immutable path. This closes the gap between signature
 verification and root execution without a paid Apple identity or notarization.
 
-The Apple Installer asks for administrator approval once. It then:
+The Apple Installer asks for administrator approval. Creating the local signing
+identity also records a trust setting, and macOS will not record one without interactive
+approval, so installation needs a graphical session on that Mac and cannot be done
+unattended or over SSH. It then:
 
 1. verifies the signed Remap release manifest and every packaged byte;
 2. creates or reuses `Remap Local Codesign` in the System keychain;
@@ -120,7 +126,7 @@ request a fresh install, update, or uninstall preview.
 ### macOS source build
 
 The native macOS source installation requires macOS 15 or later, GNU Make,
-`mise` 2026.9.8, and the full Xcode version at one of the reviewed builds
+`mise` 2026.10.23, and the full Xcode version at one of the reviewed builds
 recorded in [`platforms/macos/XCODE_VERSION`](platforms/macos/XCODE_VERSION). Xcode's
 command-line-tools-only package is insufficient because Remap builds and signs
 native Swift products. The Xcode IDE does not need to be opened.
@@ -151,7 +157,7 @@ does not download the browser test runtimes or contributor linters. Use
 
 `make install` requests administrator approval once. It installs the CLI,
 daemon, native resolver adapter, complete generated manual-page family, Bash,
-Fish, and Zsh completions, and exact Apache license notices under `/usr/local`;
+Fish, and Zsh completions, and the exact license notices under `/usr/local`;
 launchd owns the low ports while the daemon runs as the active non-root
 account. Before mutation, the preview enumerates every public path and any
 previous immutable generation that a successful update will purge. Activation
@@ -261,7 +267,7 @@ host clears `/run`. `make uninstall-cli` removes only a CLI-only installation.
 
 ## Architecture
 
-Rust 1.98.1 and edition 2024 own the portable engine, daemon, CLI, DNS protocol,
+Rust 1.99.1 and edition 2024 own the portable engine, daemon, CLI, DNS protocol,
 gateway, persistence, and synchronization. Swift remains deliberately present
 for the macOS app, Network Extension entry point, Service Management, XPC,
 Keychain, Secure Enclave, signing, and packaging.
@@ -326,6 +332,19 @@ platforms/macos          native Apple products and adapters
 platforms/linux          Linux lifecycle and resolver adapters
 ```
 
-Remap is licensed under the [Apache License 2.0](LICENSE). The name has passed a
-preliminary open-source ecosystem collision review; that is not a legal
-trademark opinion.
+Remap is licensed under the [GNU General Public License, version 3 or
+later](LICENSE), and was Apache-2.0 until 2026-10-09. Versions already published
+under Apache-2.0 stay Apache-2.0 permanently; the new licence applies from that
+commit onward, with no history rewritten and no tag moved. A commercial licence is
+offered alongside it for closed distribution: see
+[COMMERCIAL-LICENSING](COMMERCIAL-LICENSING.md), and
+[CONTRIBUTING](CONTRIBUTING.md) for what that asks of contributors.
+
+GPL rather than AGPL is deliberate, and the consequence belongs here rather than in
+a footnote: GPL obligations attach to distribution, not to network use, so a third
+party may run a modified `remapd` as a hosted service without publishing their
+changes. The commercial licence reaches anyone shipping binaries; it does not reach
+the hosted case.
+
+The name has passed a preliminary open-source ecosystem collision review; that is
+not a legal trademark opinion.

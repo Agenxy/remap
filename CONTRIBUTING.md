@@ -1,68 +1,36 @@
-# Contributing to Remap
+# Contributing
 
-Thank you for helping. Remap welcomes careful bug reports, design criticism,
-documentation, tests, accessibility improvements, platform work, and code.
+Two things are worth knowing before you spend time.
 
-Read [VALUES.md](VALUES.md), [SECURITY.md](SECURITY.md), and
-[the engineering standard](docs/engineering/STANDARDS.md) before making a large
-change. Architecture and security boundaries are deliberate; changes to them
-start with an ADR rather than an implementation surprise.
+## Licence
 
-## Development setup
+Remap is GPL-3.0-or-later, and a commercial licence is offered alongside it for people
+who cannot accept copyleft terms. See [COMMERCIAL-LICENSING](COMMERCIAL-LICENSING.md).
 
-Remap pins tools exactly with `mise`. Development requires GNU Make and the
-exact `mise` release named by `make setup`. Native macOS work also requires the
-full Xcode version, at one of the reviewed builds listed in
-[`platforms/macos/XCODE_VERSION`](platforms/macos/XCODE_VERSION); Xcode's
-command-line-tools-only package is insufficient, although the IDE need not be
-opened. The supported entry point installs every other pinned development
-dependency and runs the complete release gate:
+Offering both is possible only while one party holds the rights to the whole work.
+Contributions therefore need a contributor licence agreement or a copyright assignment
+before they can be merged. Raise the change first and the paperwork can be sorted out
+around it rather than ahead of it; nobody should fill in a form for a typo.
 
-```text
-make setup
-make check
+That asks something of you the GPL alone would not, which is worth saying plainly. The
+alternative is a project that cannot be offered commercially at all, and the dual
+licence is what is meant to keep it maintained.
+
+## New files
+
+Every first-party source file carries, as its first line after any shebang:
+
+```
+SPDX-License-Identifier: GPL-3.0-or-later
 ```
 
-People installing the native source product without a contributor environment
-can use `make setup-install`. It installs only the pinned Rust, Python, and `uv`
-tools needed by `make install`, then verifies the exact selected Xcode. It does
-not download the browser test runtimes or contributor linters.
+in whatever comment syntax the language uses.
 
-`make install` builds, previews, installs, activates, and verifies the complete
-native macOS product. `make install-cli` writes only the `remap` binary to
-`~/.local/bin` by default. Override that development-only prefix with
-`REMAP_INSTALL_ROOT=/another/prefix`; the selected `bin` directory must already
-be on `PATH`.
+## The gates
 
-`make` provides a familiar, discoverable front door for common commands. Its
-targets remain thin: substantive behavior belongs in a typed native tool such
-as `remap-quality`. Shell is appropriate for initial bootstrap and concise
-terminal composition, not as a hidden product implementation. Python
-automation, when justified, uses a locked `uv` project; process execution stays
-explicit, minimal, and limited to genuine tool boundaries.
+`make check` judges this working copy and needs no network, no reviewed toolchain and
+nothing installed outside the repository. Run it before you call a change done.
 
-## Change discipline
-
-- Keep one coherent purpose per change.
-- Add tests and documentation with behavior.
-- Use conventional commit subjects such as `feat:`, `fix:`, `docs:`, and
-  `refactor:`.
-- Treat every warning as an error.
-- Do not weaken gates, exclusions, baselines, tests, security invariants, or
-  acceptance criteria to make a change pass.
-- Do not introduce a dependency, unsafe block, build script, shellout, network
-  service, data collection, entitlement, or privilege without an explicit need
-  and review of its permanent cost.
-- Preserve Apache-2.0 notices and identify third-party work accurately.
-
-## Writing and interface work
-
-Use direct, specific language. Error messages state what failed, why it matters,
-and the next useful action. Help text should let a technically capable newcomer
-discover the product without external documentation. Avoid jokes in failure
-paths, generic enthusiasm, anthropomorphic software, and filler that obscures
-facts.
-
-Accessibility and internationalization are design inputs. Do not encode meaning
-only through color, assume a particular locale, or make structured output parse
-human prose.
+`make release-check` adds everything that protects a machine other than this one:
+dependency freshness, the enforced Xcode pin, release evidence, the isolated install
+check and the signed native package contract. It is the gate a release must pass.

@@ -1,85 +1,131 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::convert::Infallible;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
-use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Full};
+use http_body_util::BodyExt;
 use hyper::body::Incoming;
-use hyper::header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE, HOST, HeaderName};
+use hyper::header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE, HOST, HeaderName, LOCATION};
 use hyper::http::uri::{Authority, PathAndQuery};
+use hyper::upgrade::OnUpgrade;
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use remap_core::{
-    HostHeaderPolicy, HttpScheme, HttpUpstream, MappingTarget, PeerService, RemapName,
+    HostHeaderPolicy, HttpScheme, HttpUpstream, LandingPath, MappingTarget, MovedTarget,
+    PeerService, PeerTransport, RemapName, TemplateNameError,
 };
-use tokio::time::timeout;
+use rustls::pki_types::ServerName;
+use tokio::sync::OwnedSemaphorePermit;
 
-use crate::gateway::{PeerRouting, SelfRejectingConnector};
-use crate::peer::PeerResolveError;
+use crate::failure::{ProxyBody, RouteError, full_body};
+use crate::gateway::{PeerRouting, SelfRejectingConnector, pinned_tls_config};
+use crate::peer::{PeerResolveError, PeerResolver};
+use crate::stream_route::{Dialer, PinnedTls, SendError, StreamDial};
+use crate::tunnel::{self, Tunnels};
 use crate::{RuntimeIdentity, SnapshotStore};
 
 const HEALTH_HOST: &[u8] = b"_health.remap.invalid";
 const HEALTH_PATH_PREFIX: &str = "/.well-known/remap/health/";
 
 pub(crate) type ProxyClient = Client<HttpsConnector<SelfRejectingConnector>, Incoming>;
-type ProxyBody = BoxBody<Bytes, hyper::Error>;
 
-#[derive(Debug, Clone, Copy)]
-struct RouteError {
-    status: StatusCode,
-    code: &'static str,
-    message: &'static str,
+/// The mapping a request's Host selected, copied out of the snapshot.
+struct Matched {
+    /// The mapping's canonical pattern, which every later error names.
+    pattern: String,
+    /// The target this name routes to, or why the name cannot fill the
+    /// mapping's template (ADR-0032), reported with the pattern.
+    target: Result<MappingTarget, TemplateNameError>,
+    landing: Option<LandingPath>,
 }
 
-impl RouteError {
-    const fn new(status: StatusCode, code: &'static str, message: &'static str) -> Self {
-        Self {
-            status,
-            code,
-            message,
-        }
-    }
+/// A client's WebSocket switch, admitted and waiting for the upstream's answer.
+struct PendingUpgrade {
+    permit: OwnedSemaphorePermit,
+    client: OnUpgrade,
+}
 
-    fn response(self) -> Response<ProxyBody> {
-        gateway_error(self.status, self.code, self.message)
-    }
+/// Everything one gateway connection routes its requests with.
+#[derive(Clone)]
+pub(crate) struct Router {
+    pub(crate) client: ProxyClient,
+    pub(crate) snapshots: SnapshotStore,
+    pub(crate) upstream_timeout: Duration,
+    pub(crate) identity: Option<RuntimeIdentity>,
+    pub(crate) routing: PeerRouting,
+    pub(crate) tunnels: Tunnels,
 }
 
 pub(crate) async fn route(
     request: Request<Incoming>,
-    client: ProxyClient,
-    snapshots: SnapshotStore,
-    upstream_timeout: Duration,
-    identity: Option<RuntimeIdentity>,
-    routing: PeerRouting,
+    router: Router,
 ) -> Result<Response<ProxyBody>, Infallible> {
-    if let Some(response) = health_response(&request, identity.as_ref()) {
+    if let Some(response) = health_response(&request, router.identity.as_ref()) {
         return Ok(response);
     }
-    let (upstream, client) = match select_upstream(&request, &snapshots, &routing, client).await {
-        Ok(selected) => selected,
+    let matched = match matched_mapping(&request, &router.snapshots) {
+        Ok(matched) => matched,
         Err(error) => return Ok(error.response()),
     };
-    let request = match upstream_request(request, &upstream) {
-        Ok(request) => request,
-        Err(error) => return Ok(error.response()),
+    let pattern = matched.pattern.clone();
+    Ok(forward(request, matched, &router)
+        .await
+        .unwrap_or_else(|error| error.response_for(&pattern)))
+}
+
+/// Routes a request that matched a mapping. Every failure from here on is
+/// reported with that mapping's pattern (ADR-0028).
+async fn forward(
+    mut request: Request<Incoming>,
+    matched: Matched,
+    router: &Router,
+) -> Result<Response<ProxyBody>, RouteError> {
+    let target = matched.target.map_err(|error| {
+        RouteError::new(
+            StatusCode::NOT_FOUND,
+            "E_GATEWAY_TEMPLATE_NAME",
+            match error {
+                TemplateNameError::LabelCount { .. } => {
+                    "This name has a different number of labels before the mapping's suffix than its target template reads."
+                }
+                TemplateNameError::Field(_) => {
+                    "A label of this name is not a valid Supgang peer or service name where its target template places it."
+                }
+            },
+        )
+    })?;
+    let (upstream, dialer) = match target {
+        MappingTarget::Moved(target) => return Ok(moved_response(&request, &target)),
+        MappingTarget::Http(upstream) => (upstream, Dialer::Pooled(router.client.clone())),
+        MappingTarget::Peer(service) => match service.transport() {
+            PeerTransport::PinnedTls => peer_upstream(&service, &router.routing).await?,
+            PeerTransport::PlaintextInTunnel => {
+                plaintext_peer_upstream(&service, &router.routing).await?
+            }
+        },
+        MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => {
+            return Err(RouteError::new(
+                StatusCode::MISDIRECTED_REQUEST,
+                "E_GATEWAY_DIRECT_TARGET",
+                "This name is a direct DNS mapping, not a routed HTTP service.",
+            ));
+        }
     };
-    let response = match timeout(upstream_timeout, client.request(request)).await {
-        Ok(Ok(response)) => sanitize_response(response),
-        Ok(Err(_error)) => gateway_error(
-            StatusCode::BAD_GATEWAY,
-            "E_GATEWAY_UPSTREAM",
-            "The selected service did not accept the routed request.",
-        ),
-        Err(_elapsed) => gateway_error(
-            StatusCode::GATEWAY_TIMEOUT,
-            "E_GATEWAY_TIMEOUT",
-            "The selected service did not answer before the routing deadline.",
-        ),
-    };
-    Ok(response)
+    if let Some(response) = landing_response(&request, matched.landing.as_ref())? {
+        return Ok(response);
+    }
+    let upgrade = admit_upgrade(&mut request, &router.tunnels)?;
+    let request = upstream_request(request, &upstream, upgrade.is_some())?;
+    match dialer.send(request, router.upstream_timeout).await {
+        Ok(response) => match upgrade {
+            Some(pending) => switch_response(response, pending, &router.tunnels),
+            None => sanitize_response(response),
+        },
+        Err(SendError::Upstream(cause)) => Err(RouteError::upstream(cause)),
+        Err(SendError::Timeout) => Err(RouteError::timeout()),
+    }
 }
 
 fn health_response(
@@ -107,14 +153,11 @@ fn health_response(
         .ok()
 }
 
-/// The upstream for this request and the client to dial it with: the shared
-/// client for an HTTP mapping, the client for the advertised key for a peer.
-async fn select_upstream(
+/// The mapping this request's Host selects, or why there is none.
+fn matched_mapping(
     request: &Request<Incoming>,
     snapshots: &SnapshotStore,
-    routing: &PeerRouting,
-    client: ProxyClient,
-) -> Result<(HttpUpstream, ProxyClient), RouteError> {
+) -> Result<Matched, RouteError> {
     let name = client_name(request.headers())?;
     let snapshot = snapshots.load();
     let mapping = snapshot.resolve(&name).ok_or_else(|| {
@@ -124,15 +167,65 @@ async fn select_upstream(
             "This name is not mapped to a routed HTTP service.",
         )
     })?;
-    match mapping.target() {
-        MappingTarget::Http(upstream) => Ok((upstream.clone(), client)),
-        MappingTarget::Peer(service) => peer_upstream(service, routing).await,
-        MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => Err(RouteError::new(
-            StatusCode::MISDIRECTED_REQUEST,
-            "E_GATEWAY_DIRECT_TARGET",
-            "This name is a direct DNS mapping, not a routed HTTP service.",
-        )),
+    Ok(Matched {
+        pattern: mapping.pattern().to_string(),
+        target: mapping.target_for(&name),
+        landing: mapping.landing().cloned(),
+    })
+}
+
+fn moved_response(request: &Request<Incoming>, target: &MovedTarget) -> Response<ProxyBody> {
+    let scheme = request
+        .uri()
+        .scheme_str()
+        .filter(|scheme| matches!(*scheme, "http" | "https"))
+        .unwrap_or("http");
+    let path = request
+        .uri()
+        .path_and_query()
+        .filter(|path| path.as_str() != "*")
+        .map_or("/", PathAndQuery::as_str);
+    Response::builder()
+        .status(StatusCode::MOVED_PERMANENTLY)
+        .header(LOCATION, format!("{scheme}://{}{path}", target.name()))
+        .header(CACHE_CONTROL, "no-store")
+        .body(full_body(String::new()))
+        .unwrap_or_else(|_| {
+            RouteError::new(
+                StatusCode::BAD_REQUEST,
+                "E_GATEWAY_MOVED",
+                "The moved-name redirect could not be encoded.",
+            )
+            .response()
+        })
+}
+
+fn landing_response(
+    request: &Request<Incoming>,
+    landing: Option<&LandingPath>,
+) -> Result<Option<Response<ProxyBody>>, RouteError> {
+    let Some(landing) = landing else {
+        return Ok(None);
+    };
+    if request.uri().path() != "/"
+        || !matches!(*request.method(), Method::GET | Method::HEAD)
+        || tunnel::requests_websocket(request.headers())
+    {
+        return Ok(None);
     }
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header(LOCATION, landing.location(request.uri().query()))
+        .header(CACHE_CONTROL, "no-store")
+        .body(full_body(String::new()))
+        .map(Some)
+        .map_err(|_| {
+            RouteError::new(
+                StatusCode::BAD_REQUEST,
+                "E_GATEWAY_LANDING",
+                "The landing redirect could not be encoded.",
+            )
+        })
 }
 
 /// Turns a peer mapping into the upstream to dial now and the client that
@@ -141,32 +234,11 @@ async fn select_upstream(
 async fn peer_upstream(
     service: &PeerService,
     routing: &PeerRouting,
-) -> Result<(HttpUpstream, ProxyClient), RouteError> {
-    let Some(resolver) = routing.resolver.as_ref() else {
-        return Err(RouteError::new(
-            StatusCode::BAD_GATEWAY,
-            "E_GATEWAY_PEER_NO_SUPGANG",
-            "This name routes to a Supgang peer, and Supgang is not installed on this machine.",
-        ));
-    };
-    let destination = resolver
+) -> Result<(HttpUpstream, Dialer), RouteError> {
+    let destination = peer_resolver(routing)?
         .resolve(service.peer(), service.service())
         .await
-        .map_err(|error| {
-            let (code, message) = match error {
-                PeerResolveError::NotInstalled => ("E_GATEWAY_PEER_NO_SUPGANG", "Supgang is not installed on this machine."),
-                PeerResolveError::NoAddress => ("E_GATEWAY_PEER_UNREACHABLE", "The peer has no address this machine can reach right now."),
-                PeerResolveError::NoService => ("E_GATEWAY_PEER_NO_SERVICE", "The peer does not advertise the service this name routes to."),
-                PeerResolveError::Refused(_) => ("E_GATEWAY_PEER_UNKNOWN", "Supgang does not know the peer this name routes to."),
-                PeerResolveError::Schema(_) | PeerResolveError::Malformed(_) => ("E_GATEWAY_PEER_ANSWER", "Supgang's answer for the peer could not be read; update whichever of Remap or Supgang is older."),
-                PeerResolveError::Unavailable(_) => ("E_GATEWAY_PEER_UNAVAILABLE", "Supgang did not answer for the peer in time."),
-                PeerResolveError::Expired => (
-                    "E_GATEWAY_PEER_EXPIRED",
-                    "The peer's signed record has expired; nothing current says where it is.",
-                ),
-            };
-            RouteError::new(StatusCode::BAD_GATEWAY, code, message)
-        })?;
+        .map_err(|error| resolve_error(&error))?;
     let host = match destination.host {
         std::net::IpAddr::V4(address) => address.to_string(),
         std::net::IpAddr::V6(address) => format!("[{address}]"),
@@ -175,24 +247,118 @@ async fn peer_upstream(
         &format!("https://{host}:{}/", destination.port),
         service.host_header_policy(),
     )
-    .map_err(|_| {
-        RouteError::new(
-            StatusCode::BAD_GATEWAY,
-            "E_GATEWAY_PEER_ANSWER",
-            "The peer's advertised address could not be routed.",
-        )
-    })?;
+    .map_err(|_| peer_answer_error("The peer's advertised address could not be routed."))?;
     let client = routing
         .clients
         .client_for(destination.key_pin)
-        .map_err(|_| {
-            RouteError::new(
-                StatusCode::BAD_GATEWAY,
-                "E_GATEWAY_PEER_TLS",
-                "A TLS client for the peer's advertised key could not be prepared.",
-            )
-        })?;
-    Ok((upstream, client))
+        .map_err(|_| peer_tls_error())?;
+    let Some(streams) = routing.streams.clone() else {
+        return Ok((upstream, Dialer::Pooled(client)));
+    };
+    let config = pinned_tls_config(destination.key_pin).map_err(|_| peer_tls_error())?;
+    let server_name = ServerName::IpAddress(destination.host.into());
+    Ok((
+        upstream,
+        Dialer::Stream(StreamDial {
+            streams,
+            node: destination.node_id,
+            service: service.service().to_owned(),
+            tls: Some(PinnedTls {
+                config: Arc::new(config),
+                server_name,
+            }),
+            fallback: Some(client),
+        }),
+    ))
+}
+
+/// A plaintext-in-tunnel peer service: reached only through Supgang's stream,
+/// addressed to the target's own loopback, and refused outright without one.
+async fn plaintext_peer_upstream(
+    service: &PeerService,
+    routing: &PeerRouting,
+) -> Result<(HttpUpstream, Dialer), RouteError> {
+    let resolver = peer_resolver(routing)?;
+    let Some(streams) = routing.streams.clone() else {
+        return Err(RouteError::new(
+            StatusCode::BAD_GATEWAY,
+            "E_GATEWAY_PEER_NO_TUNNEL",
+            "This name routes to a plaintext service inside Supgang's tunnel, and no tunnel endpoint is available.",
+        ));
+    };
+    let node = resolver
+        .resolve_node(service.peer())
+        .await
+        .map_err(|error| resolve_error(&error))?;
+    let upstream =
+        HttpUpstream::parse_with_policy("http://localhost/", service.host_header_policy())
+            .map_err(|_| peer_answer_error("The tunnelled service could not be addressed."))?;
+    Ok((
+        upstream,
+        Dialer::Stream(StreamDial {
+            streams,
+            node,
+            service: service.service().to_owned(),
+            tls: None,
+            fallback: None,
+        }),
+    ))
+}
+
+fn peer_resolver(routing: &PeerRouting) -> Result<&Arc<dyn PeerResolver>, RouteError> {
+    routing.resolver.as_ref().ok_or_else(|| {
+        RouteError::new(
+            StatusCode::BAD_GATEWAY,
+            "E_GATEWAY_PEER_NO_SUPGANG",
+            "This name routes to a Supgang peer, and Supgang is not installed on this machine.",
+        )
+    })
+}
+
+const fn peer_answer_error(message: &'static str) -> RouteError {
+    RouteError::new(StatusCode::BAD_GATEWAY, "E_GATEWAY_PEER_ANSWER", message)
+}
+
+const fn peer_tls_error() -> RouteError {
+    RouteError::new(
+        StatusCode::BAD_GATEWAY,
+        "E_GATEWAY_PEER_TLS",
+        "A TLS client for the peer's advertised key could not be prepared.",
+    )
+}
+
+fn resolve_error(error: &PeerResolveError) -> RouteError {
+    let (code, message) = match error {
+        PeerResolveError::NotInstalled => (
+            "E_GATEWAY_PEER_NO_SUPGANG",
+            "Supgang is not installed on this machine.",
+        ),
+        PeerResolveError::NoAddress => (
+            "E_GATEWAY_PEER_UNREACHABLE",
+            "The peer has no address this machine can reach right now.",
+        ),
+        PeerResolveError::NoService => (
+            "E_GATEWAY_PEER_NO_SERVICE",
+            "The peer does not advertise the service this name routes to.",
+        ),
+        PeerResolveError::Refused(_) => (
+            "E_GATEWAY_PEER_UNKNOWN",
+            "Supgang does not know the peer this name routes to.",
+        ),
+        PeerResolveError::Schema(_) | PeerResolveError::Malformed(_) => (
+            "E_GATEWAY_PEER_ANSWER",
+            "Supgang's answer for the peer could not be read; update whichever of Remap or Supgang is older.",
+        ),
+        PeerResolveError::Unavailable(_) => (
+            "E_GATEWAY_PEER_UNAVAILABLE",
+            "Supgang did not answer for the peer in time.",
+        ),
+        PeerResolveError::Expired => (
+            "E_GATEWAY_PEER_EXPIRED",
+            "The peer's signed record has expired; nothing current says where it is.",
+        ),
+    };
+    RouteError::new(StatusCode::BAD_GATEWAY, code, message)
 }
 
 fn client_name(headers: &HeaderMap) -> Result<RemapName, RouteError> {
@@ -216,9 +382,57 @@ const fn invalid_host(message: &'static str) -> RouteError {
     RouteError::new(StatusCode::BAD_REQUEST, "E_GATEWAY_HOST", message)
 }
 
+/// Takes a tunnel slot and the client's side of the switch when the request
+/// asks for WebSocket; any other request passes untouched.
+fn admit_upgrade(
+    request: &mut Request<Incoming>,
+    tunnels: &Tunnels,
+) -> Result<Option<PendingUpgrade>, RouteError> {
+    if !tunnel::requests_websocket(request.headers()) {
+        return Ok(None);
+    }
+    let permit = tunnels.admit().ok_or_else(|| {
+        RouteError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "E_GATEWAY_TUNNEL_LIMIT",
+            "The gateway is carrying as many WebSocket connections as it allows.",
+        )
+    })?;
+    Ok(Some(PendingUpgrade {
+        permit,
+        client: hyper::upgrade::on(request),
+    }))
+}
+
+/// The upstream's answer to a WebSocket request. A refusal is relayed like
+/// any response; a switch is relayed and the two connections joined.
+fn switch_response(
+    mut response: Response<Incoming>,
+    pending: PendingUpgrade,
+    tunnels: &Tunnels,
+) -> Result<Response<ProxyBody>, RouteError> {
+    if response.status() != StatusCode::SWITCHING_PROTOCOLS {
+        return sanitize_response(response);
+    }
+    if !tunnel::upgrades_to_websocket(response.headers()) {
+        return Err(RouteError::new(
+            StatusCode::BAD_GATEWAY,
+            "E_GATEWAY_UPGRADE",
+            "The selected service switched to a protocol other than the WebSocket requested.",
+        ));
+    }
+    let upstream = hyper::upgrade::on(&mut response);
+    tunnels.spawn(pending.permit, pending.client, upstream);
+    let (mut parts, body) = response.into_parts();
+    remove_hop_by_hop(&mut parts.headers);
+    tunnel::mark_websocket(&mut parts.headers);
+    Ok(Response::from_parts(parts, body.boxed()))
+}
+
 fn upstream_request(
     request: Request<Incoming>,
     upstream: &HttpUpstream,
+    websocket: bool,
 ) -> Result<Request<Incoming>, RouteError> {
     let authority = upstream_authority(upstream);
     let path = upstream_path(upstream.base_path(), request.uri())?;
@@ -241,6 +455,9 @@ fn upstream_request(
     let (mut parts, body) = request.into_parts();
     parts.uri = uri;
     remove_hop_by_hop(&mut parts.headers);
+    if websocket {
+        tunnel::mark_websocket(&mut parts.headers);
+    }
     if upstream.host_header_policy() == HostHeaderPolicy::UseUpstream {
         let host = authority.parse().map_err(|_| {
             RouteError::new(
@@ -283,10 +500,19 @@ fn upstream_path(base_path: &str, incoming: &Uri) -> Result<PathAndQuery, RouteE
     })
 }
 
-fn sanitize_response(response: Response<Incoming>) -> Response<ProxyBody> {
+fn sanitize_response(response: Response<Incoming>) -> Result<Response<ProxyBody>, RouteError> {
     let (mut parts, body) = response.into_parts();
+    if parts.status == StatusCode::SWITCHING_PROTOCOLS {
+        // Only `switch_response` relays a switch, and only one the client
+        // asked for; any other would leave the client on a dead protocol.
+        return Err(RouteError::new(
+            StatusCode::BAD_GATEWAY,
+            "E_GATEWAY_UPGRADE",
+            "The selected service switched protocols without being asked to.",
+        ));
+    }
     remove_hop_by_hop(&mut parts.headers);
-    Response::from_parts(parts, body.boxed())
+    Ok(Response::from_parts(parts, body.boxed()))
 }
 
 fn remove_hop_by_hop(headers: &mut HeaderMap) {
@@ -313,23 +539,4 @@ fn remove_hop_by_hop(headers: &mut HeaderMap) {
     ] {
         headers.remove(name);
     }
-}
-
-fn gateway_error(
-    status: StatusCode,
-    code: &'static str,
-    message: &'static str,
-) -> Response<ProxyBody> {
-    let body = format!("Remap could not route this request.\n\n{code}: {message}\n");
-    Response::builder()
-        .status(status)
-        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(full_body(body))
-        .unwrap_or_else(|_error| Response::new(full_body("Remap routing error.\n")))
-}
-
-fn full_body(value: impl Into<Bytes>) -> ProxyBody {
-    Full::new(value.into())
-        .map_err(|never| match never {})
-        .boxed()
 }

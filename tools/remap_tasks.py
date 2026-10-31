@@ -1,3 +1,9 @@
+#!/usr/bin/env -S uv run --script
+# SPDX-License-Identifier: GPL-3.0-or-later
+# /// script
+# requires-python = ">=3.14"
+# dependencies = []
+# ///
 """Typed development, verification, and CLI installation tasks for Remap."""
 
 from __future__ import annotations
@@ -9,15 +15,19 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
-import tomllib
-
 from tools.remap_app import build as build_native_app
 from tools.remap_app import launch as launch_native_app
-from tools.remap_freshness import mise_tool_version, verify_selected_xcode
+from tools.remap_freshness import (
+    mise_tool_version,
+    release_toolchain_required,
+    require_release_toolchain,
+    verify_selected_xcode,
+)
 from tools.remap_help import print_task_help
 from tools.remap_linux_install import (
     install_or_update as install_or_update_linux,
@@ -41,6 +51,7 @@ from tools.remap_macos_portable_package import build as build_portable_macos_pac
 from tools.remap_macos_release_installer_signing import (
     ensure_release_installer_identity,
 )
+from tools.remap_macos_signing import ensure_local_codesigning_identity
 from tools.remap_macos_verified_package_install import install_verified_package
 from tools.remap_package import (
     cargo_target_directory,
@@ -51,6 +62,11 @@ from tools.remap_package import verify as verify_crate_packages
 from tools.remap_release_evidence import create as create_release_evidence
 from tools.remap_release_evidence import verify as verify_release_evidence
 from tools.remap_release_model import ArtifactSpec
+from tools.remap_release_signing import (
+    PackageKind,
+    preflight,
+    selected_signing,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 MISE_DOCUMENT = tomllib.loads((ROOT / "mise.toml").read_text(encoding="utf-8"))
@@ -96,6 +112,8 @@ PYTHON_PATHS = (
     "tools/remap_release_artifacts.py",
     "tools/remap_release_inventory.py",
     "tools/remap_release_model.py",
+    "tools/remap_release_signing.py",
+    "tests/python/test_app.py",
     "tests/python/test_docs.py",
     "tests/python/test_freshness.py",
     "tests/python/test_linux_bootstrap.py",
@@ -114,6 +132,7 @@ PYTHON_PATHS = (
     "tests/python/test_native_package.py",
     "tests/python/test_package.py",
     "tests/python/test_release_evidence.py",
+    "tests/python/test_release_signing.py",
     "tests/python/test_tasks.py",
 )
 WORKSPACE_DOCUMENT = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
@@ -171,6 +190,10 @@ def installation_root() -> Path:
     return root.resolve()
 
 
+# Whether the reviewed-toolchain pin refuses, rather than reports. `make check` judges
+# code and distributes nothing, so it reports; `make release-check` and every packaging
+# path set this and enforce the pin, because an artifact someone else installs must be
+# able to name the compiler that produced it.
 def task_help() -> None:
     """Print the stable Make-facing task catalog."""
     print_task_help()
@@ -178,6 +201,10 @@ def task_help() -> None:
 
 def task_setup() -> None:
     """Install pinned compilers, analyzers, packages, and browser runtime."""
+    # mise refuses to read a configuration file it has not been told to trust, so in a
+    # fresh clone every later `mise` call fails until this runs. Running the repository's
+    # own setup task is the act of trusting it.
+    run(("mise", "trust", "--quiet"))
     run(("mise", "install"))
     run(("mise", "exec", "--", "bun", "install", "--frozen-lockfile"))
     run(
@@ -225,7 +252,7 @@ def task_format() -> None:
 
 
 def task_test() -> None:
-    """Run every supported Rust, Swift, Python, and browser test target."""
+    """Run development tests; the signed native image contract is release-only."""
     run(
         (
             "mise",
@@ -241,7 +268,6 @@ def task_test() -> None:
     if sys.platform == "darwin":
         verify_selected_xcode()
         run(("xcrun", "swift", "test", "--package-path", "platforms/macos"))
-        verify_generated_package_contract(ROOT, PRODUCT_VERSION)
     run(
         (
             "mise",
@@ -267,7 +293,22 @@ def task_quality() -> None:
     run(("mise", "exec", "--", "ruff", "format", "--check", *PYTHON_PATHS))
     run(("mise", "exec", "--", "basedpyright", *PYTHON_PATHS))
     if sys.platform == "darwin":
-        run(("mise", "exec", "--", "swiftformat", "--lint", "platforms/macos"))
+        # Both Swift linters keep a cache under `target/`, and the quality gate runs
+        # before anything builds, so in a fresh clone that directory does not exist yet
+        # and swiftformat exits 70 rather than creating it.
+        (ROOT / "target").mkdir(parents=True, exist_ok=True)
+        run(
+            (
+                "mise",
+                "exec",
+                "--",
+                "swiftformat",
+                "--lint",
+                "platforms/macos",
+                "--cache",
+                str(ROOT / "target/swiftformat.cache"),
+            )
+        )
         run(
             (
                 "mise",
@@ -276,6 +317,8 @@ def task_quality() -> None:
                 "swiftlint",
                 "lint",
                 "--strict",
+                "--cache-path",
+                str(ROOT / "target/swiftlint-cache"),
                 "--config",
                 ".swiftlint.yml",
             )
@@ -313,7 +356,12 @@ def task_build_macos_app() -> Path:
     """Build and verify one project-local native application bundle."""
     require_macos()
     verify_selected_xcode()
-    return build_native_app(ROOT, PRODUCT_VERSION, release=False)
+    identity = (
+        ensure_local_codesigning_identity() if release_toolchain_required() else None
+    )
+    return build_native_app(
+        ROOT, PRODUCT_VERSION, release=False, signing_identity=identity
+    )
 
 
 def task_run_macos_app() -> None:
@@ -329,25 +377,39 @@ def task_verify_macos_app() -> None:
 
 
 def task_package_macos() -> None:
-    """Build the prebuilt package that signs Remap locally on the target Mac."""
+    """Build the prebuilt package that signs Remap locally on the target Mac.
+
+    The kind of package is chosen once, here, and never mixed: a development package
+    (`REMAP_DEVELOPMENT_PACKAGE=1`) is signed by the development file key named by
+    `REMAP_RELEASE_SIGNING_KEY`; a release package is signed by the Secure Enclave key
+    whose blob `REMAP_RELEASE_SE_KEY` names, and by nothing else.
+    """
     require_macos()
-    configured_key = os.environ.get("REMAP_RELEASE_SIGNING_KEY")
-    if not configured_key:
-        raise RuntimeError(
-            "REMAP_RELEASE_SIGNING_KEY must name Remap's dedicated release key; "
-            + "a personal SSH key is never selected automatically"
-        )
-    key = Path(configured_key).expanduser()
-    output = ROOT / "dist" / f"Remap-{PRODUCT_VERSION}-{platform.machine()}.pkg"
+    signing = selected_signing(os.environ)
+    # Refuse a mismatched key or pin before asking the keychain for anything.
+    preflight(ROOT, signing)
+    development = signing.kind is PackageKind.DEVELOPMENT
+    suffix = "-development" if development else ""
+    output = ROOT / "dist" / f"Remap-{PRODUCT_VERSION}-{platform.machine()}{suffix}.pkg"
     package = build_portable_macos_package(
         ROOT,
         product_version=PRODUCT_VERSION,
         output=output,
-        signing_key=key,
-        installer_identity=ensure_release_installer_identity(ROOT),
+        signing=signing,
+        # A development package is installed on the machine that built it, so it needs
+        # no Apple installer signature and therefore no keychain and no person.
+        installer_identity=(
+            None if development else ensure_release_installer_identity(ROOT)
+        ),
     )
     print(f"Built {package.path} (SHA-256 {package.sha256})")
     print(f"Signed {package.signature_path} " + f"(SHA-256 {package.signature_sha256})")
+    if development:
+        print(
+            "This package is signed by a development key held in a file, not by "
+            + "hardware. Its signature establishes that these bytes came from this "
+            + "machine and nothing more. Do not distribute it."
+        )
 
 
 def task_install_package_macos() -> None:
@@ -570,9 +632,18 @@ def task_install_check() -> None:
 
 
 def task_check() -> None:
-    """Run the complete reproducible local release gate."""
+    """Run the development gate: everything that judges this working copy.
+
+    Not the release gate. This must pass on any Mac or Linux box with the pinned
+    tools installed, without network access to a package registry, without the
+    reviewed Xcode, and without upgrading anything outside the repository. A gate a
+    contributor cannot run is a gate nobody runs.
+
+    Installation checks belong to release-check: neither the isolated CLI install
+    nor the certificate-backed native image contract is a development prerequisite.
+    Building the development app requires no keychain item or trust approval.
+    """
     verify_policy_copies(ROOT, PRODUCT_VERSION)
-    task_dependencies()
     task_quality()
     run(("mise", "exec", "--", "cargo", "fmt", "--all", "--check"))
     run(
@@ -594,12 +665,31 @@ def task_check() -> None:
     task_test()
     macos_bundle = task_build_macos_app() if sys.platform == "darwin" else None
     verify_packages()
-    if macos_bundle is not None:
-        verify_release_evidence_in_isolation()
     task_docs()
-    task_install_check()
-    if macos_bundle is not None:
+    if macos_bundle is not None and release_toolchain_required():
+        verify_release_evidence_in_isolation()
         verify_macos_release_metadata(macos_bundle)
+
+
+def task_release_check() -> None:
+    """Run the complete reproducible release gate: the development gate and more.
+
+    What this adds is everything that protects a machine other than this one: pins
+    current with their registries, advisories and licences clean, the reviewed
+    toolchain enforced rather than reported, release evidence rebuilt in isolation,
+    and the linked SDK stamped as expected. It needs the network and a reviewed
+    Xcode, and it is the gate a release must pass. This gate also owns the isolated
+    CLI install-check and macOS's generated native package contract. The latter
+    builds certificate-backed products and may require keychain or trust approval;
+    it must never run as a prerequisite for the development gate.
+    """
+    require_release_toolchain()
+    task_dependencies()
+    if sys.platform == "darwin":
+        # Produce the native binaries before task_check's release metadata checks.
+        verify_generated_package_contract(ROOT, PRODUCT_VERSION)
+    task_check()
+    task_install_check()
 
 
 def verify_macos_release_metadata(bundle: Path) -> None:
@@ -635,6 +725,7 @@ TASKS: dict[str, Callable[[], None]] = {
     "setup": task_setup,
     "format": task_format,
     "check": task_check,
+    "release-check": task_release_check,
     "test": task_test,
     "quality": task_quality,
     "dependencies": task_dependencies,

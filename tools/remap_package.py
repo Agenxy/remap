@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Exact local verification for unpublished Remap Cargo packages."""
 
 from __future__ import annotations
@@ -8,10 +9,9 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import cast
-
-import tomllib
 
 
 def verify_policy_copies(root: Path, product_version: str) -> None:
@@ -55,6 +55,23 @@ def verify_exact_copies(
             )
 
 
+def share_registry_cache(cargo_home: Path) -> Path | None:
+    """Point a private Cargo home at the machine's registry cache.
+
+    The private home exists to hold generated `[patch]` configuration, not to make
+    every dependency be fetched again. Without this the development gate cannot run
+    without network access even where every dependency is already cached.
+    """
+    shared = Path(os.environ.get("CARGO_HOME") or Path.home() / ".cargo") / "registry"
+    if not shared.is_dir():
+        return None
+    link = cargo_home / "registry"
+    if link.exists() or link.is_symlink():
+        return link
+    link.symlink_to(shared, target_is_directory=True)
+    return link
+
+
 def verify(root: Path, version: str, workspace: dict[str, object]) -> None:
     """Compile the exact unpublished crate archives against one another."""
     sources = workspace_sources(root, workspace)
@@ -67,6 +84,7 @@ def verify(root: Path, version: str, workspace: dict[str, object]) -> None:
         verification_root = Path(directory)
         cargo_home = verification_root / "cargo-home"
         cargo_home.mkdir()
+        _ = share_registry_cache(cargo_home)
         graph = dependency_graph(sources)
         package_environment = os.environ.copy()
         package_environment["CARGO_HOME"] = str(cargo_home)

@@ -84,6 +84,9 @@
     "Address or service URL" : {
 
     },
+    "Advisory" : {
+      "comment" : "Non-blocking guidance returned by the mapping authority."
+    },
     "After" : {
       "comment" : "Label for a mapping value after a reviewed operation."
     },
@@ -291,6 +294,12 @@
     "Kind" : {
 
     },
+    "Landing path" : {
+      "comment" : "Same-origin page opened by root GET or HEAD requests."
+    },
+    "Landing path (optional)" : {
+      "comment" : "Editor field for the optional same-origin page."
+    },
     "Map a hostname to an address or routed service." : {
 
     },
@@ -331,7 +340,7 @@
 
     },
     "None" : {
-      "comment" : "Value meaning that no service, account, or dependency is used."
+      "comment" : "Value meaning that no landing page, service, account, or dependency is used."
     },
     "Not available" : {
 
@@ -347,6 +356,9 @@
     },
     "Opens a review of the exact state change" : {
 
+    },
+    "Optional same-origin page for root requests. Clear to remove the landing path." : {
+      "comment" : "Accessibility guidance for the landing-path editor field."
     },
     "Opens the mapping editor" : {
 

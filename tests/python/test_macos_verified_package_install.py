@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Root-owned staging contract for verified macOS packages."""
 
 from __future__ import annotations
@@ -10,18 +11,102 @@ from unittest import mock
 
 from tools import remap_macos_verified_package_install as verified_install
 
+RELEASE_PIN = "ecdsa-sha2-nistp256 release-key remap-release-v2\n"
+DEVELOPMENT_PIN = "ssh-ed25519 development-key remap-release-development-only\n"
+
+
+def _pinned_root(directory: str, *, release: str = RELEASE_PIN) -> Path:
+    root = Path(directory)
+    pins = root / "docs/release"
+    pins.mkdir(parents=True)
+    _ = (pins / "remap-release-signing-key.pub").write_text(release, encoding="utf-8")
+    _ = (pins / "remap-development-signing-key.pub").write_text(
+        DEVELOPMENT_PIN, encoding="utf-8"
+    )
+    return root
+
 
 class MacOSVerifiedPackageInstallTests(unittest.TestCase):
+    def _install(
+        self, root: Path, name: str, environment: dict[str, str]
+    ) -> tuple[list[str], list[Path], list[tuple[str, ...]]]:
+        """Install with every effect recorded; returns pins, installer checks, commands."""
+        package = root / name
+        signature = root / f"{name}.sig"
+        _ = package.write_bytes(b"package")
+        _ = signature.write_bytes(b"signature")
+        pins: list[str] = []
+        installer_checks: list[Path] = []
+        commands: list[tuple[str, ...]] = []
+
+        def verify(
+            _path: Path,
+            _signature: Path,
+            *,
+            public_key: str,
+            expected_package_owner_uid: int | None = None,
+        ) -> None:
+            del expected_package_owner_uid
+            pins.append(public_key)
+
+        def run(arguments: tuple[str, ...], *, check: bool = True) -> None:
+            del check
+            commands.append(arguments)
+
+        def check_installer(path: Path, _certificate: Path) -> None:
+            installer_checks.append(path)
+
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch.object(verified_install, "_run", side_effect=run),
+            mock.patch.object(verified_install, "verify_staging"),
+            mock.patch.object(
+                verified_install,
+                "verify_package_signature",
+                side_effect=check_installer,
+            ),
+            mock.patch.object(
+                verified_install,
+                "verify_detached_package_signature",
+                side_effect=verify,
+            ),
+        ):
+            verified_install.install_verified_package(root, package, signature)
+        return pins, installer_checks, commands
+
+    def test_a_release_package_verifies_against_the_release_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = _pinned_root(directory)
+            pins, installer_checks, _ = self._install(root, "Remap.pkg", {})
+        self.assertEqual(pins, [RELEASE_PIN, RELEASE_PIN])
+        self.assertEqual(len(installer_checks), 2)
+
+    def test_a_development_package_verifies_only_on_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = _pinned_root(directory)
+            pins, installer_checks, _ = self._install(
+                root,
+                "Remap-0.2.0-arm64-development.pkg",
+                {"REMAP_DEVELOPMENT_PACKAGE": "1"},
+            )
+            self.assertEqual(pins, [DEVELOPMENT_PIN, DEVELOPMENT_PIN])
+            self.assertEqual(installer_checks, [])
+            with self.assertRaisesRegex(RuntimeError, "REMAP_DEVELOPMENT_PACKAGE=1"):
+                _ = self._install(root, "Remap-0.2.0-arm64-development.pkg", {})
+
+    def test_a_development_marked_release_pin_verifies_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = _pinned_root(directory, release=DEVELOPMENT_PIN)
+            with self.assertRaisesRegex(RuntimeError, "still the development key"):
+                _ = self._install(root, "Remap.pkg", {})
+
     def test_package_is_reverified_after_root_owned_copy_before_installer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = _pinned_root(directory)
             package = root / "Remap.pkg"
             signature = root / "Remap.pkg.sig"
-            public_key = root / "docs/release/remap-release-signing-key.pub"
-            public_key.parent.mkdir(parents=True)
             _ = package.write_bytes(b"package")
             _ = signature.write_bytes(b"signature")
-            _ = public_key.write_text("ssh-ed25519 public-key\n", encoding="utf-8")
             calls: list[tuple[str, ...]] = []
             verifications: list[tuple[Path, int | None]] = []
             package_signatures: list[Path] = []
@@ -44,6 +129,7 @@ class MacOSVerifiedPackageInstallTests(unittest.TestCase):
                 package_signatures.append(path)
 
             with (
+                mock.patch.dict(os.environ, {}, clear=True),
                 mock.patch.object(verified_install, "_run", side_effect=run),
                 mock.patch.object(verified_install, "verify_staging"),
                 mock.patch.object(

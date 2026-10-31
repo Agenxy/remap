@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
 import Security
@@ -10,8 +11,7 @@ enum MacOSLaunchdObservation: Equatable, Sendable {
 protocol MacOSLaunchdControlling: Sendable {
     func observation(label: String) throws -> MacOSLaunchdObservation
     func bootstrap(plistPath: InstallAbsolutePath) throws
-    func bootout(label: String) throws
-    func enable(label: String) throws
+    func bootout(label: String, expected: MacOSLaunchdObservation) throws
     func kickstart(label: String) throws
 }
 
@@ -22,9 +22,11 @@ protocol MacOSLaunchdControlling: Sendable {
 /// executable as Apple code, bounds runtime and output, and independently observes every effect.
 struct NativeMacOSLaunchdController: MacOSLaunchdControlling, Sendable {
     private let runner: any LaunchctlRunning
+    private let unloadTimeout: Duration
 
-    init(runner: any LaunchctlRunning = NativeLaunchctlRunner()) {
+    init(runner: any LaunchctlRunning = NativeLaunchctlRunner(), unloadTimeout: Duration = .seconds(5)) {
         self.runner = runner
+        self.unloadTimeout = unloadTimeout
     }
 
     func observation(label: String) throws -> MacOSLaunchdObservation {
@@ -51,12 +53,27 @@ struct NativeMacOSLaunchdController: MacOSLaunchdControlling, Sendable {
         try requireSuccess(.bootstrap(plistPath: plistPath), operation: "load the launchd service")
     }
 
-    func bootout(label: String) throws {
+    func bootout(label: String, expected: MacOSLaunchdObservation) throws {
+        let departing = try observation(label: label)
+        guard departing != .missing else { return }
+        guard departing == expected else {
+            throw InstallError.collision("launchd service \(label)")
+        }
         try requireSuccess(.bootout(label: label), operation: "unload the launchd service")
-    }
-
-    func enable(label: String) throws {
-        try requireSuccess(.enable(label: label), operation: "enable the launchd service")
+        let deadline = ContinuousClock.now.advanced(by: unloadTimeout)
+        while true {
+            let current = try observation(label: label)
+            if current == .missing {
+                return
+            }
+            guard current == departing else {
+                throw InstallError.collision("launchd service \(label)")
+            }
+            guard ContinuousClock.now < deadline else {
+                throw InstallError.integrity("launchd did not unload \(label) before the teardown deadline")
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
     }
 
     func kickstart(label: String) throws {
@@ -70,11 +87,14 @@ struct NativeMacOSLaunchdController: MacOSLaunchdControlling, Sendable {
         }
     }
 
+    /// The service's own value for `key`: the line one tab deep, where
+    /// `launchctl print` puts the service's fields. Deeper lines belong to
+    /// nested dictionaries (a Unix socket under `Sockets` has a `path` too)
+    /// and are not the service's.
     private func field(_ key: String, in output: String) -> String? {
-        let prefix = key + " = "
+        let prefix = "\t" + key + " = "
         let values = output.split(separator: "\n").compactMap { line -> String? in
-            let value = line.trimmingCharacters(in: .whitespaces)
-            return value.hasPrefix(prefix) ? String(value.dropFirst(prefix.count)) : nil
+            line.hasPrefix(prefix) ? String(line.dropFirst(prefix.count)) : nil
         }
         return values.count == 1 ? values[0] : nil
     }
@@ -83,7 +103,6 @@ struct NativeMacOSLaunchdController: MacOSLaunchdControlling, Sendable {
 enum LaunchctlCommand: Equatable, Sendable {
     case bootstrap(plistPath: InstallAbsolutePath)
     case bootout(label: String)
-    case enable(label: String)
     case kickstart(label: String)
     case print(label: String)
 
@@ -93,8 +112,6 @@ enum LaunchctlCommand: Equatable, Sendable {
             ["bootstrap", "system", plistPath.value]
         case let .bootout(label):
             ["bootout", "system/\(label)"]
-        case let .enable(label):
-            ["enable", "system/\(label)"]
         case let .kickstart(label):
             ["kickstart", "-k", "system/\(label)"]
         case let .print(label):
@@ -242,7 +259,7 @@ public enum MacOSInstallerServiceLaunchd {
     }
 
     public static func bootout() throws {
-        try NativeMacOSLaunchdController().bootout(label: label)
+        try bootoutIfLoaded()
     }
 
     public static func bootoutIfLoaded() throws {
@@ -255,7 +272,7 @@ public enum MacOSInstallerServiceLaunchd {
         case .missing:
             return
         case expected:
-            try controller.bootout(label: label)
+            try controller.bootout(label: label, expected: expected)
         default:
             throw InstallError.collision("system/\(label)")
         }

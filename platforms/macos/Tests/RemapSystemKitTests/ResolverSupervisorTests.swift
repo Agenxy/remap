@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 @testable import RemapSystemKit
 import Synchronization
@@ -26,7 +27,7 @@ func supervisorPollsDaemonHealthAndReportsStateTransitionsOnce() async throws {
     )
 
     let task = Task { await supervisor.run() }
-    try await Task.sleep(for: .milliseconds(35))
+    try await eventually { channel.healthCount() >= 2 }
     task.cancel()
     await task.value
     monitor.finish()
@@ -58,7 +59,7 @@ func supervisorKeepsMonitorFailureVisibleWhilePolling() async throws {
     )
 
     let task = Task { await supervisor.run() }
-    try await Task.sleep(for: .milliseconds(25))
+    try await eventually { channel.healthCount() >= 2 }
     task.cancel()
     await task.value
     monitor.finish()
@@ -67,7 +68,7 @@ func supervisorKeepsMonitorFailureVisibleWhilePolling() async throws {
 }
 
 @Test
-func supervisorRestoresOrdinaryDNSAfterSustainedChannelFailure() async throws {
+func supervisorRestoresOrdinaryDNSPromptlyAfterAChannelFault() async throws {
     let record = try supervisorRecord()
     let monitor = TestResolverMonitor()
     let states = Mutex<[ResolverSupervisorState]>([])
@@ -87,14 +88,12 @@ func supervisorRestoresOrdinaryDNSAfterSustainedChannelFailure() async throws {
         monitor: monitor,
         interval: .seconds(60),
         retryInterval: .milliseconds(1),
-        maximumConsecutiveFailures: 3,
+        failureGrace: .seconds(3600),
         observe: { state in states.withLock { $0.append(state) } }
     )
 
     let task = Task { await supervisor.run() }
-    for _ in 0 ..< 100 where !states.withLock({ $0.contains(.bypassed(code: "E_RESOLVER_SAFE_BYPASS")) }) {
-        try await Task.sleep(for: .milliseconds(1))
-    }
+    try await eventually { states.withLock { $0.contains(.bypassed(code: "E_RESOLVER_SAFE_BYPASS")) } }
     task.cancel()
     await task.value
     monitor.finish()
@@ -107,7 +106,7 @@ func supervisorRestoresOrdinaryDNSAfterSustainedChannelFailure() async throws {
 }
 
 @Test
-func supervisorDefaultsToImmediatePublicDnsFallback() async throws {
+func supervisorDefaultGraceNeverDelaysAChannelFault() async throws {
     let record = try supervisorRecord()
     let monitor = TestResolverMonitor()
     let states = Mutex<[ResolverSupervisorState]>([])
@@ -131,9 +130,7 @@ func supervisorDefaultsToImmediatePublicDnsFallback() async throws {
     )
 
     let task = Task { await supervisor.run() }
-    for _ in 0 ..< 100 where restoreCount.withLock({ $0 }) == 0 {
-        try await Task.sleep(for: .milliseconds(1))
-    }
+    try await eventually { restoreCount.withLock { $0 } > 0 }
     task.cancel()
     await task.value
     monitor.finish()
@@ -181,14 +178,12 @@ func supervisorReenrolsOnlyAfterTheRecoveredDaemonAcceptsACompletePlan() async t
         monitor: monitor,
         interval: .seconds(60),
         retryInterval: .milliseconds(1),
-        maximumConsecutiveFailures: 3,
+        rearmDamping: promptRearm,
         observe: { state in states.withLock { $0.append(state) } }
     )
 
     let task = Task { await supervisor.run() }
-    for _ in 0 ..< 100 where commitCount.withLock({ $0 }) == 0 {
-        try await Task.sleep(for: .milliseconds(1))
-    }
+    try await eventually { commitCount.withLock { $0 } > 0 }
     task.cancel()
     await task.value
     monitor.finish()

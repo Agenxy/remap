@@ -1,13 +1,22 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Portable, side-effect-free Remap domain and policy primitives.
 
+mod advisory;
+mod landing;
 mod mapping;
+mod moved;
 mod name;
 mod target;
+mod template;
 
+pub use advisory::target_advisories;
+pub use landing::{LandingPath, LandingPathError, MAX_LANDING_BYTES};
 pub use mapping::{Mapping, RegistrySnapshot, SnapshotError};
+pub use moved::{MovedTarget, MovedTargetError};
 pub use name::{NamePattern, RemapName, RemapNameError};
 pub use target::{
     HostHeaderPolicy, HttpScheme, HttpUpstream, HttpUpstreamError, MAX_PEER_SELECTOR_BYTES,
     MAX_SERVICE_NAME_BYTES, MappingTarget, MappingTargetError, MappingTargetKind, PeerService,
-    PeerServiceError, UpstreamHost,
+    PeerServiceError, PeerTransport, UpstreamHost,
 };
+pub use template::{MAX_TEMPLATE_CAPTURES, TemplateNameError, captured_labels};

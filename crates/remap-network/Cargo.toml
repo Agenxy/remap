@@ -25,13 +25,13 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
+tokio-rustls.workspace = true
 tokio-util.workspace = true
 tower-service.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio-rustls.workspace = true
 
 [lints]
 workspace = true

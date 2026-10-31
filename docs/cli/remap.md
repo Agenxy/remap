@@ -71,6 +71,74 @@ requires both guards so a lost response can be retried exactly.
 Listings are deterministically ordered and bounded. `--limit` accepts 1 through
 128; a returned cursor can be supplied with `--after`.
 
+### Open a page while preserving root-absolute assets
+
+```text
+remap set process.YOUR-SUFFIX http://127.0.0.1:8792/ --landing /ops/scorecard/
+```
+
+Root GET and HEAD requests redirect to the landing page and retain their query.
+Other requests, including `/bar.css` and POST `/`, reach the origin unchanged.
+Landing requires an origin-root HTTP target or a Supgang service. It cannot be
+`/`, leave the same origin, contain traversal, fragments or control characters,
+or exceed 2048 encoded bytes. Percent-encode non-ASCII text.
+
+Set changes in preview/apply documents accept an optional `landing` field.
+`apply --landing PATH` sets it on every set change in that batch. Get, list,
+validate and before/after previews show the landing path. Set without landing
+removes an existing landing. `validate` accepts the same `--landing` flag.
+
+### Rename a name
+
+```text
+remap set old.YOUR-SUFFIX --moved-to new.YOUR-SUFFIX --until 2030-01-01T00:00:00Z
+```
+
+Every HTTP request receives a 301 to the new name, retaining its path and query.
+The optional RFC3339 deadline stops the mapping from matching; the record stays
+listed. Self redirects and chains are refused. Atomic documents use the target
+`moved://new.YOUR-SUFFIX?until=2030-01-01T00:00:00Z`.
+
+Set, preview and validate give advisory warnings for pathful HTTP targets.
+Set and preview also give a host-policy hint when multiple names share one
+origin under use-upstream. The default remains use-upstream; choose preserve-client
+explicitly when an origin serves several names or selects virtual hosts by name.
+See [Name a local site](../tutorials/name-a-local-site.md) for the complete recipe.
+
+### Reachability advice
+
+Preview, apply, set and enable try one TCP connection, for at most a second, to
+each loopback HTTP target they leave enabled: an address on `127.0.0.0/8` or
+`::1`, or `localhost`. When nothing accepts it, the result carries an advisory:
+
+```text
+  Advisory   api.test: target refused connection; nothing is listening there, so requests will fail with 502 E_GATEWAY_UPSTREAM (cause refused) until a service starts
+```
+
+The change is still previewed or committed; start the service whenever you
+like. Peer targets, other names and addresses off loopback are never probed,
+and the probe sends no bytes. An exact retry of an apply returns its stored
+receipt with advice about what is listening at the time of the retry.
+
+### When the gateway cannot reach a target
+
+A request that matched a mapping but could not be completed receives a plain-text
+error naming the code, the matched mapping and a stable cause:
+
+```text
+Remap could not route this request.
+
+E_GATEWAY_UPSTREAM: The mapping's target refused the connection.
+
+Mapping: api.test
+Cause: refused
+Next: start the service; `remap get api.test` shows the target.
+```
+
+The causes are `refused`, `timeout`, `tls`, `reset`, `unreachable` and `other`.
+`504 E_GATEWAY_TIMEOUT` always has cause `timeout`. The response never shows the
+target's address or port; `remap get` shows it to you.
+
 ## Validate without the daemon
 
 ```text
@@ -132,7 +200,7 @@ Every structured response includes schema identity and success state:
       "revision": 12,
       "mapping_count": 4,
       "enabled_count": 3,
-      "schema_version": 1,
+      "schema_version": 3,
       "daemon_version": "0.2.0"
     }
   }

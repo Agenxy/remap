@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Create and verify deterministic, explicitly unsigned Remap release evidence."""
 
 from __future__ import annotations
@@ -12,11 +13,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, cast
-
-import tomllib
 
 from tools.remap_release_inventory import (
     AppInventory,

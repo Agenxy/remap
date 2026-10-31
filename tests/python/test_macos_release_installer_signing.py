@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Contracts for the dedicated complete-package Installer signer."""
 
 from __future__ import annotations
@@ -70,7 +71,7 @@ class MacOSReleaseInstallerSigningTests(unittest.TestCase):
         self.assertIn("OU = Remap Release Signing", configuration)
         self.assertIn("1.2.840.113635.100.4.13", configuration)
         self.assertNotIn("codeSigning", configuration)
-        self.assertNotIn("Remap Local Codesign", configuration)
+        self.assertNotIn("Remap Build Signing", configuration)
 
     def test_complete_package_signing_pins_fingerprint_without_timestamp(self) -> None:
         identity = release_signing.ReleaseInstallerSigningIdentity(

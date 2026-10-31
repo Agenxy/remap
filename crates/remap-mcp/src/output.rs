@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use std::borrow::Cow;
 
 use remap_protocol::Diagnostic;
@@ -145,6 +146,7 @@ mod tests {
             })
             .collect();
         let receipt = ApplyResult {
+            warnings: Vec::new(),
             operation_id: "dc83045e-9a23-40c8-aaf7-2e0753373c5d".to_owned(),
             previous_revision: 7,
             revision: 8,
@@ -158,6 +160,7 @@ mod tests {
     fn mapping(index: usize) -> MappingView {
         const PREFIX: &str = "https://example.com/";
         MappingView {
+            landing: None,
             pattern: format!("name-{index:03}.example"),
             target: format!("{PREFIX}{}", "x".repeat(MAX_TARGET_BYTES - PREFIX.len())),
             target_kind: "https".to_owned(),
