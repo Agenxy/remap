@@ -35,6 +35,7 @@ from tools.remap_macos_release_installer_signing import (
 )
 from tools.remap_macos_xar import canonicalize_xar_metadata
 from tools.remap_native_package import MANPAGE_NAMES
+from tools.remap_package import cargo_target_directory
 from tools.remap_release_artifacts import (
     MAXIMUM_FILE_BYTES,
     MAXIMUM_SIGNATURE_BYTES,
@@ -317,8 +318,8 @@ def _build_products(
     app = build_app(root, version, release=True, sign=False)
     verify_app_structure(root, app)
     binaries = {
-        "remap": root / "target/release/remap",
-        "remapd": root / "target/release/remapd",
+        "remap": cargo_target_directory(root) / "release/remap",
+        "remapd": cargo_target_directory(root) / "release/remapd",
         "remap-release-key": swift_bin / "remap-release-key",
         "remap-release-xar-signer": swift_bin / "remap-release-xar-signer",
         **{name: swift_bin / name for name in swift_names},
