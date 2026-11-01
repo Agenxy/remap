@@ -19,9 +19,13 @@ platform claims separate.
     every listed port. Otherwise the name fails with SERVFAIL, so a
     connection never reaches another local service, such as Remote Login's
     sshd, in the peer's place.
-  - On macOS the installed helper reserves the address and creates the
-    listening sockets as root, so `ssh=22` works. That helper ships
-    separately, and until it does each port reports `awaiting-socket`.
+  - On macOS the root resolver supervisor makes each address an `lo0` alias
+    and creates the listening sockets as root, so `ssh=22` works beside
+    Remote Login's own sshd. It hands them to `remapd` over the system
+    socket. It removes only aliases it added, holds them while DNS is
+    suspended, and releases them all on deactivation and uninstall. Until a
+    port's socket is handed over, that port reports `awaiting-socket` and
+    the name does not answer.
   - On Linux `remapd` binds the ports itself. Ports below 1024 need
     `CAP_NET_BIND_SERVICE`, and a port another service holds on every
     address cannot be held.
