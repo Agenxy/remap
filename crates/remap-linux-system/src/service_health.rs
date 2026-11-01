@@ -240,6 +240,9 @@ pub(crate) async fn ensure_service_health_with_plan(
     let expected = activation
         .filter(|(phase, _identity)| *phase == remap_linux::ActivationPhase::Active)
         .map(|(_phase, identity)| identity);
+    // A bypassed activation is settled with no daemon plan (ADR-0036).
+    let bypassed = activation
+        .is_some_and(|(phase, _identity)| phase == remap_linux::ActivationPhase::Bypassed);
     let daemon_active = manager.observed_state(REMAPD_UNIT)? == "active";
     if daemon_plan_observed
         && (!daemon_active
@@ -249,7 +252,8 @@ pub(crate) async fn ensure_service_health_with_plan(
             "the daemon resolver plan changed after lifecycle authorization",
         ));
     }
-    if daemon_plan_observed && daemon_plan_identity == expected && expected.is_some() {
+    if daemon_plan_observed && daemon_plan_identity == expected && (expected.is_some() || bypassed)
+    {
         drop(resolver_authority.take());
         if manager.observed_state(RESOLVER_UNIT)? != "active" {
             manager.start(RESOLVER_UNIT)?;

@@ -8,6 +8,7 @@
 mod digest;
 mod environment;
 mod error;
+mod fallback;
 mod lifecycle;
 mod manager_record;
 mod model;
@@ -26,6 +27,7 @@ pub use environment::{
     ResolverBackendKind, ResolverEnvironment, ResolverSupport, UnsupportedResolverReason,
 };
 pub use error::{LinuxError, LinuxErrorKind, LinuxResult};
+pub use fallback::{RearmDamping, ResolverFallback, same_upstream_set};
 pub use lifecycle::{LinkLifecycleEvent, LinkScopeMonitor};
 pub use manager_record::{
     NetworkManagerIpDns, NetworkManagerLegacyDns, NetworkManagerOwnership, ResolverManagerRecord,

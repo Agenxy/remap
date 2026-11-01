@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::collections::BTreeMap;
 
-use zbus::{OwnedObjectPath, OwnedVariant, Variant};
+use zbus::{OwnedObjectPath, OwnedVariant};
 
 use crate::resolved::{SystemdResolved, name_has_owner, snapshot_resolved, system_connection};
 use crate::{
@@ -17,6 +17,15 @@ use errors::{
     manager_not_ready, method_error, observation_changed, observation_unstable, ownership_conflict,
     recovery_required, unsupported,
 };
+#[path = "network_manager_values.rs"]
+mod values;
+use values::{
+    insert_legacy_ipv4, insert_legacy_ipv6, insert_strings, optional_bool, optional_i32,
+    optional_legacy_dns, optional_strings, restore_bool, restore_i32, restore_legacy,
+    restore_strings, value_string,
+};
+#[path = "network_manager_bypass.rs"]
+mod bypass;
 
 type Settings = BTreeMap<String, BTreeMap<String, OwnedVariant>>;
 
@@ -46,6 +55,14 @@ pub struct NetworkManagerStartupObservation {
     resolved: LinkState,
     applied_version: u64,
     applied_digest: [u8; 32],
+}
+
+impl NetworkManagerStartupObservation {
+    /// Returns the resolved view of the link this observation saw.
+    #[must_use]
+    pub const fn resolved(&self) -> &LinkState {
+        &self.resolved
+    }
 }
 
 #[derive(Debug)]
@@ -167,6 +184,8 @@ where
                 self.recover_restore(record)?;
                 Ok(None)
             }
+            ActivationPhase::Bypassing { .. } => self.bypass(record).map(Some),
+            ActivationPhase::Bypassed => Ok(Some(record)),
             ActivationPhase::Aborting { .. } => Err(recovery_required()),
         }
     }
@@ -436,7 +455,10 @@ where
         let completed = match record.phase() {
             ActivationPhase::Applying { completed_steps } => completed_steps,
             ActivationPhase::Active => return Ok(record),
-            ActivationPhase::Aborting { .. } | ActivationPhase::Restoring { .. } => {
+            ActivationPhase::Aborting { .. }
+            | ActivationPhase::Restoring { .. }
+            | ActivationPhase::Bypassing { .. }
+            | ActivationPhase::Bypassed => {
                 return Err(recovery_required());
             }
         };
@@ -474,7 +496,9 @@ where
             ActivationPhase::Restoring { completed_steps } => completed_steps,
             ActivationPhase::Applying { .. }
             | ActivationPhase::Aborting { .. }
-            | ActivationPhase::Active => return Err(recovery_required()),
+            | ActivationPhase::Active
+            | ActivationPhase::Bypassing { .. }
+            | ActivationPhase::Bypassed => return Err(recovery_required()),
         };
         for completed_steps in (completed + 1)..=3 {
             record.set_phase(ActivationPhase::Restoring { completed_steps })?;
@@ -827,149 +851,6 @@ fn section_is_owned(settings: &Settings, name: &str, ipv4: bool) -> LinuxResult<
     Ok(dns_owned
         && optional_bool(section.get(IGNORE_AUTO_DNS))? == Some(true)
         && optional_i32(section.get(DNS_PRIORITY))? == Some(EXCLUSIVE_PRIORITY))
-}
-
-fn optional_strings(value: Option<&OwnedVariant>) -> LinuxResult<Option<Vec<String>>> {
-    value
-        .map(|value| {
-            value
-                .try_clone()
-                .map_err(|_error| invalid_state())
-                .and_then(|value| Vec::<String>::try_from(value).map_err(|_error| invalid_state()))
-        })
-        .transpose()
-}
-
-fn optional_bool(value: Option<&OwnedVariant>) -> LinuxResult<Option<bool>> {
-    value.map(value_bool).transpose()
-}
-
-fn optional_i32(value: Option<&OwnedVariant>) -> LinuxResult<Option<i32>> {
-    value.map(value_i32).transpose()
-}
-
-fn optional_legacy_dns(
-    value: Option<&OwnedVariant>,
-    ipv4: bool,
-) -> LinuxResult<Option<NetworkManagerLegacyDns>> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let value = value.try_clone().map_err(|_error| invalid_state())?;
-    if ipv4 {
-        Vec::<u32>::try_from(value)
-            .map(NetworkManagerLegacyDns::Ipv4)
-            .map(Some)
-            .map_err(|_error| invalid_state())
-    } else {
-        Vec::<Vec<u8>>::try_from(value)
-            .map(NetworkManagerLegacyDns::Ipv6)
-            .map(Some)
-            .map_err(|_error| invalid_state())
-    }
-}
-
-fn value_string(value: &OwnedVariant) -> LinuxResult<String> {
-    value
-        .try_clone()
-        .map_err(|_error| invalid_state())
-        .and_then(|value| String::try_from(value).map_err(|_error| invalid_state()))
-}
-
-fn value_bool(value: &OwnedVariant) -> LinuxResult<bool> {
-    bool::try_from(value).map_err(|_error| invalid_state())
-}
-
-fn value_i32(value: &OwnedVariant) -> LinuxResult<i32> {
-    i32::try_from(value).map_err(|_error| invalid_state())
-}
-
-fn insert_strings(
-    section: &mut BTreeMap<String, OwnedVariant>,
-    name: &str,
-    values: &[&str],
-) -> LinuxResult<()> {
-    let values = values
-        .iter()
-        .map(|value| (*value).to_owned())
-        .collect::<Vec<_>>();
-    let value = OwnedVariant::try_from(Variant::new(values)).map_err(|_error| invalid_state())?;
-    section.insert(name.to_owned(), value);
-    Ok(())
-}
-
-fn insert_legacy_ipv4(
-    section: &mut BTreeMap<String, OwnedVariant>,
-    values: &[u32],
-) -> LinuxResult<()> {
-    let value =
-        OwnedVariant::try_from(Variant::new(values.to_vec())).map_err(|_error| invalid_state())?;
-    section.insert(LEGACY_DNS.to_owned(), value);
-    Ok(())
-}
-
-fn insert_legacy_ipv6(
-    section: &mut BTreeMap<String, OwnedVariant>,
-    values: &[Vec<u8>],
-) -> LinuxResult<()> {
-    let value =
-        OwnedVariant::try_from(Variant::new(values.to_vec())).map_err(|_error| invalid_state())?;
-    section.insert(LEGACY_DNS.to_owned(), value);
-    Ok(())
-}
-
-fn restore_strings(
-    section: &mut BTreeMap<String, OwnedVariant>,
-    name: &str,
-    value: Option<&Vec<String>>,
-) -> LinuxResult<()> {
-    match value {
-        Some(values) => {
-            let value = OwnedVariant::try_from(Variant::new(values.clone()))
-                .map_err(|_error| invalid_state())?;
-            section.insert(name.to_owned(), value);
-        }
-        None => {
-            section.remove(name);
-        }
-    }
-    Ok(())
-}
-
-fn restore_bool(section: &mut BTreeMap<String, OwnedVariant>, name: &str, value: Option<bool>) {
-    match value {
-        Some(value) => {
-            section.insert(name.to_owned(), OwnedVariant::from(value));
-        }
-        None => {
-            section.remove(name);
-        }
-    }
-}
-
-fn restore_i32(section: &mut BTreeMap<String, OwnedVariant>, name: &str, value: Option<i32>) {
-    match value {
-        Some(value) => {
-            section.insert(name.to_owned(), OwnedVariant::from(value));
-        }
-        None => {
-            section.remove(name);
-        }
-    }
-}
-
-fn restore_legacy(
-    section: &mut BTreeMap<String, OwnedVariant>,
-    value: Option<&NetworkManagerLegacyDns>,
-) -> LinuxResult<()> {
-    match value {
-        Some(NetworkManagerLegacyDns::Ipv4(values)) => insert_legacy_ipv4(section, values),
-        Some(NetworkManagerLegacyDns::Ipv6(values)) => insert_legacy_ipv6(section, values),
-        None => {
-            section.remove(LEGACY_DNS);
-            Ok(())
-        }
-    }
 }
 
 fn network_manager(record: &ActivationRecord) -> LinuxResult<&NetworkManagerOwnership> {

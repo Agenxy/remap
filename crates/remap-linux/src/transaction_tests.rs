@@ -5,8 +5,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use uuid::Uuid;
 
 use crate::{
-    ActivationRecord, ActivationStore, DnsServer, LinkDomain, LinkIndex, LinkState, LinuxError,
-    LinuxErrorKind, LinuxResult, RecordMetadata, ResolvedBackend, ResolverTransaction,
+    ActivationPhase, ActivationRecord, ActivationStore, DnsServer, LinkDomain, LinkIndex,
+    LinkState, LinuxError, LinuxErrorKind, LinuxResult, RecordMetadata, ResolvedBackend,
+    ResolverTransaction,
 };
 
 #[derive(Debug)]
@@ -164,5 +165,197 @@ fn transitional_observations_retry_without_durable_or_native_effects() -> LinuxR
     assert_eq!(backend.state, owned);
     assert_eq!(store.record, Some(active));
     assert_eq!(store.saves, expected_saves);
+    Ok(())
+}
+
+type MemoryTransaction = ResolverTransaction<SequenceBackend, MemoryStore>;
+
+fn upstream(octet: u8) -> LinuxResult<LinkState> {
+    LinkState::new(
+        LinkIndex::new(7)?,
+        vec![DnsServer::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, octet)),
+            0,
+            "",
+        )?],
+        vec![LinkDomain::new("before.example", false)?],
+        false,
+    )
+}
+
+fn active_transaction(before: LinkState) -> LinuxResult<(MemoryTransaction, ActivationRecord)> {
+    let owned = LinkState::remap_loopback(before.link())?;
+    let backend = SequenceBackend {
+        state: before,
+        observations: VecDeque::new(),
+    };
+    let mut transaction = ResolverTransaction::new(backend, MemoryStore::default());
+    let metadata = RecordMetadata::new(Uuid::from_u128(7), 7, 1000, 7)?;
+    let active = transaction.activate(metadata, owned)?;
+    Ok((transaction, active))
+}
+
+fn observe(transaction: &mut MemoryTransaction) -> LinuxResult<crate::ResolverStartupObservation> {
+    transaction
+        .startup_observation(LinkIndex::new(7)?)?
+        .ok_or_else(|| LinuxError::new(LinuxErrorKind::InvalidState, "missing observation"))
+}
+
+#[test]
+fn bypass_restores_the_capture_and_keeps_the_activation() -> LinuxResult<()> {
+    let before = upstream(53)?;
+    let (mut transaction, active) = active_transaction(before.clone())?;
+    let observed = observe(&mut transaction)?;
+
+    let bypassed = transaction.bypass_observed(&observed)?;
+
+    assert_eq!(bypassed.phase(), ActivationPhase::Bypassed);
+    assert_eq!(bypassed.metadata(), active.metadata());
+    assert_eq!(bypassed.before(), active.before());
+    let (backend, store) = transaction.into_parts();
+    assert_eq!(backend.state, before);
+    assert_eq!(store.record, Some(bypassed));
+    Ok(())
+}
+
+#[test]
+fn bypass_never_writes_over_a_foreign_change() -> LinuxResult<()> {
+    let (transaction, active) = active_transaction(upstream(53)?)?;
+    let (mut backend, store) = transaction.into_parts();
+    let foreign = LinkState::new(
+        active.owned().link(),
+        upstream(99)?.dns_servers().to_vec(),
+        active.owned().domains().to_vec(),
+        active.owned().default_route(),
+    )?;
+    backend.state = foreign.clone();
+    let saves = store.saves;
+    let mut transaction = ResolverTransaction::new(backend, store);
+    let observed = observe(&mut transaction)?;
+
+    let refused = transaction.bypass_observed(&observed);
+
+    assert_eq!(
+        refused.err().map(|error| error.kind()),
+        Some(LinuxErrorKind::OwnershipConflict)
+    );
+    let (backend, store) = transaction.into_parts();
+    assert_eq!(backend.state, foreign);
+    assert_eq!(store.record, Some(active));
+    assert_eq!(store.saves, saves);
+    Ok(())
+}
+
+#[test]
+fn an_interrupted_bypass_finishes_as_a_bypass_not_a_deactivation() -> LinuxResult<()> {
+    let before = upstream(53)?;
+    let (transaction, active) = active_transaction(before.clone())?;
+    let (mut backend, mut store) = transaction.into_parts();
+    let mut interrupted = active.clone();
+    interrupted.set_phase(ActivationPhase::Bypassing { completed_steps: 1 })?;
+    store.save(&interrupted)?;
+    backend.state = LinkState::new(
+        before.link(),
+        before.dns_servers().to_vec(),
+        active.owned().domains().to_vec(),
+        active.owned().default_route(),
+    )?;
+    let mut transaction = ResolverTransaction::new(backend, store);
+
+    let recovered = transaction.recover()?;
+
+    assert_eq!(
+        recovered.as_ref().map(ActivationRecord::phase),
+        Some(ActivationPhase::Bypassed)
+    );
+    let (backend, store) = transaction.into_parts();
+    assert_eq!(backend.state, before);
+    assert_eq!(store.record, recovered);
+    Ok(())
+}
+
+#[test]
+fn a_bypassed_record_survives_recovery_after_the_network_changed() -> LinuxResult<()> {
+    let (mut transaction, _active) = active_transaction(upstream(53)?)?;
+    let observed = observe(&mut transaction)?;
+    let bypassed = transaction.bypass_observed(&observed)?;
+    let (mut backend, store) = transaction.into_parts();
+    backend.state = upstream(54)?;
+    let mut transaction = ResolverTransaction::new(backend, store);
+
+    assert_eq!(transaction.recover()?, Some(bypassed));
+    Ok(())
+}
+
+#[test]
+fn rearm_captures_the_network_afresh_under_the_same_activation() -> LinuxResult<()> {
+    let (mut transaction, active) = active_transaction(upstream(53)?)?;
+    let observed = observe(&mut transaction)?;
+    let bypassed = transaction.bypass_observed(&observed)?;
+    let (mut backend, store) = transaction.into_parts();
+    let offered = upstream(54)?;
+    backend.state = offered.clone();
+    let mut transaction = ResolverTransaction::new(backend, store);
+    let observed = observe(&mut transaction)?;
+
+    let rearmed = transaction.rearm_observed(3, 9, &observed)?;
+
+    assert_eq!(rearmed.phase(), ActivationPhase::Active);
+    assert_eq!(
+        rearmed.metadata().activation_id(),
+        active.metadata().activation_id()
+    );
+    assert_eq!(
+        rearmed.metadata().owner_uid(),
+        active.metadata().owner_uid()
+    );
+    assert!(rearmed.metadata().generation() > bypassed.metadata().generation());
+    assert_eq!(rearmed.before(), &offered);
+    let (backend, store) = transaction.into_parts();
+    assert_eq!(&backend.state, active.owned());
+    assert_eq!(store.record, Some(rearmed));
+    Ok(())
+}
+
+#[test]
+fn rearm_and_release_refuse_a_record_that_is_not_bypassed() -> LinuxResult<()> {
+    let (mut transaction, active) = active_transaction(upstream(53)?)?;
+    let observed = observe(&mut transaction)?;
+
+    assert_eq!(
+        transaction
+            .rearm_observed(9, 9, &observed)
+            .err()
+            .map(|error| error.kind()),
+        Some(LinuxErrorKind::RecoveryRequired)
+    );
+    assert_eq!(
+        transaction
+            .release_bypassed()
+            .err()
+            .map(|error| error.kind()),
+        Some(LinuxErrorKind::RecoveryRequired)
+    );
+    let (backend, store) = transaction.into_parts();
+    assert_eq!(&backend.state, active.owned());
+    assert_eq!(store.record, Some(active));
+    Ok(())
+}
+
+#[test]
+fn release_forgets_a_bypass_without_touching_the_link() -> LinuxResult<()> {
+    let (mut transaction, _active) = active_transaction(upstream(53)?)?;
+    let observed = observe(&mut transaction)?;
+    transaction.bypass_observed(&observed)?;
+    let (mut backend, store) = transaction.into_parts();
+    let offered = upstream(54)?;
+    backend.state = offered.clone();
+    let mut transaction = ResolverTransaction::new(backend, store);
+
+    transaction.release_bypassed()?;
+
+    let (backend, store) = transaction.into_parts();
+    assert_eq!(backend.state, offered);
+    assert_eq!(store.record, None);
     Ok(())
 }

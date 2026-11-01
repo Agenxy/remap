@@ -36,7 +36,7 @@ pub(crate) fn status_required(
     state_residue: Option<&StateResidue>,
 ) -> bool {
     record.is_some_and(|value| value.phase != InstallPhase::Active)
-        || activation.is_some_and(|value| value.phase() != ActivationPhase::Active)
+        || activation.is_some_and(|value| !value.phase().is_settled())
         || (record.is_some() && activation.is_none())
         || record.is_some_and(|_value| required_service_inactive(services))
         || (record.is_none() && activation.is_some())
@@ -55,7 +55,7 @@ pub(crate) fn snapshot_required(snapshot: &StateSnapshot) -> bool {
         || !snapshot.activation_state_valid
         || snapshot
             .activation_phase
-            .is_some_and(|phase| phase != ActivationPhase::Active)
+            .is_some_and(|phase| !phase.is_settled())
         || snapshot
             .install_record
             .as_ref()
@@ -77,7 +77,7 @@ pub(crate) fn needs_resolver_authority(snapshot: &StateSnapshot) -> bool {
         || !snapshot.daemon_plan_valid
         || snapshot
             .activation_phase
-            .is_some_and(|phase| phase != ActivationPhase::Active)
+            .is_some_and(|phase| !phase.is_settled())
         || (snapshot.install_record.is_none() && snapshot.activation_phase.is_some())
         || (snapshot.install_record.is_some() && snapshot.activation_phase.is_none())
         || snapshot
@@ -161,11 +161,20 @@ pub(crate) fn daemon_plan_matches_activation(
     if record.phase != InstallPhase::Active {
         return true;
     }
-    let expected = activation.map(|value| crate::install_model::ResolverPlanIdentity {
-        activation_id: value.metadata().activation_id(),
-        generation: value.metadata().generation(),
-    });
-    observed && daemon_plan == expected
+    observed && daemon_plan == expected_daemon_plan(activation)
+}
+
+/// The plan the daemon must hold for an activation: its identity, or none
+/// while ordinary DNS is in effect, because a bypass invalidates the plan.
+pub(crate) fn expected_daemon_plan(
+    activation: Option<&remap_linux::ActivationRecord>,
+) -> Option<crate::install_model::ResolverPlanIdentity> {
+    activation
+        .filter(|value| value.phase() != ActivationPhase::Bypassed)
+        .map(|value| crate::install_model::ResolverPlanIdentity {
+            activation_id: value.metadata().activation_id(),
+            generation: value.metadata().generation(),
+        })
 }
 
 #[cfg(test)]

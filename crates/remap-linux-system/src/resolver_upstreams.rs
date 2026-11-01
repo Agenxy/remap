@@ -2,14 +2,20 @@
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 
-use remap_linux::ActivationRecord;
+use remap_linux::{ActivationRecord, LinkState};
 
 const DEFAULT_DNS_PORT: u16 = 53;
 const MAX_UPSTREAMS: usize = 4;
 
 pub(crate) fn upstreams(record: &ActivationRecord) -> io::Result<Vec<SocketAddr>> {
-    let mut upstreams = Vec::with_capacity(record.before().dns_servers().len());
-    for server in record.before().dns_servers() {
+    state_upstreams(record.before())
+}
+
+/// The upstreams a link's own DNS would give the daemon, as a capture of it
+/// would.
+pub(crate) fn state_upstreams(state: &LinkState) -> io::Result<Vec<SocketAddr>> {
+    let mut upstreams = Vec::with_capacity(state.dns_servers().len());
+    for server in state.dns_servers() {
         if !server.server_name().is_empty() {
             return Err(unsupported(
                 "DNS-over-TLS upstreams are not supported by this slice",

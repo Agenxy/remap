@@ -293,9 +293,10 @@ pub(crate) async fn uninstall(approval_token: &str) -> io::Result<()> {
             "the active daemon plan became unreachable after lifecycle authorization",
         ));
     }
-    let resolver_plan = second.daemon_plan_identity.ok_or_else(|| {
-        conflict("the active installation has no daemon resolver plan to invalidate")
-    })?;
+    let resolver_plan = match second.daemon_plan_identity {
+        Some(identity) => identity,
+        None => crate::resolver_acceptance::bypassed_plan_identity()?,
+    };
     record.begin_uninstall(resolver_plan)?;
     store.save(&record)?;
     resume_uninstall(&manager, &mut store, record, &mut resolver_authority).await?;
@@ -407,13 +408,12 @@ async fn recover_explicit(
                 remap_linux::RootRecordStore::inspect(Path::new(STATE_DIRECTORY))
                     .map_err(platform_error)?
                     .is_some_and(|activation| {
-                        activation.phase() == remap_linux::ActivationPhase::Active
+                        activation.phase().is_settled()
                             && daemon_plan_observed
                             && daemon_plan_identity
-                                == Some(crate::install_model::ResolverPlanIdentity {
-                                    activation_id: activation.metadata().activation_id(),
-                                    generation: activation.metadata().generation(),
-                                })
+                                == crate::lifecycle_recovery::expected_daemon_plan(Some(
+                                    &activation,
+                                ))
                     });
             if !services_healthy || !activation_healthy {
                 ensure_service_health_with_plan(

@@ -70,7 +70,9 @@ One versioned activation record contains:
   applied-connection identity for NetworkManager);
 - the complete captured link state;
 - the complete Remap-owned link state; and
-- an applying, active, aborting, or restoring phase with durable step counts.
+- an applying, active, aborting, or restoring phase with durable step counts,
+  or, since ADR-0036, a bypassing or bypassed phase that restores ordinary
+  DNS while keeping the record.
 
 The record is capped at 16 KiB, rejects unknown fields and schemas, and carries
 a SHA-256 corruption digest. The digest is not an authentication mechanism.

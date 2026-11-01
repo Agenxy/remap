@@ -9,6 +9,13 @@ verification fails restores. The SystemConfiguration effects are proven
 against the model in the Swift tests and the daemon's liveness over real
 sockets; neither has yet run against a live VPN on a Mac.
 
+Amended 2026-10-31: the Linux supervisor now acts on the verdict too
+("Linux restores ordinary DNS the same way" below). That amendment adds two
+phases to the `remap.linux-resolver/v2` activation record (ADR-0008) and
+applies ADR-0030's damping on Linux. Its native effects are proven against a
+modelled systemd-resolved link in the `remap-linux` tests; neither it nor the
+`NetworkManager` path has yet run on a live Linux host.
+
 ## Context
 
 On 31 October at about 01:15Z the owner's Mac had Private Internet Access
@@ -78,7 +85,8 @@ key. The Linux supervisor is built from the same Rust crate and decodes it;
 an older Linux helper, which rejects unknown fields, would refuse a result
 carrying it, a combination the Linux lifecycle does not produce because it
 replaces the daemon and the helper together (ADR-0025). The Linux supervisor
-does not yet act on the verdict; `remap status` reports it there too.
+acts on it as the next sections describe, and `remap status` reports it on
+both platforms.
 
 `RegistryStatus` gains `dns_upstream`, the diagnostic
 `E_DNS_UPSTREAM_UNANSWERED`, whose message begins "upstream DNS not
@@ -103,6 +111,83 @@ the first unanswered query to ordinary DNS takes the daemon's window, at
 least two seconds and four queries, plus at most one five-second
 reconciliation interval. `remap-system status` explains the reason as
 "upstream DNS not answering".
+
+### Linux restores ordinary DNS the same way
+
+Linux had no safe bypass before this amendment. A supervisor whose daemon
+failed exited and left the link on loopback until systemd restarted it, and
+the only restoration was deactivation, which removes the activation record.
+Deactivation cannot serve as the bypass: in the `active` installation phase
+the runtime gate refuses to start the units without a durable activation
+record (ADR-0008), and only an installer's lease may create a new one. So the
+bypass keeps the record.
+
+- **Bypass.** When the daemon's result carries `upstream_failure`, the
+  supervisor restores the link's captured state through the restoration
+  deactivation uses: the typed systemd-resolved or systemd-networkd link
+  methods field by field, or `NetworkManager`'s compare-and-swap `Reapply` of
+  the prior DNS properties. The record moves through a journaled `bypassing`
+  phase to `bypassed` instead of being removed, and the daemon's plan is
+  invalidated. A crash part way through resumes as a bypass, never as a
+  deactivation.
+- **Never over a foreign change.** The bypass starts only when a fresh
+  observation shows the link, and for `NetworkManager` the full applied
+  connection, still exactly in Remap's owned state. Otherwise it writes
+  nothing. ADR-0008's rebase then captures the other agent's change, and its
+  servers become the upstreams, a different set the daemon judges afresh.
+- **While bypassed Remap owns nothing on the link.** The supervisor neither
+  compares nor rebases the link, so whatever its manager sets since is the
+  network's own. It only probes the daemon, once per one-second
+  reconciliation. Uninstall forgets a bypassed record without writing to the
+  link; its journal names the bypassed activation as the plan to invalidate,
+  which the daemon, holding none, accepts.
+- **Re-arming is damped exactly as ADR-0030 sets.** The daemon must answer
+  every probe for 5 seconds of awake time. A bypass within 5 minutes of a
+  re-arm doubles the period, up to 5 minutes, and 5 minutes armed forgets the
+  earlier bypasses. Linux's monotonic clock does not advance while the host
+  is suspended, so it measures awake time as macOS's suspending clock does. At
+  the end of the period the supervisor takes a stable observation of the link
+  (three identical samples, 25 ms apart, within 150 ms) and works out the
+  upstreams a capture would give. If the daemon still reports the verdict and
+  those are the same set, ignoring order as the daemon does, nothing is
+  written and the period starts again. Otherwise the link is captured afresh
+  under the same activation identity with a strictly newer generation,
+  Remap's state is applied, and the plan is published. A failed probe or a
+  re-arm that did not apply also starts the period again. A supervisor that
+  restarts while bypassed remembers no earlier bypass and owes the base
+  period. Unlike a restarted macOS supervisor it does not try at once: an
+  update or repair that starts it accepts the bypassed record as it found it,
+  and must not see the record rewritten during that acceptance.
+- **What a person sees.** The supervisor's journal says "upstream DNS not
+  answering", with the cause, the count, the span, and the period, and says
+  when Remap DNS re-armed; it never names an address. The native lifecycle
+  status stays `active` and its hint says that ordinary DNS is in effect and
+  that Remap DNS returns by itself. `remap status` reports
+  `E_DNS_UPSTREAM_UNANSWERED` as on macOS.
+
+From the first unanswered query to ordinary DNS takes the daemon's window
+plus at most one one-second reconciliation.
+
+#### The activation record gains two phases
+
+`remap.linux-resolver/v2` keeps its schema string and gains
+`bypassing { completed_steps }` and `bypassed`. The store admits `active` to
+`bypassing` at step 0, one step at a time, step 3 to `bypassed`, and a
+rewritten `bypassed` record. It replaces a `bypassed` record only with a
+freshly captured `applying` record that keeps the activation identity, the
+owner, and the owned state at a strictly newer generation. A helper built
+before this amendment rejects a record in either phase. The Linux lifecycle
+replaces the helper together with the daemon, and an update rollback re-arms
+a bypassed record, while it holds the resolver authority, before it hands the
+link to the previous generation's supervisor; that supervisor may then keep
+upstreams that do not answer until the next update. The lifecycle treats
+`bypassed` as settled, like `active`: it needs no recovery, the daemon is
+expected to hold no plan, and an install, update, or repair accepts a started
+supervisor whose record is bypassed and whose daemon holds no plan.
+
+A channel failure on Linux still stops the supervisor and leaves the link on
+loopback until systemd restarts it. Restoring ordinary DNS for that fault as
+well would use this same bypass, but it is a separate decision.
 
 ### Remap tells its own writes from another agent's by the record
 
@@ -267,6 +352,13 @@ Network Extension backend's future, but it is a new platform contract
 covering single-label, wildcard, and shadowing names, and it does not belong
 in an urgent fix.
 
+On Linux, deactivating on the verdict and activating again once the
+upstreams answer would have reused existing transactions. It was rejected
+because the runtime gate refuses to start the units in the `active`
+installation phase without a record, only an installer's lease may create
+one, and a removed record would leave a restarted supervisor no identity to
+re-arm under.
+
 ## Consequences
 
 Upstreams that stop answering now cost at most a few seconds of failed
@@ -312,6 +404,27 @@ the model with a VPN's dynamic DNS below and above Remap's, a VPN service
 macOS uses, a tunnel outside the preferences, and a persisted foreign
 change, and shows zero writes under every re-assertion, following back on
 disconnect, and the exact restore sequence above.
+
+On Linux, `crates/remap-linux/src/transaction_tests.rs` drives the
+systemd-resolved transaction over a modelled link: a bypass restores the
+capture and keeps the activation; a foreign change refuses it with no write
+and no save; an interrupted bypass finishes as a bypass; a bypassed record
+survives recovery after the network changed its DNS; re-arming captures the
+network afresh under the same activation at a newer generation; re-arming and
+releasing refuse a record that is not bypassed; and releasing writes nothing
+to the link. `record.rs` and `record_store.rs` test the new phases' encoding
+and every admitted and refused transition. `crates/remap-linux/src/fallback.rs`
+tests the damping: one healthy probe never re-arms, a failed probe or a
+blocked attempt restarts the period, repeated bypasses go 5, 10, 20, 40, 80,
+160, then 300 seconds, five minutes armed resets it, a retried bypass is the
+same fault, a restarted supervisor owes the base period, and the
+verdict follows the set in any order. `resolver_fallback_tests.rs` in
+`remap-linux-system` tests the re-arm gate, a link with no forwardable DNS,
+the journal line, which refusals are tolerated, the resumed state, the
+expected daemon plan, lifecycle acceptance of a bypass with no plan, and the
+status hint. The `NetworkManager` bypass and
+re-arm compile against the real D-Bus types but have no model to run
+against.
 
 Two judgements are deliberate. An upstream that answers REFUSED to every
 query counts as not answering, since it serves no name; the probe clears the

@@ -192,7 +192,9 @@ fn active_runtime_requires_recovery(snapshot: &StateSnapshot) -> bool {
     required_service_inactive(&snapshot.services)
         || !snapshot.activation_state_valid
         || !snapshot.daemon_plan_valid
-        || snapshot.activation_phase != Some(ActivationPhase::Active)
+        || !snapshot
+            .activation_phase
+            .is_some_and(ActivationPhase::is_settled)
 }
 
 #[cfg(test)]
