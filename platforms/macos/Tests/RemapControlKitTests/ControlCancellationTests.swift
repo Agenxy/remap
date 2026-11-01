@@ -52,7 +52,7 @@ private final class HangingControlServer: @unchecked Sendable {
     let socketPath: String
     private let listener: NWListener
     private let queue = DispatchQueue(
-        label: "org.agenxy.remap.tests.hanging-control",
+        label: "org.agenxy.Remap.tests.hanging-control",
         qos: .userInitiated
     )
     private let requests = RequestCounter()

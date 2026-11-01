@@ -14,14 +14,16 @@ pub use client::ControlClient;
 pub use diagnostic::Diagnostic;
 pub use model::{
     ApplyResult, Change, ChangeEffect, Command, CommandResult, DnsTurnedOff, HealthChallengeResult,
-    HostPolicy, ListResult, MAX_ATOMIC_CHANGE_COUNT, MAX_MAPPING_COUNT, MAX_MAPPING_PAGE_SIZE,
-    MAX_REVISION_WAIT_MS, MAX_TARGET_BYTES, MappingView, PreviewResult, RegistryStatus,
+    HostPolicy, ListResult, MAX_ATOMIC_CHANGE_COUNT, MAX_LISTENER_FAILURES, MAX_MAPPING_COUNT,
+    MAX_MAPPING_PAGE_SIZE, MAX_REVISION_WAIT_MS, MAX_TARGET_BYTES, MappingView,
+    PeerMachineListenerFailure, PeerMachineListeners, PreviewResult, RegistryStatus,
     ResolutionResult, RevisionNotice, Surface, ValidationResult,
 };
 pub use paths::ControlPaths;
 pub use system::{
-    SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest, SystemResponse, SystemResult,
-    UPSTREAM_UNANSWERED_CODE, UpstreamFailure, UpstreamFailureCause, read_system_frame,
+    ListenerAddress, MAX_LISTENERS_PER_EXCHANGE, MAX_SYSTEM_FRAME_BYTES, SYSTEM_PROTOCOL_VERSION,
+    SystemCommand, SystemRequest, SystemResponse, SystemResult, UPSTREAM_UNANSWERED_CODE,
+    UpstreamFailure, UpstreamFailureCause, decode_system_request, read_system_frame,
     write_system_frame,
 };
 pub use wire::{

@@ -6,6 +6,7 @@ mod landing;
 mod mapping;
 mod moved;
 mod name;
+mod peer_machine;
 mod target;
 mod template;
 
@@ -14,6 +15,11 @@ pub use landing::{LandingPath, LandingPathError, MAX_LANDING_BYTES};
 pub use mapping::{Mapping, RegistrySnapshot, SnapshotError};
 pub use moved::{MovedTarget, MovedTargetError};
 pub use name::{NamePattern, RemapName, RemapNameError};
+pub use peer_machine::{
+    FINGERPRINT_HEX_BYTES, MAX_PEER_MACHINE_MAPPINGS, MAX_PEER_MACHINE_SERVICES, NODE_ID_HEX_BYTES,
+    PEER_MACHINE_LOOPBACK, PeerMachine, PeerMachineError, PeerMachineService,
+    is_peer_machine_address, lowest_free_peer_machine_address,
+};
 pub use target::{
     HostHeaderPolicy, HttpScheme, HttpUpstream, HttpUpstreamError, MAX_PEER_SELECTOR_BYTES,
     MAX_SERVICE_NAME_BYTES, MappingTarget, MappingTargetError, MappingTargetKind, PeerService,

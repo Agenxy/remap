@@ -45,7 +45,94 @@ platform claims separate.
   root-owned file that is not a symlink, and leave the directory exactly as
   empty as before Remap. Anything they cannot vouch for stops removal and is
   kept.
-
+- Login Items and Background Items list Remap's services under the developer
+  "Remap" instead of "Agenxy Local". macOS takes that name from the
+  organisation of the self-signed certificate that signed them, and the
+  identities Remap creates (`Remap Local Codesign` on a receiving Mac,
+  `Remap Build Signing` and `Remap Local Installer` on a building one) now
+  carry it. An identity that already exists keeps the name it was created
+  with until it is recreated, so a Mac set up before this release goes on
+  showing "Agenxy Local" until then.
+- The Touch ID or password dialog for an install, update, recovery or
+  removal reads "... is trying to apply the Remap changes you just
+  reviewed." macOS writes the start of that sentence itself, and the old
+  reason, "Approve the reviewed Remap system changes", landed in it
+  capitalised. Signing a release says which of its two signatures each
+  prompt is for: the release manifest or the installer package.
+- Every macOS executable Remap builds carries an embedded Info.plist naming
+  it (`Remap Service` for `remapd`, `Remap Installer` for `remap-install`,
+  and so on) under the signing identifier its installers already gave it
+  (ADR-0034). A bare executable had nothing for macOS to name it by but its
+  file name, which is what Login Items and system dialogs showed.
+- The native app's System page no longer calls every installation a
+  "source build" or points at a DNS System Extension that Remap does not
+  have. It says Remap manages one ordinary macOS resolver scope, which is
+  true of source and package installations alike.
+- sudo's password prompt says who is asking and for what: "Remap needs
+  administrator approval to install its DNS service. Password for <you>:",
+  and likewise for update, repair and removal on macOS and Linux, and for
+  `make install-package-macos`. It was a bare "Password:". On Linux the
+  prompt is passed only to the original sudo; sudo-rs keeps its own question.
+- Before macOS asks to change certificate trust settings for a Remap signing
+  identity, the build says which certificate the dialog is about, what the
+  trust lets it do, and what to choose. The dialog itself names neither, and
+  the administrator dialog for the installer identity names only `security`.
+- `remapd` and `remap daemon` tell you to press Control-C only when they are
+  running in a terminal. Under launchd or systemd they say which manager
+  started them, and the systemd journal no longer records an instruction
+  nobody there can follow.
+- On Linux, `systemctl status` and the journal name every Remap unit for what
+  it is. The sockets read "Remap DNS over UDP on 127.0.0.1:53" and so on
+  instead of "Remap dns-udp socket"; the resolver supervisor is "Remap DNS
+  resolver supervisor" and logs as `remap-resolver` rather than as its
+  executable, `remap-linux-system`; `remapd` logs as `remapd`.
+- The `remap(1)` manual pages are dated as the changelog dates this release,
+  and a test keeps them so; they carried a date three days before it.
+- macOS's network configuration log names Remap's changes "Remap DNS
+  Resolver" rather than "Agenxy Remap", and every dispatch queue Remap creates
+  is labelled under `org.agenxy.Remap`, the identifier family of its launchd
+  jobs and signatures.
+- Remap.app's Info.plist carries its copyright, so Finder's Get Info and the
+  About window show "Copyright 2026 Agenxy. Licensed under GPL-3.0-or-later."
+  instead of nothing. Every helper's embedded plist says the same.
+- A Supgang peer machine can have one name that works on any network
+  (ADR-0033). `remap set pro.agenxy.internal 'supgang://<node-id>?ssh=22,k7=7443'`
+  gives the machine a stable loopback address in `127.77.0.0/16`, allocated
+  when the mapping is created and kept until it is removed. Remap holds a
+  listener on that address at each listed port and carries each TCP
+  connection through Supgang's local stream endpoint to the service the
+  peer's owner exposes with `supgang expose`. The peer is selected by its
+  node ID or fingerprint, never its name. TCP only: UDP and unexposed
+  services are not reachable.
+  - DNS answers A with the address, and no AAAA, only while Remap holds
+    every listed port. Otherwise the name fails with SERVFAIL, so a
+    connection never reaches another local service, such as Remote Login's
+    sshd, in the peer's place.
+  - On macOS the root resolver supervisor makes each address an `lo0` alias
+    and creates the listening sockets as root, so `ssh=22` works beside
+    Remote Login's own sshd. It hands them to `remapd` over the system
+    socket. It removes only aliases it added, holds them while DNS is
+    suspended, and releases them all on deactivation and uninstall. Until a
+    port's socket is handed over, that port reports `awaiting-socket` and
+    the name does not answer.
+  - On Linux `remapd` binds the ports itself. Ports below 1024 need
+    `CAP_NET_BIND_SERVICE`, and a port another service holds on every
+    address cannot be held.
+  - Every listed port is reachable from anything on this machine that can
+    open a loopback TCP connection, so list only services the peer protects
+    itself.
+  - A connection Supgang does not carry is closed. The daemon's log names
+    the service and the cause, never the mapped name, at most once per cause
+    every ten seconds, and `remap status` counts every one by cause.
+    Connections silent for two hours are closed.
+  - `get`, `list`, `preview` and the MCP tools show the address
+    (`peer_address`). A registry holds at most 256 such mappings.
+  - The registry moves to schema 4, behind the pre-migration copy.
+- Remap's resolver refuses an upstream answer inside `127.77.0.0/16` with
+  SERVFAIL, so a remote name cannot point at a peer machine's reserved
+  address through it.
+- Control replies decode tolerantly: a client one release older ignores
+  fields a newer daemon adds. Requests still refuse unknown fields.
 - A wildcard's peer target may read its peer and service from the name
   (ADR-0032). `*.k7.internal → supgang://{1}/{2}` routes
   `preview.solis.k7.internal` to `supgang://solis/preview`, where `{1}` is the

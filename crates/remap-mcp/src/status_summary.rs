@@ -58,6 +58,7 @@ mod tests {
             )),
             dns_upstream: None,
             dns_turned_off: None,
+            peer_machine_listeners: None,
         };
 
         let summary = status_summary(&status);
@@ -81,18 +82,19 @@ mod tests {
             maintenance: None,
             dns_upstream: Some(failure.diagnostic()),
             dns_turned_off: None,
+            peer_machine_listeners: None,
         };
 
         let summary = status_summary(&status);
         assert!(summary.contains("Upstream DNS not answering: every upstream resolver"));
         let turned_off = RegistryStatus {
             dns_upstream: None,
-            dns_turned_off: Some(remap_protocol::DnsTurnedOff {
+            dns_turned_off: Some(Box::new(remap_protocol::DnsTurnedOff {
                 turned_off_at: "2026-10-31T01:20Z".to_owned(),
                 turned_off_at_ms: 1_793_409_600_000,
                 command: "remap-system deactivate".to_owned(),
                 turn_on: "sudo remap-system activate".to_owned(),
-            }),
+            })),
             ..status.clone()
         };
         assert!(status_summary(&turned_off).contains(

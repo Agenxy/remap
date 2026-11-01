@@ -9,6 +9,7 @@ export interface MappingView extends JsonRecord {
   enabled: boolean;
   updated_revision?: number;
   landing?: string | null;
+  peer_address?: string | null;
 }
 
 export interface DashboardState {
@@ -72,7 +73,9 @@ export const mappingSummary = (value: unknown): string => {
   if (mapping === null) return "∅";
   const state = mapping.enabled ? "active" : "disabled";
   const landing = asString(mapping.landing) ?? "none";
-  return `${mapping.pattern} → ${mapping.target} · ${mapping.target_kind} · ${mapping.host_policy} · ${state} · landing ${landing}`;
+  const address = asString(mapping.peer_address);
+  const peer = address === null ? "" : ` · address ${address}`;
+  return `${mapping.pattern} → ${mapping.target} · ${mapping.target_kind} · ${mapping.host_policy} · ${state} · landing ${landing}${peer}`;
 };
 
 export const isErrorResult = (result: unknown, data: JsonRecord | null): boolean => {

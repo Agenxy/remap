@@ -7,7 +7,8 @@ use crate::diagnostic::Diagnostic;
 use crate::runtime_health::RuntimeHealth;
 use remap_mcp::system_lookup::SystemLookup;
 
-const MANPAGE_DATE: &str = "2026-08-16";
+/// The release date of this version, as the changelog records it.
+const MANPAGE_DATE: &str = "2026-08-19";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Report {
@@ -41,6 +42,7 @@ pub(crate) struct DoctorReport {
     pub(crate) dns_upstream: Option<remap_protocol::Diagnostic>,
     /// Present while the owner has turned system DNS off on purpose (ADR-0036).
     pub(crate) dns_turned_off: Option<remap_protocol::DnsTurnedOff>,
+    pub(crate) peer_machines: Option<remap_protocol::PeerMachineListeners>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -217,7 +219,10 @@ fn validate(
     let policy = match &target {
         MappingTarget::Http(upstream) => Some(upstream.host_header_policy().as_str()),
         MappingTarget::Peer(service) => Some(service.host_header_policy().as_str()),
-        MappingTarget::Moved(_) | MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => None,
+        MappingTarget::Moved(_)
+        | MappingTarget::DnsAddress(_)
+        | MappingTarget::DnsAlias(_)
+        | MappingTarget::PeerMachine(_) => None,
     };
     Ok(ValidationReport {
         warnings: remap_core::target_advisories(&target),
@@ -227,4 +232,19 @@ fn validate(
         target_kind: target.kind().as_str(),
         host_header_policy: policy,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_manual_is_dated_as_the_changelog_dates_this_release() -> std::io::Result<()> {
+        let changelog =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../CHANGELOG.md"))?;
+        let heading = format!("## {} - {}", env!("CARGO_PKG_VERSION"), super::MANPAGE_DATE);
+        assert!(
+            changelog.lines().any(|line| line == heading),
+            "CHANGELOG.md has no heading {heading:?}; date the manual as the release"
+        );
+        Ok(())
+    }
 }

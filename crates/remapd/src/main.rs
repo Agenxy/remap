@@ -2,6 +2,7 @@
 //! Authoritative per-user Remap daemon entry point.
 
 use std::ffi::OsString;
+use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -28,12 +29,13 @@ fn run(arguments: Vec<OsString>) -> Result<(), Diagnostic> {
     let Some(config) = parse_config(arguments)? else {
         return Ok(());
     };
+    let notice = config.startup_notice(std::io::stderr().is_terminal());
     let daemon = remapd::bootstrap(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(runtime_error)?;
-    eprintln!("Remap daemon starting; press Control-C to stop.");
+    eprintln!("{notice}");
     runtime.block_on(daemon.run())
 }
 

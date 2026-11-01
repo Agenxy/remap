@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import Network
+import OSLog
 import Security
 import SystemConfiguration
 import SystemConfiguration.SCDynamicStoreCopyDHCPInfo
@@ -136,11 +137,22 @@ public struct SystemResolver: Sendable {
             .commitPrepared()
     }
 
-    /// Restores ordinary DNS and removes the activation, as the installer
-    /// does around an update and for uninstall. Any turned-off record goes
-    /// too: the installer, not the owner's earlier command, now decides.
+    /// Restores ordinary DNS, then releases every loopback address held for
+    /// peer-machine names (ADR-0033), so nothing outlives the activation.
+    /// DNS is restored first because it is what the owner depends on. Any
+    /// turned-off record goes too: the installer, not the owner's earlier
+    /// command, now decides (ADR-0036).
     public func deactivate(store: ActivationStore = .standard) throws {
         try restoreOrdinaryDNS(store: store, retainPreparedRecord: false)
+        // DNS is restored by now, and that is what deactivation promises. A
+        // release that fails is logged, never thrown: a retry would skip this
+        // step, and the keeper releases the rest once it sees no activation.
+        do {
+            try LoopbackReservationKeeper.releaseAll(store: LoopbackReservationStore(directory: store.directory))
+        } catch {
+            loopbackLogger
+                .error("peer-machine loopback addresses not released: \(String(describing: error), privacy: .public)")
+        }
         try DNSTurnedOffStore(directory: store.directory).clear()
     }
 
@@ -377,7 +389,7 @@ struct ServiceHandle {
 }
 
 func makePreferences() throws -> SCPreferences {
-    guard let preferences = SCPreferencesCreate(nil, "Agenxy Remap" as CFString, nil) else {
+    guard let preferences = SCPreferencesCreate(nil, RemapProduct.configurationSession as CFString, nil) else {
         throw ResolverError.preferences("open DNS preferences")
     }
     return preferences
@@ -421,7 +433,7 @@ func makeAuthorizedPreferences() throws -> AuthorizedPreferencesSession {
     }
     guard let preferences = SCPreferencesCreateWithAuthorization(
         nil,
-        "Agenxy Remap" as CFString,
+        RemapProduct.configurationSession as CFString,
         nil,
         authorization
     ) else {
@@ -435,7 +447,7 @@ func makeAuthorizedPreferences() throws -> AuthorizedPreferencesSession {
 }
 
 func makeDynamicStore() throws -> SCDynamicStore {
-    guard let store = SCDynamicStoreCreate(nil, "Agenxy Remap" as CFString, nil, nil) else {
+    guard let store = SCDynamicStoreCreate(nil, RemapProduct.configurationSession as CFString, nil, nil) else {
         throw ResolverError.preferences("open the dynamic network store")
     }
     return store
@@ -636,3 +648,5 @@ func requireActiveConsoleUser(_ expectedUID: UInt32) throws {
         throw ResolverError.activeUserMismatch
     }
 }
+
+private let loopbackLogger = Logger(subsystem: "org.agenxy.Remap", category: "loopback-reservations")

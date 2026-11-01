@@ -15,7 +15,7 @@ public final class ResolverChangeMonitor: ResolverChangeMonitoring, @unchecked S
 
     private let continuation: AsyncStream<Void>.Continuation
     private let watchedSocketPath: String?
-    private let queue = DispatchQueue(label: "org.agenxy.remap.resolver-monitor", qos: .utility)
+    private let queue = DispatchQueue(label: "org.agenxy.Remap.resolver-monitor", qos: .utility)
     private var store: SCDynamicStore?
     private var callbackOwner: ResolverCallbackOwner?
     private var socketDirectoryDescriptor: Int32 = -1
@@ -49,7 +49,7 @@ public final class ResolverChangeMonitor: ResolverChangeMonitoring, @unchecked S
         )
         guard let dynamicStore = SCDynamicStoreCreate(
             nil,
-            "Agenxy Remap Resolver Supervisor" as CFString,
+            RemapProduct.supervisorSession as CFString,
             resolverChanged,
             &context
         ) else {

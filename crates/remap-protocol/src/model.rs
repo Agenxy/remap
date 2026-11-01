@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::Diagnostic;
@@ -14,6 +16,9 @@ pub const MAX_ATOMIC_CHANGE_COUNT: usize = 64;
 
 /// Maximum encoded destination length accepted by the registry.
 pub const MAX_TARGET_BYTES: usize = 4_096;
+
+/// Maximum not-listening peer-machine listeners one status names.
+pub const MAX_LISTENER_FAILURES: usize = 64;
 
 /// Maximum duration of one daemon-backed revision wait.
 pub const MAX_REVISION_WAIT_MS: u32 = 5_000;
@@ -155,7 +160,6 @@ pub enum Command {
 
 /// Result of one bounded wait for a later registry revision.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct RevisionNotice {
     /// Latest authoritative revision at return time.
     pub revision: u64,
@@ -165,7 +169,6 @@ pub struct RevisionNotice {
 
 /// Authenticated runtime-listener expectations for one fresh challenge.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct HealthChallengeResult {
     /// Opaque identifier regenerated for each daemon runtime.
     pub instance_id: String,
@@ -179,7 +182,6 @@ pub struct HealthChallengeResult {
 
 /// Current authoritative registry status.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct RegistryStatus {
     /// Monotonic registry revision.
     pub revision: u64,
@@ -200,15 +202,18 @@ pub struct RegistryStatus {
     pub dns_upstream: Option<Diagnostic>,
     /// Present while the owner has turned Remap's system DNS off on purpose
     /// (ADR-0036); absent while it is on, falling back on its own, or was
-    /// never activated.
+    /// never activated. Boxed, as `peer_machine_listeners` is, because both
+    /// are usually absent and would otherwise size every command result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dns_turned_off: Option<DnsTurnedOff>,
+    pub dns_turned_off: Option<Box<DnsTurnedOff>>,
+    /// The gateway's peer-machine listeners (ADR-0033), when it runs any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_machine_listeners: Option<Box<PeerMachineListeners>>,
 }
 
 /// The owner turned Remap's system DNS off on purpose. It carries a time and
 /// commands, never a name or an address.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct DnsTurnedOff {
     /// UTC time to the minute, such as `2026-10-31T01:20Z`.
     pub turned_off_at: String,
@@ -232,9 +237,44 @@ impl DnsTurnedOff {
     }
 }
 
+/// How many peer-machine service listeners accept connections, and why the
+/// others do not.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PeerMachineListeners {
+    /// Listeners bound to their mapping's address and accepting.
+    pub listening: u64,
+    /// Listeners that could not bind.
+    pub not_listening: u64,
+    /// The first not-listening listeners, by pattern then port, at most 64.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<PeerMachineListenerFailure>,
+    /// Connections closed without a stream since the daemon started, by
+    /// cause: `endpoint`, `no-supgang`, `refused`, `timeout` or
+    /// `unknown-peer`. Causes not seen are omitted.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refusals: BTreeMap<String, u64>,
+}
+
+/// One peer-machine service listener that could not bind.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PeerMachineListenerFailure {
+    /// Canonical pattern of the mapping.
+    pub pattern: String,
+    /// The exposed service.
+    pub service: String,
+    /// The mapping's allocated address.
+    pub address: String,
+    /// The port listened on for the service.
+    pub port: u16,
+    /// Stable cause: `address-not-reserved`, `port-in-use`,
+    /// `permission-denied` or `other`.
+    pub cause: String,
+    /// What the cause means and what to do.
+    pub detail: String,
+}
+
 /// Stable presentation of one mapping.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct MappingView {
     /// Optional same-origin landing path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -251,11 +291,14 @@ pub struct MappingView {
     pub enabled: bool,
     /// Revision that most recently changed this record.
     pub updated_revision: u64,
+    /// Loopback address the registry allocated to a peer-machine mapping
+    /// (ADR-0033); its DNS answer while enabled. Absent for other kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_address: Option<String>,
 }
 
 /// One bounded page from the registry.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ListResult {
     /// Registry revision observed by this page.
     pub revision: u64,
@@ -267,7 +310,6 @@ pub struct ListResult {
 
 /// Resolution explanation for one lookup name.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ResolutionResult {
     /// Canonical lookup name.
     pub name: String,
@@ -279,7 +321,6 @@ pub struct ResolutionResult {
 
 /// Canonical result of side-effect-free mapping validation.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ValidationResult {
     /// Advisory guidance that never changes validation or mutation success.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -299,7 +340,6 @@ pub struct ValidationResult {
 
 /// One projected effect in an ordered change set.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ChangeEffect {
     /// Canonical mapping pattern.
     pub pattern: String,
@@ -313,7 +353,6 @@ pub struct ChangeEffect {
 
 /// Side-effect-free projection of proposed changes.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct PreviewResult {
     /// Advisory guidance that never blocks the owner's explicit target,
     /// including reachability of loopback HTTP targets observed now.
@@ -329,7 +368,6 @@ pub struct PreviewResult {
 
 /// Receipt for an idempotent committed change set.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ApplyResult {
     /// Advisory guidance retained in the exact idempotent receipt, followed
     /// by reachability of loopback HTTP targets observed when answering.

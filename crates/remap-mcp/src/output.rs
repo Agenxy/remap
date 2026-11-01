@@ -167,6 +167,7 @@ mod tests {
             host_policy: HostPolicy::PreserveClient,
             enabled: true,
             updated_revision: 7,
+            peer_address: None,
         }
     }
 

@@ -25,6 +25,9 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
         /// `remapd`, it reports the verdict while that exact set, in any
         /// order, is the last one published, including after invalidation.
         var unansweredUpstreams: [String]?
+        var loopbackReservations: [String] = []
+        var unheldListeners: [LoopbackListener] = []
+        var adoptedDescriptorCounts: [Int] = []
     }
 
     private let state: Mutex<State>
@@ -42,6 +45,13 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
     }
 
     func exchange(_ command: ResolverSystemCommand) throws -> ResolverSystemResult {
+        try exchange(command, passing: [])
+    }
+
+    func exchange(
+        _ command: ResolverSystemCommand,
+        passing descriptors: [Int32]
+    ) throws -> ResolverSystemResult {
         let encoded = try state.withLock { state in
             if state.refusesEverything {
                 throw ResolverChannelError.transport
@@ -54,6 +64,16 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
                 state.publishedUpstreams = upstreams
             case let .invalidate(activationID, generation):
                 try invalidate(&state, activationID: activationID, generation: generation)
+            case .loopbackReservations:
+                return try wireResult(state, loopbackReservations: state.loopbackReservations)
+            case let .adoptListeners(listeners):
+                // remapd adopts one descriptor per listener, in order, or none.
+                guard listeners.count == descriptors.count else {
+                    throw try daemonDiagnostic("E_SYSTEM_DESCRIPTORS")
+                }
+                state.adoptedDescriptorCounts.append(descriptors.count)
+                state.unheldListeners.removeAll(where: listeners.contains)
+                return try wireResult(state, loopbackReservations: state.loopbackReservations)
             }
             return try wireResult(state)
         }
@@ -94,7 +114,7 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
         state.invalidations.append(activationID)
     }
 
-    private func wireResult(_ state: State) throws -> Data {
+    private func wireResult(_ state: State, loopbackReservations: [String]? = nil) throws -> Data {
         var object: [String: Any] = [
             "activation_id": state.activationID.map { $0.uuidString.lowercased() } ?? NSNull(),
             "active_generation": state.activeGeneration.map { NSNumber(value: $0) } ?? NSNull()
@@ -109,6 +129,10 @@ final class ResolverTestDaemon: ResolverSystemExchanging, Sendable {
                 "unanswered_queries": 12,
                 "unanswered_for_ms": 9000
             ]
+        }
+        if let loopbackReservations {
+            object["loopback_reservations"] = loopbackReservations
+            object["unheld_listeners"] = state.unheldListeners.map { ["address": $0.address, "port": Int($0.port)] }
         }
         return try JSONSerialization.data(withJSONObject: object)
     }

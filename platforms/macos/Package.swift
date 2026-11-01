@@ -8,6 +8,22 @@ let strictSwift: [SwiftSetting] = [
     .unsafeFlags(["-warnings-as-errors"])
 ]
 
+/// A helper's `Info.plist` sits beside its sources and is not one of them.
+let embeddedInfoPlistSource = ["Info.plist"]
+
+/// Embeds a helper's `Info.plist` in its executable's `__TEXT,__info_plist`
+/// section. A bare executable has no bundle, so without one macOS names the
+/// helper in a prompt by its file name, and code signing has no identifier of
+/// the product's choosing to bind (ADR-0034).
+func embeddedInfoPlist(_ target: String) -> LinkerSetting {
+    .unsafeFlags([
+        "-Xlinker", "-sectcreate",
+        "-Xlinker", "__TEXT",
+        "-Xlinker", "__info_plist",
+        "-Xlinker", "\(Context.packageDirectory)/Sources/\(target)/Info.plist"
+    ])
+}
+
 let package = Package(
     name: "RemapMac",
     platforms: [.macOS(.v15)],
@@ -60,24 +76,36 @@ let package = Package(
         .executableTarget(
             name: "RemapInstall",
             dependencies: ["RemapInstallKit", "RemapSystemKit"],
+            exclude: embeddedInfoPlistSource,
             swiftSettings: strictSwift,
-            linkerSettings: [.linkedFramework("LocalAuthentication")]
+            linkerSettings: [
+                .linkedFramework("LocalAuthentication"),
+                embeddedInfoPlist("RemapInstall")
+            ]
         ),
         .executableTarget(
             name: "RemapInstallerBootstrap",
             dependencies: ["RemapInstallKit", "RemapLifecycleKit"],
-            swiftSettings: strictSwift
+            exclude: embeddedInfoPlistSource,
+            swiftSettings: strictSwift,
+            linkerSettings: [embeddedInfoPlist("RemapInstallerBootstrap")]
         ),
         .executableTarget(
             name: "RemapInstallerService",
             dependencies: ["RemapLifecycleKit"],
-            swiftSettings: strictSwift
+            exclude: embeddedInfoPlistSource,
+            swiftSettings: strictSwift,
+            linkerSettings: [embeddedInfoPlist("RemapInstallerService")]
         ),
         .executableTarget(
             name: "RemapLifecycleCLI",
             dependencies: ["RemapLifecycleKit"],
+            exclude: embeddedInfoPlistSource,
             swiftSettings: strictSwift,
-            linkerSettings: [.linkedFramework("LocalAuthentication")]
+            linkerSettings: [
+                .linkedFramework("LocalAuthentication"),
+                embeddedInfoPlist("RemapLifecycleCLI")
+            ]
         ),
         .executableTarget(
             name: "RemapPortableInstaller",
@@ -87,36 +115,50 @@ let package = Package(
                 "RemapLifecycleKit",
                 "RemapSystemKit"
             ],
+            exclude: embeddedInfoPlistSource,
             swiftSettings: strictSwift,
-            linkerSettings: [.linkedFramework("Security")]
+            linkerSettings: [
+                .linkedFramework("Security"),
+                embeddedInfoPlist("RemapPortableInstaller")
+            ]
         ),
         .executableTarget(
             name: "RemapResolver",
             dependencies: ["RemapSystemKit"],
+            exclude: embeddedInfoPlistSource,
             swiftSettings: strictSwift,
-            linkerSettings: [.linkedFramework("OSLog")]
+            linkerSettings: [
+                .linkedFramework("OSLog"),
+                embeddedInfoPlist("RemapResolver")
+            ]
         ),
         .executableTarget(
             name: "RemapReleaseKey",
+            exclude: embeddedInfoPlistSource,
             swiftSettings: strictSwift,
             linkerSettings: [
                 .linkedFramework("CryptoKit"),
                 .linkedFramework("LocalAuthentication"),
-                .linkedFramework("Security")
+                .linkedFramework("Security"),
+                embeddedInfoPlist("RemapReleaseKey")
             ]
         ),
         .executableTarget(
             name: "RemapReleaseXARSigner",
+            exclude: embeddedInfoPlistSource,
             swiftSettings: strictSwift,
             linkerSettings: [
                 .linkedFramework("CryptoKit"),
-                .linkedFramework("Security")
+                .linkedFramework("Security"),
+                embeddedInfoPlist("RemapReleaseXARSigner")
             ]
         ),
         .executableTarget(
             name: "RemapSystem",
             dependencies: ["RemapSystemKit"],
-            swiftSettings: strictSwift
+            exclude: embeddedInfoPlistSource,
+            swiftSettings: strictSwift,
+            linkerSettings: [embeddedInfoPlist("RemapSystem")]
         ),
         .executableTarget(
             name: "RemapApp",

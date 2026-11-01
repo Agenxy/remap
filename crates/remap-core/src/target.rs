@@ -6,7 +6,9 @@ use std::num::NonZeroU16;
 use std::str::FromStr;
 
 use crate::template::{self, TemplateNameError};
-use crate::{MovedTarget, MovedTargetError, RemapName, RemapNameError};
+use crate::{
+    MovedTarget, MovedTargetError, PeerMachine, PeerMachineError, RemapName, RemapNameError,
+};
 
 /// Supported upstream HTTP schemes.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
@@ -326,6 +328,8 @@ pub enum MappingTargetError {
     InvalidHttpUpstream(HttpUpstreamError),
     /// A `supgang://` target is invalid.
     InvalidPeerService(PeerServiceError),
+    /// A `supgang://<selector>?<service>=<port>` target is invalid.
+    InvalidPeerMachine(PeerMachineError),
 }
 
 impl Display for MappingTargetError {
@@ -335,6 +339,7 @@ impl Display for MappingTargetError {
             Self::InvalidName(error) => Display::fmt(error, formatter),
             Self::InvalidHttpUpstream(error) => Display::fmt(error, formatter),
             Self::InvalidPeerService(error) => Display::fmt(error, formatter),
+            Self::InvalidPeerMachine(error) => Display::fmt(error, formatter),
         }
     }
 }
@@ -346,6 +351,7 @@ impl Error for MappingTargetError {
             Self::InvalidName(error) => Some(error),
             Self::InvalidHttpUpstream(error) => Some(error),
             Self::InvalidPeerService(error) => Some(error),
+            Self::InvalidPeerMachine(error) => Some(error),
         }
     }
 }
@@ -509,7 +515,7 @@ fn peer_selector_valid(peer: &str) -> bool {
             .all(|character| !character.is_control() && !character.is_whitespace())
 }
 
-fn service_name_valid(service: &str) -> bool {
+pub(crate) fn service_name_valid(service: &str) -> bool {
     !service.is_empty()
         && service.len() <= MAX_SERVICE_NAME_BYTES
         && !service.starts_with('-')
@@ -597,6 +603,10 @@ pub enum MappingTarget {
     /// Return loopback from DNS and route to a Supgang peer's advertised
     /// service, resolved and key-pinned at route time (ADR-0016).
     Peer(PeerService),
+    /// Return the mapping's reserved loopback address from DNS and carry
+    /// each listed TCP port to the peer machine's exposed service through
+    /// Supgang (ADR-0033).
+    PeerMachine(PeerMachine),
 }
 
 /// The stable category of a mapping destination.
@@ -612,6 +622,8 @@ pub enum MappingTargetKind {
     Http,
     /// A service on a Supgang peer.
     Peer,
+    /// A Supgang peer machine's exposed TCP services.
+    PeerMachine,
 }
 
 impl MappingTargetKind {
@@ -624,6 +636,7 @@ impl MappingTargetKind {
             Self::DnsAlias => "dns-alias",
             Self::Http => "http",
             Self::Peer => "peer",
+            Self::PeerMachine => "peer-machine",
         }
     }
 }
@@ -649,6 +662,13 @@ impl MappingTarget {
             return MovedTarget::parse(input)
                 .map(Self::Moved)
                 .map_err(MappingTargetError::InvalidMoved);
+        }
+        if let Some(remainder) = input.strip_prefix("supgang://")
+            && !remainder.contains('/')
+        {
+            return PeerMachine::parse(input)
+                .map(Self::PeerMachine)
+                .map_err(MappingTargetError::InvalidPeerMachine);
         }
         if input.starts_with("supgang://") || input.starts_with("supgang+http://") {
             return PeerService::parse_with_policy(input, host_header_policy)
@@ -687,6 +707,7 @@ impl MappingTarget {
             Self::DnsAlias(_) => MappingTargetKind::DnsAlias,
             Self::Http(_) => MappingTargetKind::Http,
             Self::Peer(_) => MappingTargetKind::Peer,
+            Self::PeerMachine(_) => MappingTargetKind::PeerMachine,
         }
     }
 }
@@ -699,6 +720,7 @@ impl Display for MappingTarget {
             Self::DnsAlias(name) => Display::fmt(name, formatter),
             Self::Http(upstream) => Display::fmt(upstream, formatter),
             Self::Peer(service) => Display::fmt(service, formatter),
+            Self::PeerMachine(machine) => Display::fmt(machine, formatter),
         }
     }
 }

@@ -3,17 +3,18 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use remap_core::{HostHeaderPolicy, Mapping, MappingTarget, NamePattern, RegistrySnapshot};
-use remap_network::{ResolverPlanStore, RuntimeIdentity};
-
-use crate::native_dns::TurnedOffRecordSource;
+use remap_network::{ListenerState, PeerMachineStatus, ResolverPlanStore, RuntimeIdentity};
 use remap_protocol::{
     CONTROL_PROTOCOL_VERSION, Command, CommandResult, ControlRequest, ControlResponse, Diagnostic,
-    HealthChallengeResult, HostPolicy, MAX_MAPPING_COUNT, MAX_MAPPING_PAGE_SIZE,
-    MAX_REVISION_WAIT_MS, MappingView, RevisionNotice, Surface,
+    HealthChallengeResult, HostPolicy, MAX_LISTENER_FAILURES, MAX_MAPPING_COUNT,
+    MAX_MAPPING_PAGE_SIZE, MAX_REVISION_WAIT_MS, MappingView, PeerMachineListenerFailure,
+    PeerMachineListeners, RevisionNotice, Surface,
 };
 use remap_registry::Registry;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Duration, timeout};
+
+use crate::native_dns::TurnedOffRecordSource;
 
 const ENGINE_QUEUE_CAPACITY: usize = 256;
 const SNAPSHOT_RETRY_LIMIT: usize = 4;
@@ -34,6 +35,7 @@ pub struct Engine {
     state: Arc<EngineState>,
     revision: watch::Receiver<u64>,
     identity: RuntimeIdentity,
+    peer_machines: PeerMachineStatus,
 }
 
 #[derive(Debug)]
@@ -84,6 +86,7 @@ impl Engine {
             }),
             revision,
             identity,
+            peer_machines: PeerMachineStatus::default(),
         })
     }
 
@@ -126,7 +129,8 @@ impl Engine {
         }
         if status && let Some(CommandResult::Status(status)) = response.result.as_mut() {
             status.dns_upstream = self.dns_upstream();
-            status.dns_turned_off = self.dns_turned_off();
+            status.dns_turned_off = self.dns_turned_off().map(Box::new);
+            status.peer_machine_listeners = self.peer_machine_summary().map(Box::new);
         }
         Ok(response)
     }
@@ -207,6 +211,48 @@ impl Engine {
     #[must_use]
     pub fn subscribe_revision(&self) -> watch::Receiver<u64> {
         self.revision.clone()
+    }
+
+    /// Returns where the peer-machine listeners report, read by status.
+    #[must_use]
+    pub(crate) fn peer_machine_status(&self) -> PeerMachineStatus {
+        self.peer_machines.clone()
+    }
+
+    /// Summarizes the peer-machine listeners for status (ADR-0033), or
+    /// `None` when none run.
+    fn peer_machine_summary(&self) -> Option<PeerMachineListeners> {
+        let reports = self.peer_machines.reports();
+        let refusals: std::collections::BTreeMap<String, u64> = self
+            .peer_machines
+            .refusals()
+            .into_iter()
+            .map(|(cause, count)| (cause.to_owned(), count))
+            .collect();
+        if reports.is_empty() && refusals.is_empty() {
+            return None;
+        }
+        let failures: Vec<PeerMachineListenerFailure> = reports
+            .iter()
+            .filter_map(|report| match report.state {
+                ListenerState::Listening(_) => None,
+                ListenerState::NotListening(cause) => Some(PeerMachineListenerFailure {
+                    pattern: report.pattern.clone(),
+                    service: report.service.clone(),
+                    address: report.address.to_string(),
+                    port: report.port,
+                    cause: cause.token().to_owned(),
+                    detail: cause.explanation().to_owned(),
+                }),
+            })
+            .collect();
+        let not_listening = failures.len();
+        Some(PeerMachineListeners {
+            listening: u64::try_from(reports.len() - not_listening).unwrap_or(u64::MAX),
+            not_listening: u64::try_from(not_listening).unwrap_or(u64::MAX),
+            failures: failures.into_iter().take(MAX_LISTENER_FAILURES).collect(),
+            refusals,
+        })
     }
 
     /// Returns the shared identity for this daemon's DNS and HTTP runtimes.
@@ -388,8 +434,15 @@ fn mapping_from_view(view: &MappingView) -> Result<Mapping, Diagnostic> {
     };
     let target = MappingTarget::parse_with_http_policy(&view.target, policy)
         .map_err(|error| snapshot_error(&error.to_string()))?;
+    let peer_address = view
+        .peer_address
+        .as_deref()
+        .map(str::parse::<std::net::Ipv4Addr>)
+        .transpose()
+        .map_err(|_| snapshot_error("a peer-machine address is not an IPv4 address"))?;
     Mapping::new(pattern, target)
         .with_enabled(view.enabled)
+        .with_peer_address(peer_address)
         .with_landing(
             view.landing
                 .as_deref()

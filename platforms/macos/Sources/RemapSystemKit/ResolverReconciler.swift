@@ -5,6 +5,15 @@ import Network
 /// Narrow transport seam used by resolver reconciliation and deterministic tests.
 public protocol ResolverSystemExchanging: Sendable {
     func exchange(_ command: ResolverSystemCommand) throws -> ResolverSystemResult
+    /// Sends `descriptors` with the request. Only the channel can do this.
+    func exchange(_ command: ResolverSystemCommand, passing descriptors: [Int32]) throws -> ResolverSystemResult
+}
+
+public extension ResolverSystemExchanging {
+    func exchange(_ command: ResolverSystemCommand, passing descriptors: [Int32]) throws -> ResolverSystemResult {
+        guard descriptors.isEmpty else { throw ResolverChannelError.transport }
+        return try exchange(command)
+    }
 }
 
 extension ResolverSystemChannel: ResolverSystemExchanging {}

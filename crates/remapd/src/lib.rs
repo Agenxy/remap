@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Authenticated local-control server and single-writer daemon runtime.
 
+mod descriptor_handoff;
 mod engine;
 mod launchd;
 mod native_dns;
@@ -9,6 +10,7 @@ mod peer;
 mod privilege;
 mod reachability;
 mod server;
+mod startup;
 mod system_control;
 mod systemd;
 

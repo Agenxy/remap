@@ -10,6 +10,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
+from tools.remap_lifecycle_approval import administrator_command
 from tools.remap_macos_portable_package import verify_detached_package_signature
 from tools.remap_macos_release_installer_signing import verify_package_signature
 from tools.remap_release_signing import (
@@ -46,10 +47,9 @@ def install_verified_package(root: Path, package: Path, signature: Path) -> None
     staging = STAGING_PARENT / f"{STAGING_PREFIX}{uuid.uuid4()}"
     staged_package = staging / "Remap.pkg"
     try:
-        _run(("/usr/bin/sudo", "/bin/mkdir", "-m", "0755", str(staging)))
+        _run(_administrator("/bin/mkdir", "-m", "0755", str(staging)))
         _run(
-            (
-                "/usr/bin/sudo",
+            _administrator(
                 "/usr/bin/install",
                 "-o",
                 "root",
@@ -72,13 +72,8 @@ def install_verified_package(root: Path, package: Path, signature: Path) -> None
             verify_package_signature(staged_package, installer_certificate)
         verify_staging(staging, staged_package)
         _run(
-            (
-                "/usr/bin/sudo",
-                "/usr/sbin/installer",
-                "-pkg",
-                str(staged_package),
-                "-target",
-                "/",
+            _administrator(
+                "/usr/sbin/installer", "-pkg", str(staged_package), "-target", "/"
             )
         )
     finally:
@@ -140,9 +135,14 @@ def _cleanup(directory: Path, package: Path) -> None:
     ):
         return
     if package.exists() and not package.is_symlink():
-        _run(("/usr/bin/sudo", "/bin/unlink", str(package)), check=False)
+        _run(_administrator("/bin/unlink", str(package)), check=False)
     if directory.exists() and not directory.is_symlink():
-        _run(("/usr/bin/sudo", "/bin/rmdir", str(directory)), check=False)
+        _run(_administrator("/bin/rmdir", str(directory)), check=False)
+
+
+def _administrator(*command: str) -> tuple[str, ...]:
+    # sudo asks once per ticket, so the first of these is normally the one that asks.
+    return administrator_command("install-package", *command)
 
 
 def _run(arguments: tuple[str, ...], *, check: bool = True) -> None:
