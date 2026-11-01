@@ -76,6 +76,12 @@ impl SupgangStreams {
             .join("Application Support")
             .join("org.agenxy.supgang")
             .join("control.sock");
+        Self::existing(socket)
+    }
+
+    /// The endpoint at `socket` if that socket exists now.
+    #[must_use]
+    pub fn existing(socket: PathBuf) -> Option<Self> {
         socket.exists().then(|| Self::at(socket))
     }
 

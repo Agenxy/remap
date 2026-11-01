@@ -12,7 +12,7 @@ use std::time::Duration;
 use nix::fcntl::{Flock, FlockArg};
 use remap_network::{
     DnsBindings, DnsRuntime, DnsRuntimeConfig, GatewayBindings, GatewayRuntime,
-    GatewayRuntimeConfig, NetworkError, SnapshotStore,
+    GatewayRuntimeConfig, NetworkError, PeerMachineListeners, SnapshotStore,
 };
 use remap_protocol::{
     ControlPaths, ControlRequest, ControlResponse, DEFAULT_DAEMON_DRAIN_GRACE, Diagnostic,
@@ -132,6 +132,10 @@ pub(crate) struct PreboundNetwork {
 pub(crate) struct PreparedNetwork {
     pub(crate) dns: Option<DnsRuntime>,
     pub(crate) gateway: Option<GatewayRuntime>,
+    /// The peer-machine listener runtime, present with the gateway. Clones
+    /// are handles to it: the system control channel adopts root-created
+    /// sockets through one (ADR-0033).
+    pub(crate) peer_machines: Option<PeerMachineListeners>,
     pub(crate) system_control: Option<SystemControlRuntime>,
     pub(crate) snapshots: SnapshotStore,
 }
@@ -447,6 +451,17 @@ fn spawn_network_services(
         let runtime_shutdown = shutdown.subscribe();
         services.spawn(async move {
             gateway
+                .serve(runtime_shutdown)
+                .await
+                .map_err(network_diagnostic)
+        });
+    }
+    // Peer-machine listeners run beside the HTTP gateway, each held only on
+    // its mapping's reserved address (ADR-0033).
+    if let Some(listeners) = network.peer_machines {
+        let runtime_shutdown = shutdown.subscribe();
+        services.spawn(async move {
+            listeners
                 .serve(runtime_shutdown)
                 .await
                 .map_err(network_diagnostic)

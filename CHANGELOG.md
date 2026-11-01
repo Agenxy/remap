@@ -6,6 +6,40 @@ platform claims separate.
 
 ## Unreleased
 
+- A Supgang peer machine can have one name that works on any network
+  (ADR-0033). `remap set pro.agenxy.internal 'supgang://<node-id>?ssh=22,k7=7443'`
+  gives the machine a stable loopback address in `127.77.0.0/16`, allocated
+  when the mapping is created and kept until it is removed. Remap holds a
+  listener on that address at each listed port and carries each TCP
+  connection through Supgang's local stream endpoint to the service the
+  peer's owner exposes with `supgang expose`. The peer is selected by its
+  node ID or fingerprint, never its name. TCP only: UDP and unexposed
+  services are not reachable.
+  - DNS answers A with the address, and no AAAA, only while Remap holds
+    every listed port. Otherwise the name fails with SERVFAIL, so a
+    connection never reaches another local service, such as Remote Login's
+    sshd, in the peer's place.
+  - On macOS the installed helper reserves the address and creates the
+    listening sockets as root, so `ssh=22` works. That helper ships
+    separately, and until it does each port reports `awaiting-socket`.
+  - On Linux `remapd` binds the ports itself. Ports below 1024 need
+    `CAP_NET_BIND_SERVICE`, and a port another service holds on every
+    address cannot be held.
+  - Every listed port is reachable from anything on this machine that can
+    open a loopback TCP connection, so list only services the peer protects
+    itself.
+  - A connection Supgang does not carry is closed. The daemon's log names
+    the service and the cause, never the mapped name, at most once per cause
+    every ten seconds, and `remap status` counts every one by cause.
+    Connections silent for two hours are closed.
+  - `get`, `list`, `preview` and the MCP tools show the address
+    (`peer_address`). A registry holds at most 256 such mappings.
+  - The registry moves to schema 4, behind the pre-migration copy.
+- Remap's resolver refuses an upstream answer inside `127.77.0.0/16` with
+  SERVFAIL, so a remote name cannot point at a peer machine's reserved
+  address through it.
+- Control replies decode tolerantly: a client one release older ignores
+  fields a newer daemon adds. Requests still refuse unknown fields.
 - A wildcard's peer target may read its peer and service from the name
   (ADR-0032). `*.k7.internal → supgang://{1}/{2}` routes
   `preview.solis.k7.internal` to `supgang://solis/preview`, where `{1}` is the
