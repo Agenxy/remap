@@ -49,11 +49,32 @@ when a maintained native API or binding exists.
 Parallel work uses `git worktree`s under `.worktrees/`. Each one would otherwise
 grow its own multi-gigabyte `target/`, so:
 
-- Point every worktree at one shared Cargo target directory with
-  `CARGO_TARGET_DIR`. The repository's tools resolve Cargo's real target
-  directory and never assume `<checkout>/target`. Concurrent builds in
-  different worktrees then wait for Cargo's lock instead of duplicating it.
+- Give each worktree its own Cargo target directory under one shared root,
+  `CARGO_TARGET_DIR=<root>/<worktree>`, set in an untracked `mise.local.toml`.
+  Never point two worktrees at the same directory: Cargo names a workspace
+  crate's output by its path inside the workspace, so two checkouts building
+  at once overwrite each other's artifacts and link the wrong code. The
+  repository's tools resolve Cargo's real target directory and never assume
+  `<checkout>/target`, and one root makes the budget easy to see and reap.
+- Keep the whole root under 30 GiB. Reap a worktree's directory with its
+  worktree.
 - Remove a worktree as soon as its branch is merged into the integration
   branch and the worktree is clean and pushed. The branch stays.
 - Keep at most six worktrees with build output. Never remove a worktree whose
   branch is unmerged, dirty or unpushed without the owner's OK.
+
+### Merging
+
+The agent that owns a pull request merges it. Nothing waits for the owner to
+review it.
+
+- Merge when the PR is green: `make check` locally and every CI check. Take
+  one independent review first when the change touches a trust boundary,
+  privilege, signing, a wire format or the resolver.
+- Squash-merge in dependency order. Before squashing a stacked PR, merge its
+  new base into it and re-gate.
+- Hold a PR only for a concrete blocker, and name it in one line. Waiting for
+  a review is not a blocker.
+- Only a first public release (anything that changes `main`, a published
+  release, the Homebrew tap or crates.io) or a licence change needs the
+  owner's direct word.
