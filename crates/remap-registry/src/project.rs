@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
 
 use remap_core::{HostHeaderPolicy, LandingPath, MappingTarget, NamePattern};
 use remap_protocol::{
@@ -16,6 +17,7 @@ pub(crate) struct StoredMapping {
     pub(crate) host_policy: HostPolicy,
     pub(crate) enabled: bool,
     pub(crate) updated_revision: u64,
+    pub(crate) peer_address: Option<Ipv4Addr>,
 }
 
 impl StoredMapping {
@@ -28,6 +30,7 @@ impl StoredMapping {
             host_policy: self.host_policy,
             enabled: self.enabled,
             updated_revision: self.updated_revision,
+            peer_address: self.peer_address.map(|address| address.to_string()),
         }
     }
 
@@ -65,7 +68,7 @@ impl StoredMapping {
                     "E_INVALID_TARGET",
                     error.to_string(),
                     Some(
-                    "use an IP address, DNS alias, http(s) upstream URL, or supgang://<peer>/<service>"
+                    "use an IP address, DNS alias, http(s) upstream URL, supgang://<peer>/<service>, or supgang://<node-id>?<service>=<port>"
                         .to_owned(),
                 ),
                     false,
@@ -115,6 +118,7 @@ impl StoredMapping {
             host_policy,
             enabled,
             updated_revision,
+            peer_address: None,
         })
     }
 }
@@ -146,6 +150,7 @@ pub(crate) fn project(
         has_effect |= effect.action != "unchanged";
         effects.push(effect);
     }
+    crate::peer_address::ensure_capacity(&mappings)?;
     crate::registry::build_snapshot(revision, &mappings)?;
     let warnings = crate::advisory::warnings(&effects, &mappings);
     Ok(Projection {
@@ -225,6 +230,7 @@ fn apply_set(
     let resolved_enabled = enabled.or_else(|| before.as_ref().map(|record| record.enabled));
     let mut after = parsed;
     after.enabled = resolved_enabled.unwrap_or(true);
+    after.peer_address = crate::peer_address::assign(&after, before.as_ref(), mappings)?;
     let same = before
         .as_ref()
         .is_some_and(|record| same_value(record, &after));
@@ -306,6 +312,7 @@ fn same_value(left: &StoredMapping, right: &StoredMapping) -> bool {
         && left.target_kind == right.target_kind
         && left.host_policy == right.host_policy
         && left.enabled == right.enabled
+        && left.peer_address == right.peer_address
 }
 
 pub(crate) const fn core_host_policy(policy: HostPolicy) -> HostHeaderPolicy {

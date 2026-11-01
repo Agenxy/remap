@@ -20,6 +20,16 @@ the target or the default host policy.
 The dashboard shows landing paths and advisory warnings, including landing-only
 differences and removals in its before/after review.
 
+A peer-machine target, `supgang://<node-id>?<service>=<port>[,...]` (ADR-0033),
+names a Supgang peer machine by node ID or fingerprint and the TCP services
+its owner exposes. Mapping results carry the loopback address the daemon
+allocated to it as `peer_address`, `remap_status` reports its listeners as
+`peer_machine_listeners`, and the dashboard shows the address. The name
+answers only while Remap holds every listed port, and every listed port is
+reachable from anything on the Mac that can open a loopback TCP connection, so
+an agent should list only services the peer protects itself. `remap://help`
+explains the target.
+
 `remap_preview`, `remap_set`, `remap_enable` and `remap_apply` also probe each
 loopback HTTP target they leave enabled with one TCP connection of at most a
 second, and add a warning such as `api.test: target refused connection; ...`

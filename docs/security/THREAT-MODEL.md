@@ -171,6 +171,39 @@ key; an expired or unbounded record names nothing. No peer mapping is ever
 dialled unverified or in plaintext, and a peer that cannot be resolved is a
 gateway error that names the step, not a fallback.
 
+A peer-machine target (`supgang://<node-id>?<service>=<port>`, ADR-0033) is
+selected by node ID or fingerprint, never by a Supgang name, which may repeat
+or change. The registry writer allocates its address in `127.77.0.0/16`, and
+Remap listens only there, at the ports the owner listed: never on
+`127.0.0.1`, the wildcard address, or off loopback. On macOS root creates
+each listening socket on the reserved alias and hands it to `remapd`, which
+adopts it only if it is a listening socket bound to exactly that address and
+port; on Linux `remapd` binds its own. A port that is not held is reported,
+never replaced, and the name then fails with SERVFAIL instead of answering,
+so a connection to it can never reach another local service, such as an
+sshd listening on every address at that port, in place of the peer.
+
+Every listed port is reachable by anything on this machine that can open a
+loopback TCP connection, including other local accounts and, through a
+client that resolves names itself, web pages. Remap does not check who
+connects. Each accepted connection is carried through this user's Supgang
+stream endpoint, after the same socket-owner and peer-credential checks as
+ADR-0026, so whoever connects gets a stream with this user's Supgang
+identity to that exposed service. The owner should list only services the
+peer authenticates itself, such as ssh. Remap's own resolver refuses any
+upstream answer inside `127.77.0.0/16` with SERVFAIL, so a remote name cannot
+be pointed at a reserved port through it. Checking the connecting account is
+left for a later decision (ADR-0033 amendment).
+
+Remap never dials the peer and adds no authority: whether a stream opens is
+the peer owner's exposure, judged by Supgang. A connection that is not
+carried closes and logs one line with the service name and a cause token,
+never the mapped name, an address, port or peer identity, at most once per
+cause every ten seconds. Status counts every refusal by cause and names
+each port that is not held and why, to the owner alone. Carried connections
+close after two hours with no byte in either direction, and each listener
+carries at most 32 at once within the overall 256.
+
 ### Certificate and key boundary
 
 Creating, trusting, untrusting, rotating, exporting, or destroying a local CA is

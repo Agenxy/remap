@@ -920,6 +920,7 @@ mod status_tests {
                 None,
                 true,
             )),
+            peer_machine_listeners: None,
         };
 
         let summary = status_summary(&status);

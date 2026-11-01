@@ -177,6 +177,7 @@ async fn doctor(data_dir: Option<&Path>) -> Result<Report, Diagnostic> {
         inspect_runtime(data_dir).await;
     let native_install = installation_ready(authority_ready, &health);
     let system_lookup = system_lookup(data_dir).await;
+    let peer_machines = peer_machine_listeners(data_dir).await;
     Ok(Report::Doctor(app::DoctorReport {
         version: env!("CARGO_PKG_VERSION"),
         operating_system: std::env::consts::OS,
@@ -187,7 +188,20 @@ async fn doctor(data_dir: Option<&Path>) -> Result<Report, Diagnostic> {
         health,
         native_install,
         system_lookup,
+        peer_machines,
     }))
+}
+
+/// The gateway's peer-machine listeners as the daemon reports them
+/// (ADR-0033), or `None` when it runs none or cannot be asked.
+async fn peer_machine_listeners(
+    data_dir: Option<&Path>,
+) -> Option<remap_protocol::PeerMachineListeners> {
+    let client = client(data_dir).ok()?;
+    match client.execute(Command::Status).await {
+        Ok(CommandResult::Status(status)) => status.peer_machine_listeners,
+        _ => None,
+    }
 }
 
 /// Resolves one mapped name the way a browser does and compares the answer

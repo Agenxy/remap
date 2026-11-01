@@ -106,7 +106,11 @@ Resolution order is deterministic:
 Destinations are direct IP addresses, DNS aliases, HTTP upstreams, or a
 service on a Supgang peer (`supgang://<peer>/<service>`, ADR-0016), which the
 gateway resolves through Supgang when a request is routed and verifies against
-the key the peer advertised. HTTP host behavior is explicit per mapping:
+the key the peer advertised, or a Supgang peer machine and the services it
+exposes (`supgang://<node-id>?<service>=<port>`, ADR-0033), whose name answers
+one loopback address the registry allocates in `127.77.0.0/16` and whose TCP
+connections the gateway carries through Supgang's local stream endpoint. HTTP
+host behavior is explicit per mapping:
 preserve the client-facing host or use the upstream host. Remap never silently
 rewrites bodies, redirects, cookies, CSP, CORS, or absolute URLs.
 
