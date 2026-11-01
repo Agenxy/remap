@@ -214,6 +214,14 @@ the product, under a certificate the target Mac has never held.
   wrong-case `consumer_id`, two matching artifacts, a SemVer-invalid version, a
   floor equal to the installed version, an unparsed staged role file beside a
   failing native signature, and a clock behind the last accepted status.
+  - The frozen set is release-roles-v1, `docs/vectors/release-roles-v1` in
+    Supgang. Its `manifest.json` has SHA-256
+    `536d6edf2d149353deec85a18ddeffedc2a7b8d7087df7fa73390c474b6925f8`, the
+    hash Supgang ADR 0007 pins. Remap measured it on 1 November at Supgang
+    commit `ba6a385`, which was then still on an unmerged pull request.
+    Remap vendors exactly these bytes, and only once they are on Supgang's
+    default branch. A manifest with any other hash is a new version, not v1,
+    and is not vendored under this pin.
 - ADR 0005's status-freshness gap is closed. Without an expiring root status,
   revoking a role key cannot reach a Mac.
 - The two-Mac acceptance in ADR 0007 passes. Until it does, no `doctor`,
