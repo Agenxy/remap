@@ -100,10 +100,11 @@ def build(
     """Build and verify one no-shell portable package without a paid identity.
 
     `signing` says which kind of package this is and which key signs it: the development
-    file key, or the release key in the Secure Enclave. The kind also selects the one pin
-    compiled into the package's installer, and the pin both signatures are checked against.
+    file key, the release key in the Secure Enclave, or the rehearsal key in the Secure
+    Enclave. The kind also selects the one pin compiled into the package's installer, and
+    the pin both signatures are checked against.
 
-    `installer_identity` is `None` for a development package. Apple's installer
+    `installer_identity` is `None` for a development or rehearsal package. Apple's installer
     signature is what lets another Mac accept the package, so it is required for
     anything distributed; producing one needs a private key in a keychain, and macOS
     asks a human for the keychain password when the key's access list does not name the

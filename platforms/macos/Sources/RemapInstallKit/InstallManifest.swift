@@ -325,6 +325,26 @@ public struct InstallPublication: Codable, Equatable, Sendable {
     }
 }
 
+/// Which kind of package a generation was installed from, when it was not a release.
+///
+/// A release, and a build from source, record nothing, so their manifests stay schema version 1
+/// and byte-identical to those written before the kind existed. A manifest that records a kind
+/// is schema version 2, so an installer that predates the kind refuses it at its schema check
+/// rather than misreading it. The kind is a fact the installer knows because it was compiled for
+/// it; it is not read from the signed release manifest (ADR-0035).
+public enum InstallPackageKind: String, Codable, Equatable, Sendable {
+    case development
+    case rehearsal
+
+    /// How `remap system status` and `remap doctor` name an install of this kind.
+    public var installDescription: String {
+        switch self {
+        case .development: "development install, built and signed on its own Mac"
+        case .rehearsal: "rehearsal install, not a release"
+        }
+    }
+}
+
 /// Canonical integrity boundary for one immutable Remap installation generation.
 public struct InstallManifest: Codable, Equatable, Sendable {
     public let schemaVersion: UInt32
@@ -332,6 +352,7 @@ public struct InstallManifest: Codable, Equatable, Sendable {
     public let generationID: String
     public let productVersion: String
     public let previousGenerationID: String?
+    public let packageKind: InstallPackageKind?
     public let entries: [InstallEntry]
     public let publications: [InstallPublication]
 
@@ -340,6 +361,7 @@ public struct InstallManifest: Codable, Equatable, Sendable {
         generationID: String,
         productVersion: String,
         previousGenerationID: String?,
+        packageKind: InstallPackageKind? = nil,
         entries: [InstallEntry],
         publications: [InstallPublication]
     ) throws {
@@ -359,11 +381,12 @@ public struct InstallManifest: Codable, Equatable, Sendable {
         guard orderedPublications.allSatisfy({ $0.generationID == generationID }) else {
             throw InstallError.invalidManifest("every publication must name this generation")
         }
-        schemaVersion = 1
+        schemaVersion = Self.schemaVersion(recording: packageKind)
         self.productIdentifier = productIdentifier
         self.generationID = generationID
         self.productVersion = productVersion
         self.previousGenerationID = previousGenerationID
+        self.packageKind = packageKind
         self.entries = orderedEntries
         self.publications = orderedPublications
     }
@@ -391,6 +414,12 @@ public struct InstallManifest: Codable, Equatable, Sendable {
         } catch {
             throw InstallError.invalidManifest("the canonical manifest is malformed")
         }
+        guard Self.supportedSchemaVersions.contains(manifest.schemaVersion) else {
+            throw InstallError.invalidManifest(
+                "the install manifest is schema version \(manifest.schemaVersion); "
+                    + "this installer reads versions 1 and 2"
+            )
+        }
         try manifest.validate()
         guard try manifest.canonicalData() == data else {
             throw InstallError.invalidManifest("the manifest is not canonical sorted JSON")
@@ -407,12 +436,20 @@ public struct InstallManifest: Codable, Equatable, Sendable {
             generationID: generationID,
             productVersion: productVersion,
             previousGenerationID: previousGenerationID,
+            packageKind: packageKind,
             entries: entries,
             publications: publications
         )
-        guard schemaVersion == 1, self == reconstructed else {
+        guard schemaVersion == Self.schemaVersion(recording: packageKind), self == reconstructed else {
             throw InstallError.invalidManifest("canonical ordering or schema validation failed")
         }
+    }
+
+    static let supportedSchemaVersions: ClosedRange<UInt32> = 1 ... 2
+
+    /// Version 1 is every manifest without a package kind, byte for byte; version 2 records one.
+    static func schemaVersion(recording packageKind: InstallPackageKind?) -> UInt32 {
+        packageKind == nil ? 1 : 2
     }
 
     static func validateIdentifier(_ value: String, field: String) throws {

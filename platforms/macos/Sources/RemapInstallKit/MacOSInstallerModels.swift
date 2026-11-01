@@ -179,6 +179,14 @@ public struct MacOSInstallerPreview: Codable, Equatable, Sendable {
 public struct MacOSInstallerGenerationStatus: Codable, Equatable, Sendable {
     public let generationID: String
     public let productVersion: String
+    /// `nil` for a release or a source build.
+    public let packageKind: InstallPackageKind?
+
+    public init(generationID: String, productVersion: String, packageKind: InstallPackageKind? = nil) {
+        self.generationID = generationID
+        self.productVersion = productVersion
+        self.packageKind = packageKind
+    }
 }
 
 public struct MacOSInstallerTransactionStatus: Codable, Equatable, Sendable {

@@ -12,3 +12,23 @@ func portableReleasePinIsOneOpenSSHPublicKeyLine() {
     #expect(Data(base64Encoded: String(fields.dropFirst().first ?? "")) != nil)
     #expect(!pin.contains("\n") && !pin.contains("\\"))
 }
+
+@Test
+func anUnflaggedInstallerIsAReleaseAndSaysNothingMore() {
+    // The test build passes neither package condition, so it is a release installer.
+    #expect(PortablePackageKind.compiled == nil)
+    #expect(PortablePackageKind.announcement(for: nil, productVersion: "0.2.0") == nil)
+    #expect(PortablePackageKind.installedName(for: nil, productVersion: "0.2.0") == "Remap 0.2.0")
+}
+
+@Test
+func aRehearsalInstallerSaysItIsNotARelease() throws {
+    let announcement = try #require(PortablePackageKind.announcement(for: .rehearsal, productVersion: "0.2.0"))
+    #expect(announcement.hasPrefix("This is a rehearsal of Remap 0.2.0, not a release."))
+    #expect(
+        PortablePackageKind.installedName(for: .rehearsal, productVersion: "0.2.0")
+            == "Remap 0.2.0 (rehearsal, not a release)"
+    )
+    #expect(PortablePackageKind.announcement(for: .development, productVersion: "0.2.0")?
+        .contains("development") == true)
+}

@@ -100,6 +100,39 @@ Use `remap system recover` after an interrupted lifecycle operation, and
 `remap system uninstall` to remove the native product. The private mapping
 database is preserved so reinstalling does not lose mappings.
 
+### Installing a rehearsal
+
+Every release is first published to a rehearsal channel and installed on a
+clean Mac before it reaches GitHub
+([ADR-0035](docs/architecture/ADR-0035-release-rehearsal-channel.md)). A
+rehearsal does not use the commands above. Its package has no Apple Installer
+signature, the rehearsal root serves no installer certificate, and nothing
+served beside the package is trusted. The rehearsal root serves
+`Remap-0.2.0-arm64-rehearsal.pkg`, its `.sig`, the pin file
+`remap-rehearsal-signing-key.pub` (comment `remap-release-rehearsal-only`), and
+`SHA256SUMS`.
+
+The trust anchor is the rehearsal pin's fingerprint published here and read
+over HTTPS from GitHub:
+
+The rehearsal pin's fingerprint is not published yet, so no rehearsal can run.
+
+The exact sequence is in
+[`docs/release/REHEARSAL.md`](docs/release/REHEARSAL.md#installing-a-rehearsal-on-the-clean-mac):
+download the four files, check `SHA256SUMS`, check that the repository's
+committed pin has the published fingerprint, is not in
+[the revoked list](docs/release/remap-rehearsal-revoked-fingerprints.txt), and
+is byte-identical to the served copy, verify the `.sig` against the committed
+pin, then stage the package root-owned and run Apple Installer on that copy.
+
+A rehearsal package is signed by a separate rehearsal key, not the release
+key. For now that key is a P-256 key in the Secure Enclave of the
+release-building Mac, which signs without Touch ID; it will later move to the
+rehearsal host's keystore and may become Ed25519. It says it is a rehearsal
+when it installs, and `remap doctor` and `remap system status` report a
+rehearsal install. A later release replaces it as an ordinary update. Use
+rehearsals to test a release, not as a release.
+
 ## Build and install from source
 
 The same lifecycle commands are used on each supported host:

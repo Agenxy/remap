@@ -79,9 +79,12 @@ enum RemapLifecycleCLIOutput {
         let installation = status.activeGenerationID.map { "installed (\($0))" } ?? "not installed"
         let loaded = status.services.count(where: \ .loaded)
         let recovery = status.transactions.count(where: \ .recoveryRequired)
+        // A release or a source build records no kind, and says nothing more.
+        let kind = status.generations.first { $0.generationID == status.activeGenerationID }?.packageKind
+        let package = kind.map { "Package: \($0.installDescription)\n" } ?? ""
         return """
         Remap is \(installation).
-        Generations: \(status.generations.count)
+        \(package)Generations: \(status.generations.count)
         Services: \(loaded) of \(status.services.count) loaded
         DNS: \(dnsLine(status))
         Recovery needed: \(recovery == 0 ? "no" : "yes (\(recovery))")

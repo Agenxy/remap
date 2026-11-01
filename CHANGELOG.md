@@ -6,6 +6,30 @@ platform claims separate.
 
 ## Unreleased
 
+- Every release can be rehearsed on its own channel before it ships
+  (ADR-0035). `make package-macos REMAP_REHEARSAL_PACKAGE=1` builds
+  `Remap-<version>-<arch>-rehearsal.pkg`, signed by a rehearsal key named by
+  `REMAP_REHEARSAL_SE_KEY` and verified against
+  `docs/release/remap-rehearsal-signing-key.pub`, which is marked
+  `remap-release-rehearsal-only`. It carries no Apple Installer signature, and
+  its installer compiles in only the rehearsal pin. `remap-release-key create
+  --kind rehearsal` makes the interim key: a Secure Enclave P-256 key that
+  signs without Touch ID, whose blob is labelled so that neither it nor the
+  release key can stand in for the other. The installer says a rehearsal is
+  not a release, the installed generation records the kind in a schema
+  version 2 install manifest outside the signed release manifest, and `remap
+  doctor` and `remap system status` report a rehearsal install. `make
+  install-package-macos` takes a rehearsal only with
+  `REMAP_REHEARSAL_PACKAGE=1`, and never as a release. `make
+  rehearsal-publish` builds a rehearsal of HEAD and publishes it, its
+  signature, the pin and a source archive into a root served over HTTPS or
+  through a loopback Supgang forward. An installing Mac trusts only the pin's
+  fingerprint published in the README, the committed pin, and the revoked
+  list, never the pin served beside the package; `docs/release/REHEARSAL.md`
+  writes the sequence out. No rehearsal key or pin exists yet: until the owner
+  approves the signer every rehearsal build refuses, saying so, and `make
+  rehearsal-key` is the one command, and one commit, that creates the key and
+  pins and publishes it.
 - Fixed Remap DNS taking all of a Mac's DNS down when a VPN blocked the
   resolvers Remap forwarded to, while Remap still reported ready. On
   31 October Private Internet Access's DNS leak protection dropped every
