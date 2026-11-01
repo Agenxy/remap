@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import shutil
 import subprocess
 import tarfile
@@ -36,6 +37,25 @@ def verify_policy_copies(root: Path, product_version: str) -> None:
         raise RuntimeError(
             "the native product version differs from workspace.package.version"
         )
+    verify_native_plist_versions(root, product_version)
+
+
+def verify_native_plist_versions(root: Path, product_version: str) -> None:
+    """Require every helper's embedded Info.plist to declare the product version."""
+    plists = sorted((root / "platforms/macos/Sources").glob("*/Info.plist"))
+    if not plists:
+        raise RuntimeError("no native helper declares an embedded Info.plist")
+    for plist in plists:
+        document = cast("dict[str, object]", plistlib.loads(plist.read_bytes()))
+        versions = (
+            document.get("CFBundleShortVersionString"),
+            document.get("CFBundleVersion"),
+        )
+        if versions != (product_version, product_version):
+            raise RuntimeError(
+                f"{plist.relative_to(root)} declares a version other than "
+                + "workspace.package.version"
+            )
 
 
 def verify_exact_copies(

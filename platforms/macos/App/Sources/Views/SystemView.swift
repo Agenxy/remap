@@ -66,14 +66,14 @@ struct SystemView: View {
 
     private var boundaries: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(AppText.localized("Source-build resolver boundary"))
+            Text(AppText.localized("Resolver boundary"))
                 .font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-            Text(AppText.localized("Source builds support one ordinary macOS resolver scope."))
-                .foregroundStyle(.secondary)
+            Text(AppText.localized(
+                "Remap manages one ordinary macOS resolver scope, whether installed from source or from a package."
+            ))
+            .foregroundStyle(.secondary)
             Text(AppText.localized("Remap refuses VPN or split DNS when it cannot preserve the configuration."))
-                .foregroundStyle(.secondary)
-            Text(AppText.localized("Use the entitled DNS System Extension for multiple resolver scopes."))
                 .foregroundStyle(.secondary)
             Text(AppText.localized("Remap has no telemetry and sends no registry data to Agenxy."))
                 .foregroundStyle(.secondary)

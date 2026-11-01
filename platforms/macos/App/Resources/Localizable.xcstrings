@@ -491,10 +491,10 @@
     "Shows whether this mapping affects name resolution" : {
 
     },
-    "Source builds support one ordinary macOS resolver scope." : {
+    "Remap manages one ordinary macOS resolver scope, whether installed from source or from a package." : {
 
     },
-    "Source-build resolver boundary" : {
+    "Resolver boundary" : {
 
     },
     "Summarizes Remap and macOS network readiness" : {
@@ -549,9 +549,6 @@
 
     },
     "Use Copy to place these diagnostic details on the clipboard" : {
-
-    },
-    "Use the entitled DNS System Extension for multiple resolver scopes." : {
 
     },
     "Use the upstream Host header" : {

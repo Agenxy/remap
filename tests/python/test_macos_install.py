@@ -364,15 +364,15 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
                 "authenticate locally.*No privileged Remap state changed",
             ),
         ):
-            remap_macos_install.authorize_administrator(Path("."))
+            remap_macos_install.authorize_administrator(Path("."), "install")
 
-    def test_administrator_authorization_uses_the_native_sudo_prompt(self) -> None:
+    def test_administrator_authorization_says_what_it_approves(self) -> None:
         with mock.patch("tools.remap_macos_install._run") as run:
-            remap_macos_install.authorize_administrator(Path("."))
+            remap_macos_install.authorize_administrator(Path("."), "update")
 
         self.assertEqual(
             [call.args[0] for call in run.call_args_list],
-            [("/usr/bin/sudo", "-v")],
+            [("/usr/bin/sudo", "-p", mock.ANY, "-v")],
         )
 
     def test_exact_update_is_a_verified_no_op(self) -> None:
@@ -492,7 +492,7 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
         mutation = next(arguments for arguments in calls if arguments[0] == "install")
         token_index = mutation.index("--approval-token")
         self.assertEqual(mutation[token_index + 1], token)
-        administrator.assert_called_once_with(Path("."))
+        administrator.assert_called_once_with(Path("."), "install")
 
     def test_rejected_privileged_mutation_does_not_report_success(self) -> None:
         generation = "0.1.1-0123456789abcdef0123"
@@ -695,7 +695,7 @@ class MacOSInstallOrchestratorTests(unittest.TestCase):
             remap_macos_install.recover(Path("."))
 
         self.assertNotIn(("recover", "--all"), calls)
-        administrator.assert_called_once_with(Path("."))
+        administrator.assert_called_once_with(Path("."), "recover")
         self.assertIn(("recover-bootstrap-helpers", "--approval-token", token), calls)
 
     def test_product_recovery_cannot_invalidate_bootstrap_residue_recovery(

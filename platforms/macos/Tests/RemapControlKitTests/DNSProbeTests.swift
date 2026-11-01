@@ -116,7 +116,7 @@ private let dnsChallenge = RemapRuntimeChallenge(
 private final class HealthDNSServer: @unchecked Sendable {
     private let proof: String
     private let tcpListener: NWListener
-    private let queue = DispatchQueue(label: "org.agenxy.remap.tests.health-dns")
+    private let queue = DispatchQueue(label: "org.agenxy.Remap.tests.health-dns")
     private var udpListener: NWListener?
     private var connections: [NWConnection] = []
 

@@ -11,6 +11,7 @@ import secrets
 import ssl
 import stat
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,6 +91,8 @@ def ensure_administrator_trust(identity: LocalInstallerSigningIdentity) -> None:
         )
     ).encode("ascii")
     _require_certificate_identity(certificate, identity)
+    if not codesigning.headless_trust():
+        print(administrator_trust_notice(), file=sys.stderr, flush=True)
     _run_authorized(
         (
             "/usr/bin/security",
@@ -265,7 +268,7 @@ x509_extensions = installer
 
 [ dn ]
 CN = {IDENTITY_NAME}
-O = Agenxy Local
+O = Remap
 OU = Remap Installer Signing
 
 [ installer ]
@@ -376,6 +379,19 @@ def _capture(arguments: tuple[str, ...]) -> str:
 
 def _run(arguments: tuple[str, ...]) -> None:
     _ = _run_result(arguments)
+
+
+def administrator_trust_notice() -> str:
+    """The line printed just before macOS asks for an administrator's approval.
+
+    That dialog names only `security`, the tool asking, so the owner is told
+    first what it is for and what to do.
+    """
+    return (
+        "macOS will now ask for an administrator's name and password on behalf of "
+        + f'"security", so that the System keychain trusts "{IDENTITY_NAME}" '
+        + f"{codesigning.TRUST_PURPOSES['basic']}. Enter them and choose OK."
+    )
 
 
 def _run_authorized(arguments: tuple[str, ...], input_bytes: bytes) -> None:

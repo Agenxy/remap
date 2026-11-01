@@ -93,7 +93,7 @@ private final class HealthHTTPServer: @unchecked Sendable {
     private let body: String
     private let extraHeaders: [String]
     private let listener: NWListener
-    private let queue = DispatchQueue(label: "org.agenxy.remap.tests.health-http")
+    private let queue = DispatchQueue(label: "org.agenxy.Remap.tests.health-http")
 
     var port: UInt16 {
         listener.port?.rawValue ?? 0
