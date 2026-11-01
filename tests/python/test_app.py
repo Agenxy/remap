@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -378,6 +379,15 @@ class AppSigningTests(unittest.TestCase):
             ).stderr
             self.assertIn("Identifier=org.agenxy.Remap\n", details)
             self.assertIn("Signature=adhoc\n", details)
+            information = cast(
+                "dict[str, object]",
+                plistlib.loads((bundle / "Contents/Info.plist").read_bytes()),
+            )
+            self.assertEqual(information["CFBundleDisplayName"], "Remap")
+            self.assertEqual(
+                information["NSHumanReadableCopyright"], remap_app.COPYRIGHT
+            )
+            self.assertEqual(information["CFBundleIconFile"], "Remap.icns")
             self.assertRegex(details, r"flags=0x[0-9a-f]+\([^)]*\bruntime\b")
             result = native_run(
                 (str(bundle / "Contents/MacOS/Remap"), "ad-hoc runs"),

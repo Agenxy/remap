@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
@@ -353,7 +353,7 @@ async fn run_daemon(
             }
         }
     }
-    eprintln!("Remap daemon starting; press Control-C to stop.");
+    eprintln!("{}", config.startup_notice(std::io::stderr().is_terminal()));
     remapd::run(config).await.map_err(Diagnostic::service)
 }
 

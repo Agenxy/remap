@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import os
 import subprocess
 import tempfile
 import unittest
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, redirect_stderr
 from pathlib import Path
 from typing import cast, override
 from unittest import mock
@@ -155,6 +156,8 @@ class MacOSSigningTests(unittest.TestCase):
         configuration = remap_macos_signing.openssl_configuration()
 
         self.assertIn("CN = Remap Build Signing", configuration)
+        # macOS names the developer in Login Items after the organisation.
+        self.assertIn("\nO = Remap\n", configuration)
         self.assertIn("rsa:3072", _creation_arguments())
         self.assertIn("extendedKeyUsage = critical,codeSigning", configuration)
         self.assertIn("basicConstraints = critical,CA:TRUE,pathlen:0", configuration)
@@ -496,6 +499,42 @@ class TrustDialogTests(unittest.TestCase):
         self.assertIn('"Remap Build Signing"', message)
         self.assertIn("Run the same command again", message)
         self.assertIsNone(raised.exception.__cause__)
+
+    def test_the_owner_is_told_which_dialog_comes_and_what_to_choose(self) -> None:
+        notices: list[str] = []
+        errors = io.StringIO()
+
+        def run_binary(_arguments: tuple[str, ...], _input: bytes) -> bytes:
+            notices.append(errors.getvalue())
+            return b""
+
+        variable = remap_macos_signing.HEADLESS_TRUST_VARIABLE
+        with mock.patch.dict(os.environ, {variable: "0"}), redirect_stderr(errors):
+            remap_macos_signing.record_trust(
+                Path("/tmp/login.keychain-db"),
+                b"certificate",
+                policy="codeSign",
+                name="Remap Build Signing",
+                run=run_binary,
+            )
+        self.assertEqual(len(notices), 1)
+        self.assertIn(
+            'trusts "Remap Build Signing" to sign Remap\'s programs', notices[0]
+        )
+        self.assertIn("Choose Update Settings", notices[0])
+
+    def test_a_headless_machine_shows_no_dialog_and_announces_none(self) -> None:
+        errors = io.StringIO()
+        variable = remap_macos_signing.HEADLESS_TRUST_VARIABLE
+        with mock.patch.dict(os.environ, {variable: "1"}), redirect_stderr(errors):
+            remap_macos_signing.record_trust(
+                Path("/tmp/login.keychain-db"),
+                b"certificate",
+                policy="basic",
+                name="Remap Local Installer",
+                run=lambda _arguments, _input: b"",
+            )
+        self.assertEqual(errors.getvalue(), "")
 
 
 if __name__ == "__main__":

@@ -14,6 +14,18 @@ public struct RemapControlClient: Sendable {
         self.clientVersion = clientVersion
     }
 
+    /// The version in the running program's bundle, which is what it reports
+    /// to the authority. A program run outside a bundle, as under `swift test`,
+    /// has none and says so instead of claiming a release. The daemon only
+    /// bounds the length of a client's version; it is this client that compares
+    /// it, in `validateRuntimeChallenge`, and since no daemon reports
+    /// "unbundled" an unbundled client never takes a running daemon's runtime
+    /// identity as its own version's.
+    public static var bundleVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? "unbundled"
+    }
+
     /// Creates a client at the native per-user control socket.
     public static func discovered(clientVersion: String) throws -> Self {
         let home = FileManager.default.homeDirectoryForCurrentUser

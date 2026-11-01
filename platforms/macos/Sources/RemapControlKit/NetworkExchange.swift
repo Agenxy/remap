@@ -10,7 +10,7 @@ final class NetworkExchange: @unchecked Sendable {
 
     init(socketPath: String) {
         connection = NWConnection(to: .unix(path: socketPath), using: .tcp)
-        queue = DispatchQueue(label: "org.agenxy.remap.control", qos: .userInitiated)
+        queue = DispatchQueue(label: "org.agenxy.Remap.control", qos: .userInitiated)
     }
 
     func perform(frame: Data) async throws -> Data {

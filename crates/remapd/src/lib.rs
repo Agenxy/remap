@@ -10,6 +10,7 @@ mod peer;
 mod privilege;
 mod reachability;
 mod server;
+mod startup;
 mod system_control;
 mod systemd;
 
