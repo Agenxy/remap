@@ -1,9 +1,15 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+use std::borrow::Cow;
+use std::fmt::Write as _;
 use std::io::{self, Write};
 
+use remap_protocol::{ChangeEffect, CommandResult, MappingView, RegistryStatus};
 use serde_json::{Value, json};
 
 use crate::app::{DoctorReport, Report, ValidationReport};
 use crate::diagnostic::Diagnostic;
+use crate::installed_package::InstalledPackage;
+use remap_mcp::system_lookup::SystemLookup;
 
 const SCHEMA: &str = "remap.cli/v1";
 
@@ -35,6 +41,8 @@ pub(crate) fn write_diagnostic(
                     "message": diagnostic.message(),
                     "detail": diagnostic.detail(),
                     "hint": diagnostic.hint(),
+                    "retryable": diagnostic.retryable(),
+                    "context": diagnostic.context(),
                 }
             }),
         );
@@ -42,52 +50,519 @@ pub(crate) fn write_diagnostic(
     writeln!(
         writer,
         "error[{}]: {}",
-        diagnostic.code(),
-        diagnostic.message()
+        terminal_text(diagnostic.code()),
+        terminal_text(diagnostic.message())
     )?;
-    writeln!(writer, "  {}", diagnostic.detail())?;
-    writeln!(writer, "  help: {}", diagnostic.hint())
+    if !diagnostic.detail().is_empty() {
+        write_indented_multiline(writer, diagnostic.detail())?;
+    }
+    writeln!(writer, "  help: {}", terminal_text(diagnostic.hint()))
+}
+
+fn write_indented_multiline(writer: &mut dyn Write, value: &str) -> io::Result<()> {
+    for line in value.split('\n') {
+        writeln!(writer, "  {}", terminal_line_text(line))?;
+    }
+    Ok(())
+}
+
+fn terminal_line_text(value: &str) -> Cow<'_, str> {
+    if !value.chars().any(terminal_unsafe) {
+        return Cow::Borrowed(value);
+    }
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        push_terminal_character(&mut escaped, character);
+    }
+    Cow::Owned(escaped)
 }
 
 fn write_human_report(writer: &mut dyn Write, report: &Report) -> io::Result<()> {
     match report {
+        Report::Document(report) => write!(writer, "{}", report.content),
         Report::Doctor(report) => write_doctor(writer, report),
         Report::Validation(report) => write_validation(writer, report),
+        Report::Authority { result, .. } => write_authority(writer, result),
     }
 }
 
 fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()> {
-    writeln!(writer, "Remap {} — local diagnostics", report.version)?;
+    writeln!(
+        writer,
+        "Remap {}: local diagnostics",
+        terminal_text(report.version)
+    )?;
     writeln!(writer)?;
     writeln!(
         writer,
         "  Platform   {}/{}",
-        report.operating_system, report.architecture
+        terminal_text(report.operating_system),
+        terminal_text(report.architecture)
     )?;
     writeln!(writer, "  Validator  ready")?;
-    writeln!(writer, "  Daemon     not included in this milestone")?;
-    writeln!(writer, "  DNS        unchanged")?;
+    writeln!(writer, "  Authority  {}", terminal_text(&report.authority))?;
+    if let Some(revision) = report.revision {
+        writeln!(writer, "  Revision   {revision}")?;
+    }
+    if let Some(mapping_count) = report.mapping_count {
+        writeln!(writer, "  Mappings   {mapping_count}")?;
+    }
+    writeln!(writer, "  MCP        2026-07-28 + 2025-11-25")?;
+    writeln!(writer, "  Native     {}", readiness(report.native_install))?;
+    if let Some(package) = report.installed_package {
+        writeln!(writer, "  Package    {}", package.description())?;
+    }
+    writeln!(writer, "  DNS        {}", readiness(report.health.dns))?;
+    writeln!(
+        writer,
+        "  Forwarding {}",
+        readiness(report.health.forwarding)
+    )?;
+    writeln!(writer, "  HTTP       {}", readiness(report.health.http))?;
+    write_dns_upstream(writer, report.dns_upstream.as_ref())?;
+    write_peer_machines(writer, report.peer_machines.as_ref())?;
+    writeln!(
+        writer,
+        "  Lookup     {}",
+        lookup_line(&report.system_lookup, report.dns_turned_off.as_ref())
+    )?;
     writeln!(writer, "  Telemetry  none")?;
     writeln!(writer)?;
-    writeln!(writer, "Nothing is installed or modified by this build.")?;
-    writeln!(writer, "Try: remap validate atlas http://127.0.0.1:5173")
+    writeln!(
+        writer,
+        "Doctor itself changed nothing. Telemetry remains absent."
+    )?;
+    if let Some(turned_off) = &report.dns_turned_off {
+        writeln!(
+            writer,
+            "Remap DNS was {}, so the system is not asking Remap. Turn it on with: {}",
+            terminal_text(&turned_off.status_line()),
+            terminal_text(&turned_off.turn_on)
+        )?;
+    } else if matches!(
+        report.system_lookup,
+        SystemLookup::Bypassed { .. } | SystemLookup::Unresolved { .. }
+    ) {
+        writeln!(
+            writer,
+            "The system resolver is not returning Remap's answer. On macOS, `remap-system status` shows the recorded fallback reason."
+        )?;
+    }
+    if report.dns_upstream.is_some() {
+        writeln!(
+            writer,
+            "Every upstream resolver Remap forwards to has stopped answering. Remap's own names still answer; other names fail open to ordinary DNS."
+        )?;
+    }
+    if report.revision.is_some()
+        && report.health.dns
+        && report.health.forwarding
+        && report.health.http
+    {
+        writeln!(
+            writer,
+            "Remap's local authority and routing listeners are ready."
+        )
+    } else {
+        writeln!(
+            writer,
+            "Recovery: install or restart the native Remap service."
+        )
+    }
+}
+
+fn lookup_line(lookup: &SystemLookup, turned_off: Option<&remap_protocol::DnsTurnedOff>) -> String {
+    let name = lookup.name().map(terminal_text).unwrap_or_default();
+    if let Some(turned_off) = turned_off
+        && !matches!(lookup, SystemLookup::Matched { .. })
+    {
+        let line = terminal_text(&turned_off.status_line()).into_owned();
+        return if name.is_empty() {
+            format!("off ({line})")
+        } else {
+            format!("off ({line}; {name} uses ordinary DNS)")
+        };
+    }
+    match (lookup, lookup.answer()) {
+        (SystemLookup::Matched { .. }, Some(answer)) => format!("ready ({name} → {answer})"),
+        (SystemLookup::Bypassed { .. }, Some(answer)) => {
+            format!("bypassed ({name} → {answer}; the system is not asking Remap)")
+        }
+        (SystemLookup::Unresolved { .. }, _) => {
+            format!("unresolved ({name} did not resolve through the system)")
+        }
+        _ => "not checked (no enabled exact mapping to probe)".to_owned(),
+    }
+}
+
+const fn readiness(ready: bool) -> &'static str {
+    if ready { "ready" } else { "not detected" }
 }
 
 fn write_validation(writer: &mut dyn Write, report: &ValidationReport) -> io::Result<()> {
     writeln!(writer, "Valid mapping")?;
     writeln!(writer)?;
-    writeln!(writer, "  Name       {}", report.pattern)?;
-    writeln!(writer, "  Target     {}", report.target)?;
-    writeln!(writer, "  Type       {}", report.target_kind)?;
+    writeln!(writer, "  Name       {}", terminal_text(&report.pattern))?;
+    writeln!(writer, "  Target     {}", terminal_text(&report.target))?;
+    writeln!(writer, "  Type       {}", terminal_text(report.target_kind))?;
     if let Some(policy) = report.host_header_policy {
         writeln!(writer, "  Host       {policy}")?;
     }
+    write_peer_machine(writer, &report.target, None)?;
+    write_landing(writer, report.landing.as_deref())?;
+    write_warnings(writer, &report.warnings)?;
     writeln!(writer)?;
     writeln!(writer, "No system state changed.")
 }
 
+fn write_authority(writer: &mut dyn Write, result: &CommandResult) -> io::Result<()> {
+    match result {
+        CommandResult::Status(status) => write_status(writer, status),
+        CommandResult::HealthChallenge(_) => writeln!(writer, "Runtime identity verified."),
+        CommandResult::List(list) => {
+            writeln!(writer, "Mappings at revision {}", list.revision)?;
+            writeln!(writer)?;
+            if list.mappings.is_empty() {
+                writeln!(writer, "  No mappings.")?;
+            } else {
+                for mapping in &list.mappings {
+                    write_mapping(writer, mapping)?;
+                }
+            }
+            if let Some(cursor) = &list.next_cursor {
+                writeln!(writer)?;
+                writeln!(
+                    writer,
+                    "More: remap list --after '{}'",
+                    terminal_text(cursor)
+                )?;
+            }
+            Ok(())
+        }
+        CommandResult::Mapping(Some(mapping)) => write_mapping(writer, mapping),
+        CommandResult::Mapping(None) => writeln!(writer, "No exact mapping found."),
+        CommandResult::Resolution(resolution) => {
+            writeln!(writer, "Resolution at revision {}", resolution.revision)?;
+            writeln!(writer)?;
+            if let Some(mapping) = &resolution.mapping {
+                writeln!(writer, "  Name       {}", terminal_text(&resolution.name))?;
+                write_mapping(writer, mapping)
+            } else {
+                writeln!(
+                    writer,
+                    "  No enabled mapping resolves {}.",
+                    terminal_text(&resolution.name)
+                )
+            }
+        }
+        CommandResult::Validation(validation) => {
+            writeln!(writer, "Valid mapping")?;
+            writeln!(
+                writer,
+                "  Name       {}",
+                terminal_text(&validation.pattern)
+            )?;
+            writeln!(writer, "  Target     {}", terminal_text(&validation.target))?;
+            writeln!(
+                writer,
+                "  Type       {}",
+                terminal_text(&validation.target_kind)
+            )?;
+            writeln!(writer, "  Host       {}", validation.host_policy.as_str())?;
+            write_landing(writer, validation.landing.as_deref())?;
+            write_warnings(writer, &validation.warnings)
+        }
+        CommandResult::Preview(preview) => {
+            writeln!(writer, "Preview at revision {}", preview.base_revision)?;
+            writeln!(writer, "  Would change  {}", preview.will_change)?;
+            writeln!(writer, "  Effects       {}", preview.effects.len())?;
+            write_effects(writer, &preview.effects)?;
+            write_warnings(writer, &preview.warnings)
+        }
+        CommandResult::Apply(receipt) => {
+            writeln!(writer, "Committed at revision {}", receipt.revision)?;
+            writeln!(writer)?;
+            writeln!(writer, "  Changed       {}", receipt.changed)?;
+            writeln!(writer, "  Previous      {}", receipt.previous_revision)?;
+            writeln!(writer, "  Effects       {}", receipt.effects.len())?;
+            writeln!(
+                writer,
+                "  Operation     {}",
+                terminal_text(&receipt.operation_id)
+            )?;
+            write_effects(writer, &receipt.effects)?;
+            write_warnings(writer, &receipt.warnings)
+        }
+        CommandResult::Revision(notice) => {
+            writeln!(
+                writer,
+                "Revision {} (changed: {})",
+                notice.revision, notice.changed
+            )
+        }
+    }
+}
+
+fn write_status(writer: &mut dyn Write, status: &RegistryStatus) -> io::Result<()> {
+    writeln!(writer, "Remap authority at revision {}", status.revision)?;
+    writeln!(writer)?;
+    writeln!(writer, "  Mappings   {}", status.mapping_count)?;
+    writeln!(writer, "  Active     {}", status.enabled_count)?;
+    writeln!(writer, "  Schema     {}", status.schema_version)?;
+    writeln!(
+        writer,
+        "  Daemon     {}",
+        terminal_text(&status.daemon_version)
+    )?;
+    write_dns_upstream(writer, status.dns_upstream.as_ref())?;
+    if let Some(turned_off) = &status.dns_turned_off {
+        writeln!(
+            writer,
+            "  DNS        {}",
+            terminal_text(&turned_off.status_line())
+        )?;
+        writeln!(
+            writer,
+            "  Turn on    {}",
+            terminal_text(&turned_off.turn_on)
+        )?;
+    }
+    write_peer_machines(writer, status.peer_machine_listeners.as_deref())?;
+    if let Some(error) = &status.maintenance {
+        writeln!(writer, "  Mutations  blocked by maintenance")?;
+        writeln!(writer, "  Reason     {}", terminal_text(&error.message))?;
+        if let Some(hint) = &error.hint {
+            writeln!(writer, "  Recovery   {}", terminal_text(hint))?;
+        }
+    } else {
+        writeln!(writer, "  Mutations  ready")?;
+    }
+    Ok(())
+}
+
+/// Says plainly when every upstream resolver has stopped answering, and why.
+fn write_dns_upstream(
+    writer: &mut dyn Write,
+    upstream: Option<&remap_protocol::Diagnostic>,
+) -> io::Result<()> {
+    let Some(upstream) = upstream else {
+        return Ok(());
+    };
+    let reason = upstream
+        .message
+        .strip_prefix("upstream DNS not answering: ")
+        .unwrap_or(&upstream.message);
+    writeln!(writer, "  Upstream   DNS not answering")?;
+    writeln!(writer, "  Cause      {}", terminal_text(reason))?;
+    if let Some(hint) = &upstream.hint {
+        writeln!(writer, "  Effect     {}", terminal_text(hint))?;
+    }
+    Ok(())
+}
+
+/// Peer-machine listeners (ADR-0033): how many accept, and each one that
+/// could not bind, with its cause.
+fn write_peer_machines(
+    writer: &mut dyn Write,
+    listeners: Option<&remap_protocol::PeerMachineListeners>,
+) -> io::Result<()> {
+    let Some(listeners) = listeners else {
+        return Ok(());
+    };
+    writeln!(
+        writer,
+        "  Peers      {} listening, {} not listening",
+        listeners.listening, listeners.not_listening
+    )?;
+    for failure in &listeners.failures {
+        writeln!(
+            writer,
+            "             {} {} at {}:{} not listening: {} ({})",
+            terminal_text(&failure.pattern),
+            terminal_text(&failure.service),
+            terminal_text(&failure.address),
+            failure.port,
+            terminal_text(&failure.cause),
+            terminal_text(&failure.detail)
+        )?;
+    }
+    if !listeners.refusals.is_empty() {
+        let counts: Vec<String> = listeners
+            .refusals
+            .iter()
+            .map(|(cause, count)| format!("{} {count}", terminal_text(cause)))
+            .collect();
+        writeln!(
+            writer,
+            "             connections not carried since start: {}",
+            counts.join(", ")
+        )?;
+    }
+    Ok(())
+}
+
+fn write_effects(writer: &mut dyn Write, effects: &[ChangeEffect]) -> io::Result<()> {
+    for effect in effects {
+        writeln!(writer)?;
+        writeln!(
+            writer,
+            "  {}  {}",
+            terminal_text(&effect.action),
+            terminal_text(&effect.pattern)
+        )?;
+        writeln!(
+            writer,
+            "    before  {}",
+            mapping_effect(effect.before.as_ref())
+        )?;
+        writeln!(
+            writer,
+            "    after   {}",
+            mapping_effect(effect.after.as_ref())
+        )?;
+    }
+    Ok(())
+}
+
+fn mapping_effect(mapping: Option<&MappingView>) -> String {
+    mapping.map_or_else(
+        || "∅".to_owned(),
+        |mapping| {
+            format!(
+                "{} → {} · {} · {} · {}{}",
+                terminal_text(&mapping.pattern),
+                terminal_text(&mapping.target),
+                terminal_text(&mapping.target_kind),
+                mapping.host_policy.as_str(),
+                if mapping.enabled {
+                    "active"
+                } else {
+                    "disabled"
+                },
+                mapping
+                    .landing
+                    .as_ref()
+                    .map_or_else(String::new, |path| format!(
+                        " · landing {}",
+                        terminal_text(path)
+                    )),
+            ) + &mapping
+                .peer_address
+                .as_ref()
+                .map_or_else(String::new, |address| {
+                    format!(" · address {}", terminal_text(address))
+                })
+        },
+    )
+}
+
+fn write_mapping(writer: &mut dyn Write, mapping: &MappingView) -> io::Result<()> {
+    let state = if mapping.enabled {
+        "active"
+    } else {
+        "disabled"
+    };
+    writeln!(
+        writer,
+        "  {}  →  {}  ({state})",
+        terminal_text(&mapping.pattern),
+        terminal_text(&mapping.target)
+    )?;
+    write_peer_machine(writer, &mapping.target, mapping.peer_address.as_deref())?;
+    write_landing(writer, mapping.landing.as_deref())
+}
+
+/// Spells out a peer-machine target (ADR-0033): the address its name
+/// answers, the peer that Supgang carries connections to, and each port.
+/// An offline validation has no address yet, because the daemon allocates
+/// it when the mapping is set.
+fn write_peer_machine(
+    writer: &mut dyn Write,
+    target: &str,
+    address: Option<&str>,
+) -> io::Result<()> {
+    let Ok(machine) = remap_core::PeerMachine::parse(target) else {
+        return Ok(());
+    };
+    let shown = address.map_or("<address>", |address| address);
+    writeln!(
+        writer,
+        "  Address    {}",
+        address.map_or(
+            Cow::Borrowed("allocated in 127.77.0.0/16 when set"),
+            terminal_text
+        )
+    )?;
+    writeln!(writer, "  Peer       {}", machine.selector())?;
+    for service in machine.services() {
+        writeln!(
+            writer,
+            "  Service    {} at {}:{} (TCP, through Supgang)",
+            service.name(),
+            terminal_text(shown),
+            service.port()
+        )?;
+    }
+    Ok(())
+}
+
+fn write_landing(writer: &mut dyn Write, landing: Option<&str>) -> io::Result<()> {
+    if let Some(path) = landing {
+        writeln!(writer, "  Landing    {}", terminal_text(path))?;
+    }
+    Ok(())
+}
+
+fn write_warnings(writer: &mut dyn Write, warnings: &[String]) -> io::Result<()> {
+    for warning in warnings {
+        writeln!(writer, "  Advisory   {}", terminal_text(warning))?;
+    }
+    Ok(())
+}
+
+fn terminal_text(value: &str) -> Cow<'_, str> {
+    if !value.chars().any(terminal_unsafe) {
+        return Cow::Borrowed(value);
+    }
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        push_terminal_character(&mut escaped, character);
+    }
+    Cow::Owned(escaped)
+}
+
+fn push_terminal_character(output: &mut String, character: char) {
+    match character {
+        '\n' => output.push_str("\\n"),
+        '\r' => output.push_str("\\r"),
+        '\t' => output.push_str("\\t"),
+        unsafe_character if terminal_unsafe(unsafe_character) => {
+            let _result = write!(output, "\\u{{{:04X}}}", u32::from(unsafe_character));
+        }
+        safe => output.push(safe),
+    }
+}
+
+const fn terminal_unsafe(character: char) -> bool {
+    matches!(
+        character,
+        '\u{0000}'..='\u{001f}'
+            | '\u{007f}'..='\u{009f}'
+            | '\u{061c}'
+            | '\u{200e}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
+}
+
 fn report_json(report: &Report) -> Value {
     match report {
+        Report::Document(report) => json!({
+            "schema": SCHEMA,
+            "ok": true,
+            "command": report.command,
+            "result": { "content": report.content },
+        }),
         Report::Doctor(report) => json!({
             "schema": SCHEMA,
             "ok": true,
@@ -99,8 +574,23 @@ fn report_json(report: &Report) -> Value {
                     "architecture": report.architecture,
                 },
                 "validator": "ready",
-                "daemon": "not-available-in-this-build",
-                "dns": "unchanged",
+                "authority": report.authority,
+                "revision": report.revision,
+                "mapping_count": report.mapping_count,
+                "mcp_versions": ["2026-07-28", "2025-11-25"],
+                "native_install": report.native_install,
+                "installed_package": report.installed_package.map(InstalledPackage::as_str),
+                "dns_listener": report.health.dns,
+                "dns_forwarding": report.health.forwarding,
+                "http_gateway": report.health.http,
+                "dns_upstream": report.dns_upstream,
+                "dns_turned_off": report.dns_turned_off,
+                "peer_machine_listeners": report.peer_machines,
+                "system_lookup": {
+                    "state": report.system_lookup.state(),
+                    "name": report.system_lookup.name(),
+                    "answer": report.system_lookup.answer().map(|answer| answer.to_string()),
+                },
                 "telemetry": "none",
             }
         }),
@@ -113,8 +603,16 @@ fn report_json(report: &Report) -> Value {
                 "target": report.target,
                 "target_kind": report.target_kind,
                 "host_header_policy": report.host_header_policy,
+                "landing": report.landing,
+                "warnings": report.warnings,
                 "system_state_changed": false,
             }
+        }),
+        Report::Authority { command, result } => json!({
+            "schema": SCHEMA,
+            "ok": true,
+            "command": command,
+            "result": result,
         }),
     }
 }
@@ -125,28 +623,5 @@ fn write_json(writer: &mut dyn Write, value: &Value) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::error::Error;
-
-    use serde_json::Value;
-
-    use super::write_report;
-    use crate::app::{Report, ValidationReport};
-
-    #[test]
-    fn validation_json_has_stable_envelope() -> Result<(), Box<dyn Error>> {
-        let report = Report::Validation(ValidationReport {
-            pattern: "atlas".to_owned(),
-            target: "http://127.0.0.1:5173/".to_owned(),
-            target_kind: "http",
-            host_header_policy: Some("preserve-client"),
-        });
-        let mut bytes = Vec::new();
-        write_report(&mut bytes, &report, true)?;
-        let value: Value = serde_json::from_slice(&bytes)?;
-        assert_eq!(value["schema"], "remap.cli/v1");
-        assert_eq!(value["ok"], true);
-        assert_eq!(value["result"]["system_state_changed"], false);
-        Ok(())
-    }
-}
+#[path = "output_tests.rs"]
+mod tests;

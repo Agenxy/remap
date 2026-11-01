@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Native structural quality gates for the Remap repository"
+readme = "../../README.md"
 publish = false
 
 [dependencies]
@@ -12,6 +16,8 @@ proc-macro2.workspace = true
 serde_json.workspace = true
 syn.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true
-

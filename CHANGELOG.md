@@ -1,0 +1,331 @@
+# Changelog
+
+Remap follows semantic versioning while the public interfaces are still young.
+Every release keeps source installation, signed distribution, and supported
+platform claims separate.
+
+## Unreleased
+
+- Every release can be rehearsed on its own channel before it ships
+  (ADR-0035). `make package-macos REMAP_REHEARSAL_PACKAGE=1` builds
+  `Remap-<version>-<arch>-rehearsal.pkg`, signed by a rehearsal key named by
+  `REMAP_REHEARSAL_SE_KEY` and verified against
+  `docs/release/remap-rehearsal-signing-key.pub`, which is marked
+  `remap-release-rehearsal-only`. It carries no Apple Installer signature, and
+  its installer compiles in only the rehearsal pin. `remap-release-key create
+  --kind rehearsal` makes the interim key: a Secure Enclave P-256 key that
+  signs without Touch ID, whose blob is labelled so that neither it nor the
+  release key can stand in for the other. The installer says a rehearsal is
+  not a release, the installed generation records the kind in a schema
+  version 2 install manifest outside the signed release manifest, and `remap
+  doctor` and `remap system status` report a rehearsal install. `make
+  install-package-macos` takes a rehearsal only with
+  `REMAP_REHEARSAL_PACKAGE=1`, and never as a release. `make
+  rehearsal-publish` builds a rehearsal of HEAD and publishes it, its
+  signature, the pin and a source archive into a root served over HTTPS or
+  through a loopback Supgang forward. An installing Mac trusts only the pin's
+  fingerprint published in the README, the committed pin, and the revoked
+  list, never the pin served beside the package; `docs/release/REHEARSAL.md`
+  writes the sequence out. No rehearsal key or pin exists yet: until the owner
+  approves the signer every rehearsal build refuses, saying so, and `make
+  rehearsal-key` is the one command, and one commit, that creates the key and
+  pins and publishes it.
+- Fixed Remap DNS taking all of a Mac's DNS down when a VPN blocked the
+  resolvers Remap forwarded to, while Remap still reported ready. On
+  31 October Private Internet Access's DNS leak protection dropped every
+  query `remapd` forwarded, so every name failed, and deactivating then put
+  back the router DNS the VPN also blocks (ADR-0036).
+  - `remapd` now notices when every upstream resolver stops answering, over
+    at least four queries and two seconds so one lost packet never counts,
+    and macOS returns to ordinary DNS within seconds. Remap re-arms only
+    once those resolvers answer again or the network offers different ones.
+  - `remap status`, `remap doctor`, and MCP status say "upstream DNS not
+    answering" with the cause, and `remap-system status` explains the
+    fallback the same way.
+  - When a VPN publishes its own DNS, Remap forwards to the VPN's resolver
+    and keeps answering its names, follows a VPN's own network service when
+    macOS uses it, and follows back when the VPN disconnects. Two services
+    with DNS are no longer refused when macOS's resolver says which one it
+    uses.
+  - When a VPN's DNS outranks Remap's, or a VPN changes the DNS of a service
+    Remap set, Remap writes nothing, so it never fights a VPN that
+    re-asserts its DNS; DNS keeps working through the VPN and Remap answers
+    its names again when the VPN lets go.
+  - Deactivation still never overwrites a VPN's change: it reports the
+    conflict and, once the VPN restores what it saved, restores the
+    configuration captured before the VPN connected.
+  - Status now tells DNS turned off on purpose apart from a fault. After
+    `remap-system deactivate`, `remap system status`, `remap-system status`,
+    `remap status`, `remap doctor`, and MCP status say, for example, "turned
+    off by the owner at 2026-10-31T01:20Z (`remap-system deactivate`)" and
+    give the exact command that turns it back on, where they used to say only
+    "inactive". A fallback the supervisor made on its own and DNS that was
+    never activated each have their own wording. Turning DNS back on, or any
+    installer operation, clears the record.
+- Fixed uninstall leaving `/Library/Application Support/Agenxy/Remap` behind
+  after the resolver supervisor had ever fallen back. Both the source and the
+  packaged uninstall now remove the resolver's own records there, the last
+  fallback and the turned-off record, after checking each is a regular,
+  root-owned file that is not a symlink, and leave the directory exactly as
+  empty as before Remap. Anything they cannot vouch for stops removal and is
+  kept.
+- Login Items and Background Items list Remap's services under the developer
+  "Remap" instead of "Agenxy Local". macOS takes that name from the
+  organisation of the self-signed certificate that signed them, and the
+  identities Remap creates (`Remap Local Codesign` on a receiving Mac,
+  `Remap Build Signing` and `Remap Local Installer` on a building one) now
+  carry it. An identity that already exists keeps the name it was created
+  with until it is recreated, so a Mac set up before this release goes on
+  showing "Agenxy Local" until then.
+- The Touch ID or password dialog for an install, update, recovery or
+  removal reads "... is trying to apply the Remap changes you just
+  reviewed." macOS writes the start of that sentence itself, and the old
+  reason, "Approve the reviewed Remap system changes", landed in it
+  capitalised. Signing a release says which of its two signatures each
+  prompt is for: the release manifest or the installer package.
+- Every macOS executable Remap builds carries an embedded Info.plist naming
+  it (`Remap Service` for `remapd`, `Remap Installer` for `remap-install`,
+  and so on) under the signing identifier its installers already gave it
+  (ADR-0034). A bare executable had nothing for macOS to name it by but its
+  file name, which is what Login Items and system dialogs showed.
+- The native app's System page no longer calls every installation a
+  "source build" or points at a DNS System Extension that Remap does not
+  have. It says Remap manages one ordinary macOS resolver scope, which is
+  true of source and package installations alike.
+- sudo's password prompt says who is asking and for what: "Remap needs
+  administrator approval to install its DNS service. Password for <you>:",
+  and likewise for update, repair and removal on macOS and Linux, and for
+  `make install-package-macos`. It was a bare "Password:". On Linux the
+  prompt is passed only to the original sudo; sudo-rs keeps its own question.
+- Before macOS asks to change certificate trust settings for a Remap signing
+  identity, the build says which certificate the dialog is about, what the
+  trust lets it do, and what to choose. The dialog itself names neither, and
+  the administrator dialog for the installer identity names only `security`.
+- `remapd` and `remap daemon` tell you to press Control-C only when they are
+  running in a terminal. Under launchd or systemd they say which manager
+  started them, and the systemd journal no longer records an instruction
+  nobody there can follow.
+- On Linux, `systemctl status` and the journal name every Remap unit for what
+  it is. The sockets read "Remap DNS over UDP on 127.0.0.1:53" and so on
+  instead of "Remap dns-udp socket"; the resolver supervisor is "Remap DNS
+  resolver supervisor" and logs as `remap-resolver` rather than as its
+  executable, `remap-linux-system`; `remapd` logs as `remapd`.
+- The `remap(1)` manual pages are dated as the changelog dates this release,
+  and a test keeps them so; they carried a date three days before it.
+- macOS's network configuration log names Remap's changes "Remap DNS
+  Resolver" rather than "Agenxy Remap", and every dispatch queue Remap creates
+  is labelled under `org.agenxy.Remap`, the identifier family of its launchd
+  jobs and signatures.
+- Remap.app's Info.plist carries its copyright, so Finder's Get Info and the
+  About window show "Copyright 2026 Agenxy. Licensed under GPL-3.0-or-later."
+  instead of nothing. Every helper's embedded plist says the same.
+- A Supgang peer machine can have one name that works on any network
+  (ADR-0033). `remap set pro.agenxy.internal 'supgang://<node-id>?ssh=22,k7=7443'`
+  gives the machine a stable loopback address in `127.77.0.0/16`, allocated
+  when the mapping is created and kept until it is removed. Remap holds a
+  listener on that address at each listed port and carries each TCP
+  connection through Supgang's local stream endpoint to the service the
+  peer's owner exposes with `supgang expose`. The peer is selected by its
+  node ID or fingerprint, never its name. TCP only: UDP and unexposed
+  services are not reachable.
+  - DNS answers A with the address, and no AAAA, only while Remap holds
+    every listed port. Otherwise the name fails with SERVFAIL, so a
+    connection never reaches another local service, such as Remote Login's
+    sshd, in the peer's place.
+  - On macOS the root resolver supervisor makes each address an `lo0` alias
+    and creates the listening sockets as root, so `ssh=22` works beside
+    Remote Login's own sshd. It hands them to `remapd` over the system
+    socket. It removes only aliases it added, holds them while DNS is
+    suspended, and releases them all on deactivation and uninstall. Until a
+    port's socket is handed over, that port reports `awaiting-socket` and
+    the name does not answer.
+  - On Linux `remapd` binds the ports itself. Ports below 1024 need
+    `CAP_NET_BIND_SERVICE`, and a port another service holds on every
+    address cannot be held.
+  - Every listed port is reachable from anything on this machine that can
+    open a loopback TCP connection, so list only services the peer protects
+    itself.
+  - A connection Supgang does not carry is closed. The daemon's log names
+    the service and the cause, never the mapped name, at most once per cause
+    every ten seconds, and `remap status` counts every one by cause.
+    Connections silent for two hours are closed.
+  - `get`, `list`, `preview` and the MCP tools show the address
+    (`peer_address`). A registry holds at most 256 such mappings.
+  - The registry moves to schema 4, behind the pre-migration copy.
+- Remap's resolver refuses an upstream answer inside `127.77.0.0/16` with
+  SERVFAIL, so a remote name cannot point at a peer machine's reserved
+  address through it.
+- Control replies decode tolerantly: a client one release older ignores
+  fields a newer daemon adds. Requests still refuse unknown fields.
+- A wildcard's peer target may read its peer and service from the name
+  (ADR-0032). `*.k7.internal → supgang://{1}/{2}` routes
+  `preview.solis.k7.internal` to `supgang://solis/preview`, where `{1}` is the
+  label nearest the suffix. Only a whole peer or service is a placeholder,
+  `{2}` needs `{1}`, and an exact name cannot carry one
+  (`E_TEMPLATE_NEEDS_WILDCARD`). Matching and DNS are unchanged. A name that
+  cannot fill the template, because it has another number of labels or a
+  label its field cannot hold, gets `404 E_GATEWAY_TEMPLATE_NAME` naming the
+  mapping. The registry moves to schema 3. It adds no column; it exists so an
+  older daemon refuses the registry before misreading a template.
+- Migrating an existing registry to a newer schema first keeps a copy of it
+  at the old schema, `registry.schema-<old>.<unix-ms>.sqlite3` (mode 0600),
+  beside it. If the copy cannot be made, the migration is refused
+  (`E_REGISTRY_SNAPSHOT`). To roll back, stop `remapd`, remove the registry's
+  `-wal` and `-shm` files, and move the copy over `registry.sqlite3`.
+- Fixed a failed macOS DNS activation that could leave the Mac pointed at
+  Remap under a record marked prepared, which deactivation then removed
+  without restoring anything. The activation record is now written active
+  before any service is pointed at loopback; a failed commit restores every
+  service and returns the record to prepared, and a restore that also fails
+  is reported instead of ignored, leaving the record active so deactivation,
+  safe bypass, and the supervisor still restore it (ADR-0025).
+- Fixed a macOS safe bypass taken with no network connected reporting
+  `E_RESOLVER_SAFE_BYPASS_FAILED` until the network returned, although
+  ordinary DNS had been restored. With nothing connected macOS publishes no
+  global resolver, so restoration now accepts an empty one once every service
+  Remap changed holds its captured configuration again; any other global
+  resolver is checked exactly as before.
+- A failed routed request says which mapping failed and why (ADR-0028). The
+  `502 E_GATEWAY_UPSTREAM` and `504 E_GATEWAY_TIMEOUT` bodies, reported from
+  agenxy-supply, said neither. They keep their codes and now carry the matched
+  pattern (`Mapping: *.api.test`), a stable cause (`refused`, `timeout`,
+  `tls`, `reset`, `unreachable` or `other`) and a next step; every other error
+  after a match names the mapping too. The upstream's address and port still
+  never leave the gateway, and `remap get` shows the owner the target.
+- A mapping to a port with nothing listening no longer looks healthy until the
+  first request. Preview, apply, set and enable, on the CLI, over MCP and in
+  the native app, try one TCP connection, for at most a second, to each
+  loopback HTTP target the change leaves enabled, and advise
+  `target refused connection` when nothing accepts it. The change still
+  succeeds. Peer targets, other names and addresses off loopback are never
+  probed, and the probe sends no bytes, so the MCP tools keep their read-only
+  and closed-world annotations; their descriptions now say they probe.
+- Fixed a source build that stopped at macOS's trust dialog for the
+  `Remap Build Signing` identity refusing every later build, saying the
+  identity had no private key. Trust is creation's last step, so the key and
+  certificate were already imported. The build now finishes that exact
+  identity's trust setting when it is refused only as untrusted, after
+  checking the exported certificate is the one in the keychain, and still
+  refuses any other damaged state.
+- Fixed macOS asking whether `codesign` may use key "stdin". The build and
+  installer signing identities were imported through a pipe, and macOS names
+  a key's access prompt after the file it was read from, and labels the key
+  "Imported Private Key" in Keychain Access. Each identity is now imported
+  from a file named for it, in a directory only the owner can enter, under a
+  random per-run password, and removed straight after. Its key is labelled
+  and prompts as `Remap Build Signing`, `Remap Local Installer` or
+  `Remap Release Installer`. The signing key a package creates on each Mac
+  it installs on was described as "codesign" and labelled the same way; it
+  is now `Remap Local Codesign`. An identity created before this fix keeps
+  its old name until it is recreated.
+- `remap://help` explains the trade-offs between single-label names and a
+  suffix of the owner's choosing, without recommending one.
+- The release signing key lives in the Secure Enclave (ADR-0029). The new build-only
+  `remap-release-key` helper creates a P-256 key that the release-building Mac's Secure
+  Enclave will not export, writes only the Enclave's device-bound blob and never
+  overwrites one, and makes an OpenSSH SSHSIG signature that `ssh-keygen -Y verify`
+  accepts unchanged; every signature asks for Touch ID or the login password. A release
+  package (`REMAP_RELEASE_SE_KEY`) signs its manifest and package only with that key,
+  after proving the blob's public key is the release pin, and refuses a file key or a pin
+  marked `remap-release-development-only`. A development package
+  (`REMAP_DEVELOPMENT_PACKAGE=1`) keeps its file key and now has its own pin,
+  `docs/release/remap-development-signing-key.pub`; each package's installer compiles in
+  only its own kind's key, and `make install-package-macos` checks each kind against its
+  own pin. The `Remap Release Installer` identity stays RSA in the login keychain, because
+  the Enclave cannot hold RSA. The release pin is now that Enclave key,
+  `remap-release-v2`, fingerprint `SHA256:UNkUo9rEtVK+N92onnYn1C9d6U2cCkuTOYFvZIW/dgQ`,
+  created on the owner's release-building Mac. The README and release evidence also
+  quoted the lost August key's fingerprint; they now quote the release pin's.
+- Fixed Remap DNS flipping on and off every few seconds on a heavily loaded
+  Mac (ADR-0030). `remapd` and the resolver supervisor ran in launchd's
+  Background band, so under contention the supervisor's 250 ms exchange with
+  the daemon failed, ordinary DNS was restored, and one lucky exchange put
+  Remap back moments later. Both jobs are now `Interactive`, as macOS's own
+  resolver is; a new generation must declare it, while an installed one may
+  still carry the old value so rollback keeps working. A fault still restores
+  ordinary DNS at once, but Remap returns only after the daemon has answered
+  continuously for 5 seconds, doubling with each further fallback up to 5
+  minutes and resetting after 5 minutes armed; `remap-system status` says how
+  long the next return waits. Linux units set no lower priority and are
+  unchanged.
+- Fixed the macOS resolver supervisor falling back to ordinary DNS and never
+  re-arming until `remapd` restarted (ADR-0025). The daemon reports the
+  highest generation it has accepted, so a fresh reconciler publishes above
+  it; a bypass that cannot release the daemon's plan remembers that one
+  activation, durably, and a later reconciliation releases exactly it instead
+  of reporting an activation mismatch forever; an unobserved network (sleep,
+  Wi-Fi rejoining) keeps the last complete plan for up to 20 awake seconds,
+  while a channel failure, daemon refusal, or conflict still bypasses at once;
+  and every fallback records its reason, time, and re-arm in a root-owned
+  `resolver-bypass-v1.json` that `remap-system status` shows.
+- The macOS resolver follows the network service that carries DNS
+  (ADR-0024). When Wi-Fi turns off and a tethered phone or Ethernet takes
+  over, or the reverse, the supervisor captures the new service's prior DNS
+  configuration, publishes its plan, restores the service it leaves, and
+  points the new one at Remap, as the same activation. Two services with DNS
+  at once are refused as split DNS, during supervision as at activation, so a
+  second network or a VPN with its own resolver now restores ordinary DNS
+  until one service remains. Deactivation restores every service Remap
+  changed, including both during an interrupted move.
+- Fixed the native macOS lifecycle on a Mac that has restarted or that runs a
+  launchd-owned system socket, found by driving `make recover` and `make update`
+  end to end: the source orchestrator's privileged sink is spawned in the
+  caller's session, so `sudo -n` keeps its ticket (a new session dropped it,
+  and a root-owned tree that refused a signal then hid the real error); a root
+  helper under sudo puts the presence prompt to the invoking user, not to
+  "System Administrator" (`remap-install presence` is the user-side half), and
+  a refusal names why the dialog ended; a job launchd reloaded from its
+  published `LaunchDaemons` plist after a restart is that generation's, not a
+  collision; `launchctl print` is read for the service's own `path` and
+  `program`, not a nested socket's; a generation image carries the socket
+  contract it was validated under, so activation dials the socket its resolver
+  serves; remapd accepts the launchd-owned system socket, whose remembered
+  address is launchd's private path, NUL-padded, not the declared one; the
+  resolver supervisor accepts launchd (root) as the listener of that socket;
+  the runtime readiness ceiling is five minutes (macOS assesses a newly signed
+  daemon before it starts), the orchestrator waits for the helper's bounded
+  work, and the post-install doctor check settles for a minute; an internal
+  installer error says what it was.
+- After review (astra): a job loaded from the published plist is the
+  generation's only when the published bytes are the generation's plist; the
+  presence child is bounded to five minutes and must end of its own accord;
+  the post-install doctor check keeps its deadline and reports the last
+  answer; `remap system` on a source install says the lifecycle is the
+  repository's make targets. ADR-0017 records the two contracts.
+- Added the `peer` mapping target, `supgang://<peer>/<service>` (ADR-0016). The
+  gateway resolves the peer through Supgang when a request is routed, dials the
+  address Supgang prefers on the port the peer's signed record advertises, and
+  verifies the upstream TLS key against the advertised pin rather than the
+  system roots; a chain that merely appends the peer's public CA is refused.
+  DNS answers a peer mapping as it answers an HTTP one. A machine without
+  Supgang, a peer with no route, or a service the peer does not advertise is a
+  gateway error that says which. M7 is redefined on Supgang's identity: Remap
+  builds no enrollment, discovery, or revocation of its own.
+
+## 0.2.0 - 2026-08-19
+
+- Added the authoritative daemon, private registry, revision-safe preview and
+  atomic apply, exact retry receipts, and complete CLI mapping lifecycle.
+- Added bounded UDP and TCP DNS, fail-open public resolution, loopback HTTP
+  routing, authenticated runtime health, and automatic resolver recovery.
+- Added dual-version MCP tools, resources, subscriptions, and the optional MCP
+  Apps dashboard over the same authority as the CLI.
+- Added a native macOS Apple Installer package with detached Remap release
+  signing, durable target-Mac local signing, immutable generations, update
+  rollback, crash recovery, exact uninstall, manuals, completions, and license
+  notices. The source installation retains its exact preview and state-bound
+  approval flow.
+- Added the Linux systemd-resolved, systemd-networkd, and NetworkManager
+  vertical slices with non-root socket activation and transactional recovery.
+- Added strict multi-language quality, adversarial lifecycle, dependency,
+  packaging, browser, SBOM, and release-evidence gates.
+
+The macOS package is signed by Remap's dedicated release key. After verifying
+that signature and its internal manifest, the installer signs the executables
+with a durable identity created on the target Mac. It is not notarized or
+presented as a Developer ID distribution. Linux support remains limited to the
+exact documented native backends and acceptance environments.
+
+## 0.1.0 - 2026-08-11
+
+- Published the portable mapping model and offline validation CLI.

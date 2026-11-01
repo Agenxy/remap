@@ -1,0 +1,15 @@
+--swiftversion 6.0
+--allman false
+--commas inline
+--decimalgrouping 3,6
+--elseposition same-line
+--indent 4
+--linebreaks lf
+--maxwidth 120
+--operatorfunc spaced
+--self remove
+--semicolons never
+--stripunusedargs closure-only
+--wraparguments before-first
+--wrapcollections before-first
+--wrapparameters before-first

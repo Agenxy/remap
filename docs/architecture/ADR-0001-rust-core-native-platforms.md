@@ -17,7 +17,7 @@ and uses Rust within K7.
 
 ## Decision
 
-- Rust 1.97.1, edition 2024, is the portable implementation language.
+- Rust 1.98.0, edition 2024, is the portable implementation language.
 - Swift owns Apple-native UI, extension entry points, lifecycle, security, XPC,
   signing, and packaging.
 - Linux receives native Rust platform adapters for its resolver and service
@@ -39,4 +39,3 @@ third-party Rust bindings to expose every new framework surface immediately.
 
 FFI is security-sensitive code. It is introduced only with explicit ownership,
 panic, threading, and lifetime contracts plus tests on both sides.
-

@@ -1,7 +1,15 @@
 /target/
+/dist/
+/node_modules/
+__pycache__/
+*.py[cod]
+/playwright-report/
+/test-results/
+/.codex/
+/codesign[0-9]*
+**/.build/
 /.DS_Store
 /.idea/
 /.vscode/
 *.xcuserstate
 xcuserdata/
-
