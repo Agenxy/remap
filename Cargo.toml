@@ -39,7 +39,7 @@ hyper-rustls = { version = "=0.27.10", default-features = false, features = ["aw
 rustls = { version = "=0.23.46", default-features = false, features = ["aws_lc_rs", "logging", "std", "tls12"] }
 hyper-util = { version = "=0.1.21", features = ["client-legacy", "http1", "http2", "server", "tokio"] }
 jsonschema = { version = "=0.60.2", default-features = false }
-nix = { version = "=0.31.3", default-features = false, features = ["fs", "net", "signal", "socket", "user"] }
+nix = { version = "=0.31.3", default-features = false, features = ["fs", "net", "signal", "socket", "uio", "user"] }
 proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
 raunch = "=1.0.1"
 rmcp = { version = "=3.8.0", default-features = false, features = ["macros", "schemars", "server", "transport-io"] }

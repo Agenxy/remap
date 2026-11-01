@@ -8,7 +8,8 @@ use crate::installed_package::InstalledPackage;
 use crate::runtime_health::RuntimeHealth;
 use remap_mcp::system_lookup::SystemLookup;
 
-const MANPAGE_DATE: &str = "2026-08-16";
+/// The release date of this version, as the changelog records it.
+const MANPAGE_DATE: &str = "2026-08-19";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Report {
@@ -230,4 +231,19 @@ fn validate(
         target_kind: target.kind().as_str(),
         host_header_policy: policy,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_manual_is_dated_as_the_changelog_dates_this_release() -> std::io::Result<()> {
+        let changelog =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../CHANGELOG.md"))?;
+        let heading = format!("## {} - {}", env!("CARGO_PKG_VERSION"), super::MANPAGE_DATE);
+        assert!(
+            changelog.lines().any(|line| line == heading),
+            "CHANGELOG.md has no heading {heading:?}; date the manual as the release"
+        );
+        Ok(())
+    }
 }

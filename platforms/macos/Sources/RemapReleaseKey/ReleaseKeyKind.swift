@@ -27,8 +27,16 @@ enum ReleaseKeyKind: String, CaseIterable, Equatable, Sendable {
         }
     }
 
+    /// macOS asks "<program> is trying to <reason>." once per signature, and a
+    /// release takes two, so each says which of them the owner is approving.
     func signingReason(namespace: String) -> String {
-        "sign a Remap \(rawValue) under \(namespace)"
+        switch (self, namespace) {
+        case (.release, "remap-release"): "sign the manifest of a Remap release"
+        case (.release, "remap-package-v1"): "sign a Remap installer package"
+        case (.rehearsal, "remap-release"): "sign the manifest of a Remap rehearsal"
+        case (.rehearsal, "remap-package-v1"): "sign a Remap rehearsal installer package"
+        default: "sign Remap \(rawValue) data under \(namespace)"
+        }
     }
 
     var creationNotice: String {

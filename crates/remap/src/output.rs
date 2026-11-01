@@ -596,6 +596,7 @@ mod tests {
             native_install: true,
             installed_package,
             system_lookup: SystemLookup::NotChecked,
+            peer_machines: None,
         })
     }
 

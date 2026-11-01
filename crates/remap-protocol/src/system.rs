@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::io;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
+use std::num::NonZeroU16;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -12,7 +13,22 @@ use crate::wire::{read_bounded_frame, write_bounded_frame};
 /// Root-supervisor wire contract used only for resolver-plan lifecycle.
 pub const SYSTEM_PROTOCOL_VERSION: &str = "remap.system/v1";
 
-const MAX_SYSTEM_FRAME_BYTES: usize = 16 * 1024;
+/// The largest system frame either side accepts.
+pub const MAX_SYSTEM_FRAME_BYTES: usize = 16 * 1024;
+
+/// The most listeners one exchange names, and so the most descriptors one
+/// adoption carries. Root pages through the rest in later exchanges.
+pub const MAX_LISTENERS_PER_EXCHANGE: usize = 64;
+
+/// One reserved address and port a peer-machine name listens on (ADR-0033).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListenerAddress {
+    /// The reserved loopback address.
+    pub address: Ipv4Addr,
+    /// The port the owner listed for one service.
+    pub port: NonZeroU16,
+}
 
 /// One narrowly scoped request from the native resolver supervisor.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -48,6 +64,18 @@ pub enum SystemCommand {
     },
     /// Reads non-sensitive resolver generation state.
     ResolverHealth,
+    /// Reads the loopback addresses that enabled peer-machine names answer
+    /// with (ADR-0033), so the root supervisor can hold them on `lo0`. Only
+    /// addresses cross: never a name, a peer, or a service.
+    LoopbackReservations,
+    /// Hands `remapd` listening sockets the root supervisor created on
+    /// reserved addresses, because only root may bind a port below 1024 on
+    /// one (ADR-0033 amendment). The descriptors travel as `SCM_RIGHTS` with
+    /// this frame, one per listener, in this order.
+    AdoptPeerMachineListeners {
+        /// At most [`MAX_LISTENERS_PER_EXCHANGE`] listeners, one per descriptor.
+        listeners: Vec<ListenerAddress>,
+    },
 }
 
 /// One bounded response from `remapd` to the native supervisor.
@@ -85,6 +113,16 @@ pub struct SystemResult {
     /// steady-state responses byte-identical to the original v1 contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub highest_accepted_generation: Option<u64>,
+    /// Present only in the answer to [`SystemCommand::LoopbackReservations`],
+    /// so every other response stays byte-identical to the original v1
+    /// contract. The root side validates each address before acting on any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loopback_reservations: Option<Vec<Ipv4Addr>>,
+    /// Present with `loopback_reservations`: listeners of enabled
+    /// peer-machine names that `remapd` does not yet hold, at most
+    /// [`MAX_LISTENERS_PER_EXCHANGE`] of them in ascending order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unheld_listeners: Option<Vec<ListenerAddress>>,
 }
 
 impl SystemResult {
@@ -101,7 +139,36 @@ impl SystemResult {
             activation_id,
             active_generation,
             highest_accepted_generation,
+            loopback_reservations: None,
+            unheld_listeners: None,
         }
+    }
+
+    /// Adds the answer to [`SystemCommand::LoopbackReservations`], in
+    /// ascending order.
+    #[must_use]
+    pub fn with_loopback_reservations(
+        mut self,
+        reservations: impl IntoIterator<Item = Ipv4Addr>,
+    ) -> Self {
+        let mut reservations: Vec<Ipv4Addr> = reservations.into_iter().collect();
+        reservations.sort_unstable();
+        self.loopback_reservations = Some(reservations);
+        self
+    }
+
+    /// Adds the first [`MAX_LISTENERS_PER_EXCHANGE`] unheld listeners, in
+    /// ascending order. Root asks again for the rest.
+    #[must_use]
+    pub fn with_unheld_listeners(
+        mut self,
+        listeners: impl IntoIterator<Item = ListenerAddress>,
+    ) -> Self {
+        let mut listeners: Vec<ListenerAddress> = listeners.into_iter().collect();
+        listeners.sort_unstable();
+        listeners.truncate(MAX_LISTENERS_PER_EXCHANGE);
+        self.unheld_listeners = Some(listeners);
+        self
     }
 }
 
@@ -140,6 +207,21 @@ where
     R: AsyncRead + Unpin,
 {
     read_bounded_frame(reader, MAX_SYSTEM_FRAME_BYTES).await
+}
+
+/// Decodes one system request from a frame's payload, for a reader that
+/// receives the frame itself because descriptors may travel with it.
+///
+/// # Errors
+///
+/// Returns `InvalidData` when the payload is not exactly one system request.
+pub fn decode_system_request(payload: &[u8]) -> io::Result<SystemRequest> {
+    serde_json::from_slice(payload).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid system request JSON: {error}"),
+        )
+    })
 }
 
 /// Writes one frame within the 16 KiB system limit.
@@ -230,6 +312,53 @@ mod tests {
             r#"{"activation_id":null,"active_generation":null,"highest_accepted_generation":3}"#,
         )?;
         assert_eq!(current.highest_accepted_generation, Some(3));
+        Ok(())
+    }
+
+    #[test]
+    fn loopback_reservations_have_their_own_kind_and_field() -> Result<(), Box<dyn Error>> {
+        let request: SystemRequest = serde_json::from_value(serde_json::json!({
+            "protocol": SYSTEM_PROTOCOL_VERSION,
+            "request_id": Uuid::nil(),
+            "command": {"kind": "loopback_reservations"},
+        }))?;
+        assert_eq!(request.command, SystemCommand::LoopbackReservations);
+        let result = SystemResult::new(None, None, None).with_loopback_reservations([
+            Ipv4Addr::new(127, 77, 0, 2),
+            Ipv4Addr::new(127, 77, 0, 1),
+        ]);
+        assert_eq!(
+            serde_json::to_value(&result)?,
+            serde_json::json!({
+                "activation_id": null,
+                "active_generation": null,
+                "loopback_reservations": ["127.77.0.1", "127.77.0.2"],
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_largest_reservation_answer_fits_one_frame() -> Result<(), Box<dyn Error>> {
+        let result = SystemResult::new(Some(Uuid::new_v4()), Some(u64::MAX), Some(u64::MAX))
+            .with_loopback_reservations((0..256u16).map(|index| {
+                let [high, low] = (0xFF00 + index).to_be_bytes();
+                Ipv4Addr::new(127, 77, high, low)
+            }));
+        let (mut writer, mut reader) = duplex(32 * 1024);
+        write_system_frame(
+            &mut writer,
+            &super::SystemResponse::success(Uuid::new_v4(), result),
+        )
+        .await?;
+        let decoded: super::SystemResponse = read_system_frame(&mut reader).await?;
+        assert_eq!(
+            decoded
+                .result
+                .and_then(|result| result.loopback_reservations)
+                .map(|list| list.len()),
+            Some(256)
+        );
         Ok(())
     }
 

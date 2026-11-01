@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import tempfile
 import unittest
 from collections.abc import Callable
+from contextlib import redirect_stderr
 from pathlib import Path
 from typing import cast, override
 from unittest import mock
@@ -34,6 +36,7 @@ class MacOSInstallerSigningTests(unittest.TestCase):
         configuration = remap_macos_installer_signing.openssl_configuration()
 
         self.assertIn("CN = Remap Local Installer", configuration)
+        self.assertIn("\nO = Remap\n", configuration)
         self.assertIn(remap_macos_installer_signing.INSTALLER_EKU, configuration)
         self.assertNotIn("codeSigning", configuration)
         self.assertIn("CA:TRUE,pathlen:0", configuration)
@@ -214,9 +217,12 @@ class MacOSInstallerSigningTests(unittest.TestCase):
             mock.patch(
                 "tools.remap_macos_installer_signing._run_authorized"
             ) as authorized,
+            redirect_stderr(io.StringIO()) as errors,
         ):
             remap_macos_installer_signing.ensure_administrator_trust(identity)
 
+        self.assertIn('trusts "Remap Local Installer"', errors.getvalue())
+        self.assertIn("administrator's name and password", errors.getvalue())
         arguments = cast(tuple[str, ...], authorized.call_args.args[0])
         self.assertEqual(arguments[:3], ("/usr/bin/security", "add-trusted-cert", "-d"))
         self.assertEqual(arguments[arguments.index("-p") + 1], "basic")

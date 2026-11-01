@@ -9,6 +9,7 @@ import re
 import secrets
 import ssl
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,6 +28,11 @@ HEADLESS_TRUST_VARIABLE = "REMAP_HEADLESS_TRUST"
 SYSTEM_KEYCHAIN = Path("/Library/Keychains/System.keychain")
 SHA1_PATTERN = re.compile(r"[0-9A-F]{40}\Z")
 SHA256_PATTERN = re.compile(r"[0-9A-F]{64}\Z")
+# What each trust policy lets an identity do, as the owner is told it.
+TRUST_PURPOSES = {
+    "codeSign": "to sign Remap's programs on this Mac",
+    "basic": "to sign Remap's installer packages on this Mac",
+}
 IDENTITY_PATTERN = re.compile(r'^\s*\d+\)\s+([0-9A-F]{40})\s+"([^"]+)"\s*$')
 UNTRUSTED_IDENTITY_PATTERN = re.compile(
     r'^\s*\d+\)\s+([0-9A-F]{40})\s+"([^"]+)"\s+\(CSSMERR_TP_NOT_TRUSTED\)\s*$'
@@ -541,8 +547,12 @@ def record_trust(
 
     macOS puts this question to the owner in a dialog, and `run` gives it two
     minutes. An unanswered dialog is an ordinary outcome, so it is reported as
-    what happened and how to resume, never as a stack trace.
+    what happened and how to resume, never as a stack trace. The dialog itself
+    says only that trust settings are changing, so the owner is told first
+    which certificate it is about and what to choose.
     """
+    if not headless_trust():
+        print(trust_notice(name, policy), file=sys.stderr, flush=True)
     try:
         _ = run(trust_arguments(keychain, policy), certificate)
     except subprocess.TimeoutExpired:
@@ -551,6 +561,15 @@ def record_trust(
             + "answered within two minutes. Run the same command again at this Mac "
             + "and approve it; the build resumes at this step."
         ) from None
+
+
+def trust_notice(name: str, policy: str) -> str:
+    """The line printed just before macOS asks the owner to trust `name`."""
+    return (
+        "macOS will now ask to change your certificate trust settings so that it "
+        + f'trusts "{name}" {TRUST_PURPOSES[policy]}. Choose Update Settings and '
+        + "enter your login password to continue."
+    )
 
 
 def trust_arguments(keychain: Path, policy: str) -> tuple[str, ...]:
@@ -598,7 +617,7 @@ x509_extensions = codesign
 
 [ dn ]
 CN = {IDENTITY_NAME}
-O = Agenxy Local
+O = Remap
 OU = Remap Signing
 
 [ codesign ]

@@ -47,7 +47,7 @@ final class RemapStore {
     private let verifyRuntime: @Sendable () async -> RemapRuntimeHealth
 
     init() {
-        let client = try? RemapControlClient.discovered(clientVersion: AppIdentity.version)
+        let client = try? RemapControlClient.discovered(clientVersion: RemapControlClient.bundleVersion)
         if let client {
             executeCommand = { command in try await client.execute(command) }
         } else {

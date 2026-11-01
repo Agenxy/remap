@@ -31,6 +31,8 @@ from tools.remap_macos_signing import (
 APP_BUNDLE_ID = "org.agenxy.Remap"
 APP_NAME = "Remap"
 APP_MINIMUM_MACOS = "15.0"
+# The line Finder and the About window show; it matches NOTICE and every helper.
+COPYRIGHT = "Copyright 2026 Agenxy. Licensed under GPL-3.0-or-later."
 RESOURCE_BUNDLE_NAME = "RemapMac_RemapApp.bundle"
 SYSTEM_APP_BUNDLE = Path("/Applications/Remap.app")
 
@@ -229,6 +231,7 @@ def _write_info_plist(path: Path, version: str) -> None:
         "LSApplicationCategoryType": "public.app-category.developer-tools",
         "LSMinimumSystemVersion": APP_MINIMUM_MACOS,
         "NSHighResolutionCapable": True,
+        "NSHumanReadableCopyright": COPYRIGHT,
         "NSPrincipalClass": "NSApplication",
     }
     with path.open("wb") as output:

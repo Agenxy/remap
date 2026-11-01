@@ -22,6 +22,7 @@ pub struct DescriptorSpec {
     name: &'static str,
     kind: DescriptorKind,
     address: &'static str,
+    purpose: &'static str,
 }
 
 impl DescriptorSpec {
@@ -42,6 +43,12 @@ impl DescriptorSpec {
     pub const fn address(self) -> &'static str {
         self.address
     }
+
+    /// Returns what the socket carries, as its unit describes it to the owner.
+    #[must_use]
+    pub const fn purpose(self) -> &'static str {
+        self.purpose
+    }
 }
 
 /// Exact host-wide socket-activation contract for the first Linux slice.
@@ -60,16 +67,19 @@ impl SocketContract {
                     name: "dns-udp",
                     kind: DescriptorKind::Datagram,
                     address: "127.0.0.1:53",
+                    purpose: "DNS over UDP",
                 },
                 DescriptorSpec {
                     name: "dns-tcp",
                     kind: DescriptorKind::Stream,
                     address: "127.0.0.1:53",
+                    purpose: "DNS over TCP",
                 },
                 DescriptorSpec {
                     name: "http",
                     kind: DescriptorKind::Stream,
                     address: "127.0.0.1:80",
+                    purpose: "HTTP gateway",
                 },
             ],
         }
@@ -375,7 +385,7 @@ impl SystemdUnitSet {
 
 fn render_resolver_service(identity: &ResolverSupervisorIdentity) -> String {
     format!(
-        "[Unit]\nDescription=Remap reversible resolver supervisor\nDocumentation=https://github.com/agenxy/remap\nRequires=remapd.service systemd-resolved.service\nWants=network-online.target\nAfter=network-online.target remapd.service systemd-resolved.service\nPartOf=remapd.service\n\n[Service]\nType=simple\nUser=root\nGroup=root\nExecCondition={} authorize-runtime\nExecStart={} serve --link {} --interface-name {} --manager {} --owner-uid {} --daemon-uid {} --record-dir {} --system-socket {}\nRestart=on-failure\nRestartSec=1s\nStateDirectory=remap-system\nStateDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=yes\nCapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_NET_ADMIN\nAmbientCapabilities=CAP_DAC_OVERRIDE CAP_NET_ADMIN\nPrivateDevices=yes\nPrivateTmp=yes\nProtectClock=yes\nProtectControlGroups=yes\nProtectHome=yes\nProtectHostname=yes\nProtectKernelLogs=yes\nProtectKernelModules=yes\nProtectKernelTunables=yes\nProtectSystem=strict\nLockPersonality=yes\nMemoryDenyWriteExecute=yes\nRestrictAddressFamilies=AF_UNIX\nRestrictNamespaces=yes\nRestrictRealtime=yes\nSystemCallArchitectures=native\n\n[Install]\nWantedBy=multi-user.target\n",
+        "[Unit]\nDescription=Remap DNS resolver supervisor\nDocumentation=https://github.com/agenxy/remap\nRequires=remapd.service systemd-resolved.service\nWants=network-online.target\nAfter=network-online.target remapd.service systemd-resolved.service\nPartOf=remapd.service\n\n[Service]\nType=simple\nUser=root\nGroup=root\nExecCondition={} authorize-runtime\nExecStart={} serve --link {} --interface-name {} --manager {} --owner-uid {} --daemon-uid {} --record-dir {} --system-socket {}\nRestart=on-failure\nRestartSec=1s\nSyslogIdentifier=remap-resolver\nStateDirectory=remap-system\nStateDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=yes\nCapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_NET_ADMIN\nAmbientCapabilities=CAP_DAC_OVERRIDE CAP_NET_ADMIN\nPrivateDevices=yes\nPrivateTmp=yes\nProtectClock=yes\nProtectControlGroups=yes\nProtectHome=yes\nProtectHostname=yes\nProtectKernelLogs=yes\nProtectKernelModules=yes\nProtectKernelTunables=yes\nProtectSystem=strict\nLockPersonality=yes\nMemoryDenyWriteExecute=yes\nRestrictAddressFamilies=AF_UNIX\nRestrictNamespaces=yes\nRestrictRealtime=yes\nSystemCallArchitectures=native\n\n[Install]\nWantedBy=multi-user.target\n",
         identity.executable.display(),
         identity.executable.display(),
         identity.link.get(),
@@ -409,7 +419,7 @@ fn render_service(
         )
     });
     format!(
-        "[Unit]\nDescription=Remap local name and service router\nDocumentation=https://github.com/agenxy/remap\nRequires={sockets}\nAfter=network.target {sockets}\n\n[Service]\nType=simple\nUser={}\nGroup={}\n{authorization}ExecStart={} --systemd-sockets --data-dir /var/lib/remap --dns-listen 127.0.0.1:53 --http-listen 127.0.0.1:80\nSockets={sockets}\nRuntimeDirectory=remap\nRuntimeDirectoryMode=0700\nStateDirectory=remap\nStateDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nAmbientCapabilities=\nPrivateDevices=yes\nPrivateTmp=yes\nProtectClock=yes\nProtectControlGroups=yes\nProtectHome=yes\nProtectHostname=yes\nProtectKernelLogs=yes\nProtectKernelModules=yes\nProtectKernelTunables=yes\nProtectSystem=strict\nLockPersonality=yes\nMemoryDenyWriteExecute=yes\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nRestrictNamespaces=yes\nRestrictRealtime=yes\nSystemCallArchitectures=native\n\n[Install]\nWantedBy=multi-user.target\n",
+        "[Unit]\nDescription=Remap local name and service router\nDocumentation=https://github.com/agenxy/remap\nRequires={sockets}\nAfter=network.target {sockets}\n\n[Service]\nType=simple\nUser={}\nGroup={}\n{authorization}ExecStart={} --systemd-sockets --data-dir /var/lib/remap --dns-listen 127.0.0.1:53 --http-listen 127.0.0.1:80\nSockets={sockets}\nSyslogIdentifier=remapd\nRuntimeDirectory=remap\nRuntimeDirectoryMode=0700\nStateDirectory=remap\nStateDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nAmbientCapabilities=\nPrivateDevices=yes\nPrivateTmp=yes\nProtectClock=yes\nProtectControlGroups=yes\nProtectHome=yes\nProtectHostname=yes\nProtectKernelLogs=yes\nProtectKernelModules=yes\nProtectKernelTunables=yes\nProtectSystem=strict\nLockPersonality=yes\nMemoryDenyWriteExecute=yes\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nRestrictNamespaces=yes\nRestrictRealtime=yes\nSystemCallArchitectures=native\n\n[Install]\nWantedBy=multi-user.target\n",
         identity.account,
         identity.group,
         identity.executable.display()
@@ -427,8 +437,8 @@ fn render_socket(descriptor: DescriptorSpec, authorizer: Option<&Path>) -> Strin
     // Descriptor adoption establishes and verifies CLOEXEC and nonblocking flags.
     // They are process-side properties, not portable systemd.socket directives.
     format!(
-        "[Unit]\nDescription=Remap {} socket\n\n[Socket]\n{authorization}{directive}={}\nFileDescriptorName={}\nService=remapd.service\nFreeBind=no\n\n[Install]\nWantedBy=sockets.target\n",
-        descriptor.name, descriptor.address, descriptor.name
+        "[Unit]\nDescription=Remap {} on {}\n\n[Socket]\n{authorization}{directive}={}\nFileDescriptorName={}\nService=remapd.service\nFreeBind=no\n\n[Install]\nWantedBy=sockets.target\n",
+        descriptor.purpose, descriptor.address, descriptor.address, descriptor.name
     )
 }
 

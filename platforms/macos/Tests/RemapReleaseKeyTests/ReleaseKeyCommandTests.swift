@@ -73,11 +73,9 @@ struct ReleaseKeyCommandTests {
         #expect(ReleaseKeyKind.release.accessControlFlags.contains(.privateKeyUsage))
         #expect(!ReleaseKeyKind.rehearsal.accessControlFlags.contains(.userPresence))
         #expect(ReleaseKeyKind.rehearsal.accessControlFlags.contains(.privateKeyUsage))
-        #expect(ReleaseKeyKind.release
-            .signingReason(namespace: "remap-release") == "sign a Remap release under remap-release")
         #expect(
             ReleaseKeyKind.rehearsal.signingReason(namespace: "remap-package-v1")
-                == "sign a Remap rehearsal under remap-package-v1"
+                == "sign a Remap rehearsal installer package"
         )
         #expect(ReleaseKeyKind.rehearsal.creationNotice.contains("rehearsal signing key"))
         #expect(ReleaseKeyKind.rehearsal.creationNotice.contains("without Touch ID"))
@@ -203,5 +201,20 @@ struct ReleaseKeyCommandTests {
         try digest(8, bound: 8)
         #expect(throws: ReleaseKeyError.self) { try digest(9, bound: 8) }
         #expect(throws: ReleaseKeyError.self) { try digest(0, bound: 8) }
+    }
+
+    @Test("each signature's prompt says which one the owner is approving")
+    func signingReasonsCompleteTheSystemSentence() {
+        let namespaces = ["remap-release", "remap-package-v1", "other"]
+        let reasons = ReleaseKeyKind.allCases.flatMap { kind in
+            namespaces.map { kind.signingReason(namespace: $0) }
+        }
+        #expect(reasons[0] == "sign the manifest of a Remap release")
+        #expect(reasons[1] == "sign a Remap installer package")
+        #expect(reasons[3] == "sign the manifest of a Remap rehearsal")
+        #expect(Set(reasons).count == reasons.count)
+        for reason in reasons {
+            #expect(reason.first?.isLowercase == true && !reason.hasSuffix("."))
+        }
     }
 }
