@@ -72,12 +72,26 @@ peer's address.
 
 ### What reaches the peer
 
-- **A reserved loopback address.** The privileged helper makes the mapping's
-  address an `lo0` alias on macOS. Linux already routes all of `127.0.0.0/8` to
-  loopback. The reservation is the one new privileged operation. It lives
-  behind the platform adapter like every other lifecycle effect, it is
-  restored on boot, and it is removed exactly on disable, removal and
-  uninstall.
+- **A reserved loopback address.** On macOS the root resolver supervisor makes
+  the mapping's address an `lo0` alias. Linux already routes all of
+  `127.0.0.0/8` to loopback, so nothing is reserved there. The reservation is
+  the one new privileged operation, held as follows:
+  - It runs as its own task in the root process, beside the resolver
+    supervisor. Nothing it does can bypass, suspend or restore DNS.
+  - Every 5 seconds it asks `remapd` over the existing `remap.system/v1`
+    socket with one additive request, `loopback_reservations`. The answer
+    carries addresses only, never a name, peer or service, and every other
+    response is unchanged byte for byte.
+  - Root refuses the whole answer if any address is outside
+    `127.77.0.0/16`, duplicated, or beyond 256. It acts only inside that
+    range, and removes only aliases it recorded in the root-owned
+    `loopback-reservations-v1.json` beside the activation record.
+  - An address is recorded before it is added and forgotten only after it
+    is removed, so a crash never leaves an alias nobody owns.
+  - Aliases are held while a DNS activation exists, including while DNS is
+    suspended, so a flap never drops connections. An unreachable daemon
+    leaves them as they are. Deactivation and uninstall release them all,
+    and boot restores them through the same reconciliation.
 - **Listeners bound only to that address.** The gateway listens on the
   mapping's address at each pair's port, never on a non-loopback address and
   never on `127.0.0.1`. Each accepted TCP connection is carried through
@@ -312,6 +326,60 @@ each listed port and creates sockets only for those not held.
 - `crates/remapd/tests/peer_machines.rs`: through a live daemon, the
   listener in status, with the name answering where `remapd` holds the port
   and failing with `awaiting-socket` on macOS until a socket is handed over.
+
+## Amendment after review, 30 October
+
+An independent review of steps 1–3 found that a user-level listener cannot
+carry the headline case, and that failure sent traffic somewhere else.
+
+- **A non-root process cannot bind a port below 1024 on a specific address.**
+  Measured on macOS 27.2, as uid 501: `127.0.0.1:22` gives EACCES. As root
+  with `SO_REUSEADDR`, the same bind succeeds beside sshd's `*:22`.
+- **A failed bind misdirected traffic.** The name kept answering, and Remote
+  Login's wildcard sshd accepted connections to the alias, so
+  `ssh <name>` reached the local Mac instead of the peer.
+
+Decided:
+
+1. **On macOS, root creates the listening sockets.**
+   - For each reservation, the root supervisor binds every listed port on its
+     alias, with `SO_REUSEADDR`, as soon as it adds the alias.
+   - It passes the listening descriptors to `remapd` over the system socket
+     with `SCM_RIGHTS`. `remapd` adopts a descriptor only if `getsockname`
+     shows exactly the reserved address and port and it is a listening TCP
+     socket.
+   - The `loopback_reservations` answer therefore carries each address with
+     its ports, still never a name, peer or service.
+   - Root binding as soon as the alias exists also closes the window in which
+     another account could bind the address first. If root's bind fails
+     because one already did, that mapping is not held.
+2. **A name answers only while every one of its ports is held by Remap.**
+   Otherwise its A query gets SERVFAIL, and status names the unheld port and
+   why. This holds on every platform. A name never reaches a local service in
+   place of the peer.
+3. **On Linux, `remapd` binds its own listeners.** A port below 1024 needs
+   `CAP_NET_BIND_SERVICE`. A port a wildcard listener already holds cannot be
+   bound, and point 2 then keeps the name from answering.
+4. **Rebinding.** DNS drops any upstream answer inside `127.77.0.0/16`, so a
+   remote name cannot be made to point at a reserved address through Remap's
+   resolver. A client that bypasses the system resolver, such as a browser
+   using its own DNS, can still reach a reserved port from a page. Every
+   listed port is therefore treated as reachable by anything on this Mac that
+   can open a loopback TCP connection, including pages and other accounts.
+   The help text says so, and the owner should list only services the peer
+   protects itself. Checking the caller's account per connection is left for
+   a later decision. It needs a kernel connection-table read, which on macOS
+   is a private structure.
+5. **Robustness.**
+   - The keeper and deactivation serialise on a lock.
+   - Deactivation never fails because a release failed: it logs instead.
+   - The reservation record carries the boot session, so entries from an
+     earlier boot are discarded rather than adopted.
+   - Control-protocol replies are decoded tolerantly, so a client one release
+     older still reads them.
+   - Supgang's socket is looked up per connection, not once at start.
+   - Connections have an idle timeout and a per-listener cap.
+   - The refusal log is rate-limited, and the counters keep the totals.
 
 ## Consequences
 

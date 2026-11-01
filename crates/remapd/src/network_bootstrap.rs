@@ -75,9 +75,20 @@ pub(crate) async fn prepare_network(
         engine.observe_resolver_plans(plans.clone());
         Some(
             if let Some(listener) = prebound.and_then(|value| value.system_control) {
-                SystemControlRuntime::adopt(listener, plans)?
+                SystemControlRuntime::adopt(
+                    listener,
+                    plans,
+                    snapshots.clone(),
+                    peer_machines.clone(),
+                )?
             } else {
-                SystemControlRuntime::bind(&config.system_socket, plans).await?
+                SystemControlRuntime::bind(
+                    &config.system_socket,
+                    plans,
+                    snapshots.clone(),
+                    peer_machines.clone(),
+                )
+                .await?
             },
         )
     } else {

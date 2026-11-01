@@ -20,12 +20,18 @@ public enum ResolverSystemCommand: Encodable, Sendable {
     case publish(activationID: UUID, generation: UInt64, upstreams: [String])
     case invalidate(activationID: UUID, generation: UInt64)
     case health
+    /// The loopback addresses enabled peer-machine names answer with (ADR-0033).
+    case loopbackReservations
+    /// Hands over root-created listening sockets, one descriptor per listener,
+    /// in order. Send it only through `exchange(_:passing:)`.
+    case adoptListeners([LoopbackListener])
 
     enum CodingKeys: String, CodingKey {
         case kind
         case activationID = "activation_id"
         case generation
         case upstreams
+        case listeners
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -42,6 +48,11 @@ public enum ResolverSystemCommand: Encodable, Sendable {
             try container.encode(generation, forKey: .generation)
         case .health:
             try container.encode("resolver_health", forKey: .kind)
+        case .loopbackReservations:
+            try container.encode("loopback_reservations", forKey: .kind)
+        case let .adoptListeners(listeners):
+            try container.encode("adopt_peer_machine_listeners", forKey: .kind)
+            try container.encode(listeners, forKey: .listeners)
         }
     }
 }
@@ -58,17 +69,26 @@ public struct ResolverSystemResult: Decodable, Equatable, Sendable {
     /// stopped answering over its bounded window (ADR-0036). A daemon older
     /// than that field never sends it, so absence is decoded as nil.
     public let upstreamFailure: ResolverUpstreamFailure?
+    /// Present only in the answer to `loopbackReservations`. Root validates
+    /// every entry against the reserved range before acting on any of them.
+    public let loopbackReservations: [String]?
+    /// Listeners `remapd` does not yet hold, at most one exchange's worth.
+    public let unheldListeners: [LoopbackListener]?
 
     public init(
         activationID: UUID?,
         activeGeneration: UInt64?,
         highestAcceptedGeneration: UInt64? = nil,
-        upstreamFailure: ResolverUpstreamFailure? = nil
+        upstreamFailure: ResolverUpstreamFailure? = nil,
+        loopbackReservations: [String]? = nil,
+        unheldListeners: [LoopbackListener]? = nil
     ) {
         self.activationID = activationID
         self.activeGeneration = activeGeneration
         self.highestAcceptedGeneration = highestAcceptedGeneration
         self.upstreamFailure = upstreamFailure
+        self.loopbackReservations = loopbackReservations
+        self.unheldListeners = unheldListeners
     }
 
     enum CodingKeys: String, CodingKey {
@@ -76,6 +96,8 @@ public struct ResolverSystemResult: Decodable, Equatable, Sendable {
         case activeGeneration = "active_generation"
         case highestAcceptedGeneration = "highest_accepted_generation"
         case upstreamFailure = "upstream_failure"
+        case loopbackReservations = "loopback_reservations"
+        case unheldListeners = "unheld_listeners"
     }
 }
 
@@ -134,6 +156,18 @@ public struct ResolverSystemChannel: Sendable {
     }
 
     public func exchange(_ command: ResolverSystemCommand) throws -> ResolverSystemResult {
+        try exchange(command, passing: [])
+    }
+
+    /// Sends `descriptors` as `SCM_RIGHTS` with the frame's first bytes. The
+    /// caller keeps and closes its own copies.
+    public func exchange(
+        _ command: ResolverSystemCommand,
+        passing descriptors: [Int32]
+    ) throws -> ResolverSystemResult {
+        guard descriptors.count <= maximumListenersPerExchange else {
+            throw ResolverChannelError.frameTooLarge
+        }
         let request = ResolverSystemRequest(requestID: UUID(), command: command)
         let payload = try systemEncoder.encode(request)
         guard payload.count <= maximumSystemFrameBytes else {
@@ -144,7 +178,9 @@ public struct ResolverSystemChannel: Sendable {
         try authenticatePeer(descriptor: descriptor, expectedUID: expectedPeerUID)
         let deadline = DispatchTime.now().uptimeNanoseconds + 250_000_000
         var length = UInt32(payload.count).bigEndian
-        try withUnsafeBytes(of: &length) { try writeAll(descriptor, bytes: $0, deadline: deadline) }
+        try withUnsafeBytes(of: &length) {
+            try writeAll(descriptor, bytes: $0, deadline: deadline, passing: descriptors)
+        }
         try payload.withUnsafeBytes { try writeAll(descriptor, bytes: $0, deadline: deadline) }
         let responseData = try readFrame(descriptor, deadline: deadline)
         let response = try systemDecoder.decode(ResolverSystemResponse.self, from: responseData)
@@ -181,6 +217,45 @@ public enum ResolverChannelError: Error, CustomStringConvertible, Equatable {
 }
 
 private let maximumSystemFrameBytes = 16 * 1024
+/// Matches `remapd`'s `MAX_LISTENERS_PER_EXCHANGE`.
+let maximumListenersPerExchange = 64
+
+/// One `sendmsg` carrying `descriptors` as `SCM_RIGHTS`. Darwin aligns control
+/// data to 4 bytes, and `cmsghdr` (12 bytes) is already aligned.
+private func sendWithRights(_ socket: Int32, bytes: UnsafeRawBufferPointer, descriptors: [Int32]) -> Int {
+    let headerLength = MemoryLayout<cmsghdr>.size
+    let rightsLength = descriptors.count * MemoryLayout<Int32>.size
+    var control = [UInt8](repeating: 0, count: headerLength + rightsLength)
+    control.withUnsafeMutableBytes { raw in
+        raw.storeBytes(
+            of: cmsghdr(
+                cmsg_len: socklen_t(headerLength + rightsLength),
+                cmsg_level: SOL_SOCKET,
+                cmsg_type: SCM_RIGHTS
+            ),
+            as: cmsghdr.self
+        )
+        for (index, descriptor) in descriptors.enumerated() {
+            raw.storeBytes(
+                of: descriptor,
+                toByteOffset: headerLength + index * MemoryLayout<Int32>.size,
+                as: Int32.self
+            )
+        }
+    }
+    var vector = iovec(iov_base: UnsafeMutableRawPointer(mutating: bytes.baseAddress), iov_len: bytes.count)
+    return control.withUnsafeMutableBytes { raw in
+        withUnsafeMutablePointer(to: &vector) { vectorPointer in
+            var message = msghdr()
+            message.msg_iov = vectorPointer
+            message.msg_iovlen = 1
+            message.msg_control = raw.baseAddress
+            message.msg_controllen = socklen_t(raw.count)
+            return Darwin.sendmsg(socket, &message, 0)
+        }
+    }
+}
+
 private let systemEncoder: JSONEncoder = {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -253,12 +328,17 @@ private func authenticatePeer(descriptor: Int32, expectedUID: uid_t) throws {
 private func writeAll(
     _ descriptor: Int32,
     bytes: UnsafeRawBufferPointer,
-    deadline: UInt64
+    deadline: UInt64,
+    passing descriptors: [Int32] = []
 ) throws {
     var written = 0
     while written < bytes.count {
         try waitFor(descriptor: descriptor, event: Int16(POLLOUT), deadline: deadline)
-        let count = Darwin.write(descriptor, bytes.baseAddress?.advanced(by: written), bytes.count - written)
+        let remaining = UnsafeRawBufferPointer(rebasing: bytes[written...])
+        // The descriptors ride the first bytes sent, and only those.
+        let count = written == 0 && !descriptors.isEmpty
+            ? sendWithRights(descriptor, bytes: remaining, descriptors: descriptors)
+            : Darwin.write(descriptor, remaining.baseAddress, remaining.count)
         if count > 0 {
             written += count
         } else if count < 0, errno == EINTR || errno == EAGAIN {
@@ -323,5 +403,20 @@ private func waitFor(descriptor: Int32, event: Int16, deadline: UInt64) throws {
             continue
         }
         throw ResolverChannelError.transport
+    }
+}
+
+/// One reserved address and port, as both sides of the system socket name it.
+public struct LoopbackListener: Codable, Hashable, Comparable, Sendable {
+    public let address: String
+    public let port: UInt16
+
+    public init(address: String, port: UInt16) {
+        self.address = address
+        self.port = port
+    }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+        (lhs.address, lhs.port) < (rhs.address, rhs.port)
     }
 }

@@ -21,8 +21,9 @@ pub use model::{
 };
 pub use paths::ControlPaths;
 pub use system::{
-    SYSTEM_PROTOCOL_VERSION, SystemCommand, SystemRequest, SystemResponse, SystemResult,
-    UPSTREAM_UNANSWERED_CODE, UpstreamFailure, UpstreamFailureCause, read_system_frame,
+    ListenerAddress, MAX_LISTENERS_PER_EXCHANGE, MAX_SYSTEM_FRAME_BYTES, SYSTEM_PROTOCOL_VERSION,
+    SystemCommand, SystemRequest, SystemResponse, SystemResult, UPSTREAM_UNANSWERED_CODE,
+    UpstreamFailure, UpstreamFailureCause, decode_system_request, read_system_frame,
     write_system_frame,
 };
 pub use wire::{
