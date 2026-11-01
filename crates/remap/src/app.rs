@@ -41,6 +41,7 @@ pub(crate) struct DoctorReport {
     pub(crate) dns_upstream: Option<remap_protocol::Diagnostic>,
     /// Present while the owner has turned system DNS off on purpose (ADR-0036).
     pub(crate) dns_turned_off: Option<remap_protocol::DnsTurnedOff>,
+    pub(crate) peer_machines: Option<remap_protocol::PeerMachineListeners>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -217,7 +218,10 @@ fn validate(
     let policy = match &target {
         MappingTarget::Http(upstream) => Some(upstream.host_header_policy().as_str()),
         MappingTarget::Peer(service) => Some(service.host_header_policy().as_str()),
-        MappingTarget::Moved(_) | MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => None,
+        MappingTarget::Moved(_)
+        | MappingTarget::DnsAddress(_)
+        | MappingTarget::DnsAlias(_)
+        | MappingTarget::PeerMachine(_) => None,
     };
     Ok(ValidationReport {
         warnings: remap_core::target_advisories(&target),

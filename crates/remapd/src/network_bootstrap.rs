@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use remap_network::{DnsBindings, DnsRuntime, GatewayBindings, GatewayRuntime, SnapshotStore};
+use remap_network::{
+    DnsBindings, DnsRuntime, GatewayBindings, GatewayRuntime, PeerMachineListeners, SnapshotStore,
+};
 use remap_protocol::Diagnostic;
 
 use crate::Engine;
@@ -63,6 +65,11 @@ pub(crate) async fn prepare_network(
     } else {
         None
     };
+    // Created before the system control channel so it can be handed a clone
+    // for adopting root-created listening sockets (ADR-0033).
+    let peer_machines = gateway
+        .is_some()
+        .then(|| PeerMachineListeners::new(snapshots.clone(), engine.peer_machine_status()));
     let system_control = if let Some(runtime) = dns.as_ref() {
         let plans = runtime.resolver_plans();
         engine.observe_resolver_plans(plans.clone());
@@ -79,6 +86,7 @@ pub(crate) async fn prepare_network(
     Ok(Some(PreparedNetwork {
         dns,
         gateway,
+        peer_machines,
         system_control,
         snapshots,
     }))

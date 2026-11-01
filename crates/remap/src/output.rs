@@ -116,6 +116,7 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
     )?;
     writeln!(writer, "  HTTP       {}", readiness(report.health.http))?;
     write_dns_upstream(writer, report.dns_upstream.as_ref())?;
+    write_peer_machines(writer, report.peer_machines.as_ref())?;
     writeln!(
         writer,
         "  Lookup     {}",
@@ -203,6 +204,7 @@ fn write_validation(writer: &mut dyn Write, report: &ValidationReport) -> io::Re
     if let Some(policy) = report.host_header_policy {
         writeln!(writer, "  Host       {policy}")?;
     }
+    write_peer_machine(writer, &report.target, None)?;
     write_landing(writer, report.landing.as_deref())?;
     write_warnings(writer, &report.warnings)?;
     writeln!(writer)?;
@@ -321,6 +323,7 @@ fn write_status(writer: &mut dyn Write, status: &RegistryStatus) -> io::Result<(
             terminal_text(&turned_off.turn_on)
         )?;
     }
+    write_peer_machines(writer, status.peer_machine_listeners.as_deref())?;
     if let Some(error) = &status.maintenance {
         writeln!(writer, "  Mutations  blocked by maintenance")?;
         writeln!(writer, "  Reason     {}", terminal_text(&error.message))?;
@@ -349,6 +352,47 @@ fn write_dns_upstream(
     writeln!(writer, "  Cause      {}", terminal_text(reason))?;
     if let Some(hint) = &upstream.hint {
         writeln!(writer, "  Effect     {}", terminal_text(hint))?;
+    }
+    Ok(())
+}
+
+/// Peer-machine listeners (ADR-0033): how many accept, and each one that
+/// could not bind, with its cause.
+fn write_peer_machines(
+    writer: &mut dyn Write,
+    listeners: Option<&remap_protocol::PeerMachineListeners>,
+) -> io::Result<()> {
+    let Some(listeners) = listeners else {
+        return Ok(());
+    };
+    writeln!(
+        writer,
+        "  Peers      {} listening, {} not listening",
+        listeners.listening, listeners.not_listening
+    )?;
+    for failure in &listeners.failures {
+        writeln!(
+            writer,
+            "             {} {} at {}:{} not listening: {} ({})",
+            terminal_text(&failure.pattern),
+            terminal_text(&failure.service),
+            terminal_text(&failure.address),
+            failure.port,
+            terminal_text(&failure.cause),
+            terminal_text(&failure.detail)
+        )?;
+    }
+    if !listeners.refusals.is_empty() {
+        let counts: Vec<String> = listeners
+            .refusals
+            .iter()
+            .map(|(cause, count)| format!("{} {count}", terminal_text(cause)))
+            .collect();
+        writeln!(
+            writer,
+            "             connections not carried since start: {}",
+            counts.join(", ")
+        )?;
     }
     Ok(())
 }
@@ -397,8 +441,13 @@ fn mapping_effect(mapping: Option<&MappingView>) -> String {
                     .map_or_else(String::new, |path| format!(
                         " · landing {}",
                         terminal_text(path)
-                    ))
-            )
+                    )),
+            ) + &mapping
+                .peer_address
+                .as_ref()
+                .map_or_else(String::new, |address| {
+                    format!(" · address {}", terminal_text(address))
+                })
         },
     )
 }
@@ -415,7 +464,42 @@ fn write_mapping(writer: &mut dyn Write, mapping: &MappingView) -> io::Result<()
         terminal_text(&mapping.pattern),
         terminal_text(&mapping.target)
     )?;
+    write_peer_machine(writer, &mapping.target, mapping.peer_address.as_deref())?;
     write_landing(writer, mapping.landing.as_deref())
+}
+
+/// Spells out a peer-machine target (ADR-0033): the address its name
+/// answers, the peer that Supgang carries connections to, and each port.
+/// An offline validation has no address yet, because the daemon allocates
+/// it when the mapping is set.
+fn write_peer_machine(
+    writer: &mut dyn Write,
+    target: &str,
+    address: Option<&str>,
+) -> io::Result<()> {
+    let Ok(machine) = remap_core::PeerMachine::parse(target) else {
+        return Ok(());
+    };
+    let shown = address.map_or("<address>", |address| address);
+    writeln!(
+        writer,
+        "  Address    {}",
+        address.map_or(
+            Cow::Borrowed("allocated in 127.77.0.0/16 when set"),
+            terminal_text
+        )
+    )?;
+    writeln!(writer, "  Peer       {}", machine.selector())?;
+    for service in machine.services() {
+        writeln!(
+            writer,
+            "  Service    {} at {}:{} (TCP, through Supgang)",
+            service.name(),
+            terminal_text(shown),
+            service.port()
+        )?;
+    }
+    Ok(())
 }
 
 fn write_landing(writer: &mut dyn Write, landing: Option<&str>) -> io::Result<()> {
@@ -496,6 +580,7 @@ fn report_json(report: &Report) -> Value {
                 "http_gateway": report.health.http,
                 "dns_upstream": report.dns_upstream,
                 "dns_turned_off": report.dns_turned_off,
+                "peer_machine_listeners": report.peer_machines,
                 "system_lookup": {
                     "state": report.system_lookup.state(),
                     "name": report.system_lookup.name(),
@@ -640,6 +725,49 @@ mod tests {
     }
 
     #[test]
+    fn human_mapping_spells_out_a_peer_machine() -> Result<(), Box<dyn Error>> {
+        let mut view = mapping("supgang://a8a37e32?ssh=22,k7=7443", HostPolicy::UseUpstream);
+        view.target_kind = "peer-machine".to_owned();
+        view.peer_address = Some("127.77.0.4".to_owned());
+        let report = Report::Authority {
+            command: "get",
+            result: CommandResult::Mapping(Some(view.clone())),
+        };
+        let mut bytes = Vec::new();
+        write_report(&mut bytes, &report, false)?;
+        let output = String::from_utf8(bytes)?;
+        assert!(output.contains("Address    127.77.0.4"), "{output}");
+        assert!(output.contains("Peer       a8a37e32"), "{output}");
+        assert!(output.contains("ssh at 127.77.0.4:22"), "{output}");
+        assert!(output.contains("k7 at 127.77.0.4:7443"), "{output}");
+
+        let mut bytes = Vec::new();
+        write_report(&mut bytes, &report, true)?;
+        let value: Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(value["result"]["value"]["peer_address"], "127.77.0.4");
+
+        let effect = ChangeEffect {
+            pattern: "atlas".to_owned(),
+            action: "created".to_owned(),
+            before: None,
+            after: Some(view),
+        };
+        let preview = Report::Authority {
+            command: "preview",
+            result: CommandResult::Preview(PreviewResult {
+                warnings: Vec::new(),
+                base_revision: 1,
+                will_change: true,
+                effects: vec![effect],
+            }),
+        };
+        let mut bytes = Vec::new();
+        write_report(&mut bytes, &preview, false)?;
+        assert!(String::from_utf8(bytes)?.contains("· address 127.77.0.4"));
+        Ok(())
+    }
+
+    #[test]
     fn human_status_surfaces_blocked_retention_maintenance() -> Result<(), Box<dyn Error>> {
         let report = Report::Authority {
             command: "status",
@@ -657,6 +785,7 @@ mod tests {
                 )),
                 dns_upstream: None,
                 dns_turned_off: None,
+                peer_machine_listeners: None,
             }),
         };
         let mut bytes = Vec::new();
@@ -665,6 +794,55 @@ mod tests {
         assert!(output.contains("Mutations  blocked by maintenance"));
         assert!(output.contains("private journal is awaiting retention maintenance"));
         assert!(output.contains("release the other registry reader"));
+        Ok(())
+    }
+
+    #[test]
+    fn human_status_names_each_peer_machine_listener_that_cannot_bind() -> Result<(), Box<dyn Error>>
+    {
+        let report = Report::Authority {
+            command: "status",
+            result: CommandResult::Status(RegistryStatus {
+                revision: 8,
+                mapping_count: 2,
+                enabled_count: 2,
+                schema_version: 4,
+                daemon_version: "0.2.0".to_owned(),
+                maintenance: None,
+                dns_upstream: None,
+                dns_turned_off: None,
+                peer_machine_listeners: Some(Box::new(remap_protocol::PeerMachineListeners {
+                    listening: 1,
+                    not_listening: 1,
+                    failures: vec![remap_protocol::PeerMachineListenerFailure {
+                        pattern: "pro.test".to_owned(),
+                        service: "ssh".to_owned(),
+                        address: "127.77.0.1".to_owned(),
+                        port: 22,
+                        cause: "address-not-reserved".to_owned(),
+                        detail: "this address is not reserved on this machine yet".to_owned(),
+                    }],
+                    refusals: [("refused".to_owned(), 3), ("unknown-peer".to_owned(), 1)]
+                        .into_iter()
+                        .collect(),
+                })),
+            }),
+        };
+        let mut bytes = Vec::new();
+        write_report(&mut bytes, &report, false)?;
+        let output = String::from_utf8(bytes)?;
+        assert!(
+            output.contains("Peers      1 listening, 1 not listening"),
+            "{output}"
+        );
+        assert!(
+            output.contains("pro.test ssh at 127.77.0.1:22 not listening: address-not-reserved"),
+            "{output}"
+        );
+        assert!(
+            output.contains("connections not carried since start: refused 3, unknown-peer 1"),
+            "{output}"
+        );
         Ok(())
     }
 
@@ -681,6 +859,7 @@ mod tests {
                 maintenance: None,
                 dns_upstream: None,
                 dns_turned_off: None,
+                peer_machine_listeners: None,
             }),
         };
         let mut bytes = Vec::new();
@@ -705,7 +884,8 @@ mod tests {
                 daemon_version: "0.2.0".to_owned(),
                 maintenance: None,
                 dns_upstream: None,
-                dns_turned_off: Some(turned_off()),
+                dns_turned_off: Some(Box::new(turned_off())),
+                peer_machine_listeners: None,
             }),
         };
         let mut bytes = Vec::new();
@@ -761,6 +941,7 @@ mod tests {
                 maintenance: None,
                 dns_upstream: Some(failure.diagnostic()),
                 dns_turned_off: None,
+                peer_machine_listeners: None,
             }),
         };
         let mut bytes = Vec::new();
@@ -783,6 +964,7 @@ mod tests {
             host_policy,
             enabled: true,
             updated_revision: 8,
+            peer_address: None,
         }
     }
 }

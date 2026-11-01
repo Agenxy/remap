@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 /// A stable failure returned by `remapd` or its local-control client.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct Diagnostic {
     /// Stable machine-readable category.
     pub code: String,

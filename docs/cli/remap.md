@@ -88,6 +88,57 @@ Set changes in preview/apply documents accept an optional `landing` field.
 validate and before/after previews show the landing path. Set without landing
 removes an existing landing. `validate` accepts the same `--landing` flag.
 
+### Name a Supgang peer machine
+
+```text
+remap set pro.agenxy.internal 'supgang://<node-id>?ssh=22,k7=7443'
+ssh pro.agenxy.internal
+```
+
+A `supgang://` target with a `?` list and no path names a Supgang peer
+machine and the TCP services its name reaches, on any network (ADR-0033).
+
+- The peer is selected by its Supgang node ID (64 lowercase hex) or shown
+  fingerprint (8 lowercase hex). A name is refused, because Supgang names may
+  repeat and change; `supgang resolve <name>` shows the node ID and
+  fingerprint.
+- Each pair is a service the peer's owner exposes with
+  `supgang expose <name> <port>`, and the port this Mac listens on for it.
+  A target lists 1 through 16 pairs, with unique service names and unique
+  ports. Templates are not accepted here.
+- The daemon allocates the mapping one address in `127.77.0.0/16`, the
+  lowest free one from `127.77.0.1`. It keeps that address across restarts,
+  edits, disable and enable, and frees it when the mapping is removed or
+  retargeted to another kind. A registry holds at most 256 peer-machine
+  mappings (`E_PEER_MACHINE_CAPACITY`).
+- Remap holds a listener on that address at each listed port and carries
+  each connection through Supgang's local stream endpoint to the named
+  service on the peer, resolving the peer for every connection. TCP only:
+  UDP and services the owner has not exposed are not reachable. Supgang
+  decides whether a stream opens; a refused or failed stream closes the
+  connection, and the daemon's log names the service and the cause, never the
+  mapped name, at most once per cause every ten seconds. `remap status`
+  counts every connection not carried since the daemon started, by cause.
+  A connection silent in both directions for two hours is closed.
+- The name answers A with that address, and no AAAA, only while Remap holds
+  every listed port. Otherwise it fails with SERVFAIL, and `remap status`
+  and `remap doctor` name each port that is not held and why, so a
+  connection never reaches another service on this machine in its place.
+- **Every listed port is reachable from anything on this Mac that can open
+  a loopback TCP connection**, including other accounts and web pages whose
+  browser resolves names itself, and it is carried with your Supgang
+  identity. List only services the peer protects itself, such as ssh.
+- On macOS the installed helper reserves the address and creates each
+  listening socket as root, so ports below 1024 such as `ssh=22` work even
+  beside Remote Login's sshd; until it has, the cause is `awaiting-socket`.
+  On Linux `remapd` binds the ports itself: a port below 1024 needs
+  `CAP_NET_BIND_SERVICE`, and a port that a service already listens on at
+  every address cannot be held, so the name fails rather than reach that
+  service. Choose a free port above 1023 there, such as `ssh=2222`.
+
+`get`, `list`, `preview` and the receipt show the address (`peer_address` in
+JSON), the peer and each service's local endpoint.
+
 ### Rename a name
 
 ```text
@@ -200,7 +251,7 @@ Every structured response includes schema identity and success state:
       "revision": 12,
       "mapping_count": 4,
       "enabled_count": 3,
-      "schema_version": 3,
+      "schema_version": 4,
       "daemon_version": "0.2.0"
     }
   }

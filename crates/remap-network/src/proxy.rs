@@ -112,6 +112,13 @@ async fn forward(
                 "This name is a direct DNS mapping, not a routed HTTP service.",
             ));
         }
+        MappingTarget::PeerMachine(_) => {
+            return Err(RouteError::new(
+                StatusCode::MISDIRECTED_REQUEST,
+                "E_GATEWAY_DIRECT_TARGET",
+                "This name reaches a Supgang peer machine's TCP services at its own address, not through the HTTP gateway.",
+            ));
+        }
     };
     if let Some(response) = landing_response(&request, matched.landing.as_ref())? {
         return Ok(response);

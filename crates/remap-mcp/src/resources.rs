@@ -58,6 +58,34 @@ With `*.k7.internal` mapped to `supgang://{1}/{2}`, `preview.solis.k7.internal` 
 under its suffix: a name with another number of labels, or a label its field cannot
 hold, is `404 E_GATEWAY_TEMPLATE_NAME` naming the mapping, never another service.
 
+## A name for a peer machine
+
+`supgang://<node-id>?<service>=<port>[,<service>=<port>...]` gives a Supgang peer
+machine one name that works on any network. Example: `pro.agenxy.internal` mapped to
+`supgang://<node-id>?ssh=22,k7=7443`, then `ssh pro.agenxy.internal`.
+
+- The peer is selected by its Supgang node ID (64 lowercase hex) or fingerprint (8
+  lowercase hex), never by its name, because names may repeat or change. `supgang
+  resolve <name>` shows both.
+- Each pair is a service the peer's owner exposes with `supgang expose <name> <port>`,
+  and the port this machine listens on for it. Names and ports are unique within the
+  target, with 1 through 16 pairs. Templates do not apply to this target.
+- The name answers A with one loopback address in `127.77.0.0/16` that the daemon
+  allocates and keeps while the mapping exists, and answers no AAAA. `remap_get`,
+  `remap_list` and `remap_preview` show it as `peer_address`. It answers only while
+  Remap holds every listed port; otherwise it fails with SERVFAIL, and `remap_status`
+  names each port not held and why in `peer_machine_listeners`.
+- Each connection to that address and a listed port is carried through Supgang's local
+  stream to the peer's exposed service. TCP only: UDP and services the owner has not
+  exposed are not reachable, and Supgang decides whether each stream opens.
+- Every listed port is reachable from anything on this Mac that can open a loopback TCP
+  connection, including other accounts and web pages, and is carried with this user's
+  Supgang identity. List only services the peer protects itself, such as ssh.
+- On macOS the installed helper reserves the address and creates the listening sockets as
+  root, so `ssh=22` works beside Remote Login. On Linux `remapd` binds them itself: ports
+  below 1024 need `CAP_NET_BIND_SERVICE`, and a port another service holds on every
+  address cannot be held, so the name fails instead.
+
 ## Choosing names
 
 Remap reserves no namespace, and any name the owner chooses is valid. The trade-offs:
@@ -270,6 +298,25 @@ mod tests {
             "supgang://{1}/{2}",
             "E_GATEWAY_TEMPLATE_NAME",
             "`{2}` needs",
+        ] {
+            assert!(HELP.contains(fact), "help omits {fact}");
+        }
+    }
+
+    #[test]
+    fn help_explains_the_peer_machine_target() {
+        for fact in [
+            "supgang://<node-id>?<service>=<port>",
+            "node ID",
+            "fingerprint",
+            "supgang expose",
+            "TCP only",
+            "127.77.0.0/16",
+            "peer_address",
+            "SERVFAIL",
+            "reachable from anything on this Mac that can open a loopback TCP",
+            "protects itself",
+            "CAP_NET_BIND_SERVICE",
         ] {
             assert!(HELP.contains(fact), "help omits {fact}");
         }
