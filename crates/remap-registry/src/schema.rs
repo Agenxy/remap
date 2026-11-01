@@ -7,7 +7,7 @@ use rusqlite::Connection;
 
 use remap_protocol::Diagnostic;
 
-pub(crate) const SCHEMA_VERSION: u32 = 3;
+pub(crate) const SCHEMA_VERSION: u32 = 4;
 pub(crate) const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn configure(connection: &Connection) -> Result<(), Diagnostic> {
@@ -139,6 +139,21 @@ fn migrate_without_wait(connection: &mut Connection) -> Result<(), Diagnostic> {
         // older daemon refuses the registry before reading any record.
         connection
             .execute_batch("PRAGMA user_version = 3;")
+            .map_err(database_error)?;
+    }
+    if found <= 3 {
+        // Version 4 records each peer-machine mapping's loopback address
+        // (ADR-0033). No earlier daemon could store such a mapping, so no
+        // row needs one; the index keeps every address held at most once.
+        connection
+            .execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE mappings ADD COLUMN peer_address TEXT;
+                 CREATE UNIQUE INDEX mappings_peer_address
+                     ON mappings(peer_address) WHERE peer_address IS NOT NULL;
+                 PRAGMA user_version = 4;
+                 COMMIT;",
+            )
             .map_err(database_error)?;
     }
     connection

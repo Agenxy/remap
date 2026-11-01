@@ -150,6 +150,10 @@ const mappingRow = (mapping: MappingView): HTMLElement => {
     path.title = landing;
     destination.append(path);
   }
+  const address = asString(mapping.peer_address);
+  if (address !== null) {
+    destination.append(text("span", `address ${address}`, "mapping-meta"));
+  }
   row.append(name, text("span", "→", "arrow"), destination);
   const pill = text("span", mapping.enabled ? "active" : "disabled", "pill");
   pill.classList.toggle("off", !mapping.enabled);
@@ -219,10 +223,14 @@ const namedFacts = (data: JsonRecord): string[] => {
     "target_kind",
     "host_policy",
     "landing",
+    "peer_address",
     "code",
   ] as const) {
     const value = asString(data[key]);
-    if (value !== null) facts.push(key === "landing" ? `landing ${value}` : value);
+    if (value === null) continue;
+    if (key === "landing") facts.push(`landing ${value}`);
+    else if (key === "peer_address") facts.push(`address ${value}`);
+    else facts.push(value);
   }
   return facts;
 };

@@ -335,10 +335,19 @@ impl GatewayRuntime {
                 snapshots: self.snapshots.clone(),
                 upstream_timeout: self.config.upstream_timeout,
                 identity: self.identity.clone(),
+                // Supgang missing at start is looked for again on each
+                // connection, so installing or starting it later needs no
+                // restart of the gateway.
                 routing: PeerRouting {
-                    resolver: self.peers.clone(),
+                    resolver: self.peers.clone().or_else(|| {
+                        SupgangResolver::discover()
+                            .map(|resolver| Arc::new(resolver) as Arc<dyn PeerResolver>)
+                    }),
                     clients: self.pinned.clone(),
-                    streams: self.streams.clone(),
+                    streams: self
+                        .streams
+                        .clone()
+                        .or_else(|| SupgangStreams::discover().map(Arc::new)),
                 },
                 tunnels: tunnels.clone(),
             };

@@ -40,6 +40,7 @@ pub(crate) struct DoctorReport {
     /// `None` for a release, a source build, or no native installation.
     pub(crate) installed_package: Option<InstalledPackage>,
     pub(crate) system_lookup: SystemLookup,
+    pub(crate) peer_machines: Option<remap_protocol::PeerMachineListeners>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -216,7 +217,10 @@ fn validate(
     let policy = match &target {
         MappingTarget::Http(upstream) => Some(upstream.host_header_policy().as_str()),
         MappingTarget::Peer(service) => Some(service.host_header_policy().as_str()),
-        MappingTarget::Moved(_) | MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => None,
+        MappingTarget::Moved(_)
+        | MappingTarget::DnsAddress(_)
+        | MappingTarget::DnsAlias(_)
+        | MappingTarget::PeerMachine(_) => None,
     };
     Ok(ValidationReport {
         warnings: remap_core::target_advisories(&target),

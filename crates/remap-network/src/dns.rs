@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4};
 
 use hickory_proto::op::{Message, MessageType, Metadata, OpCode, ResponseCode};
 use hickory_proto::rr::rdata::{A, AAAA, CNAME, TXT};
 use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
-use remap_core::{MappingTarget, RemapName};
+use remap_core::{Mapping, MappingTarget, RemapName};
 
 use crate::{NetworkError, RuntimeIdentity, SnapshotStore};
 
@@ -98,16 +98,35 @@ impl DnsEngine {
         let Some(mapping) = snapshot.resolve(&name) else {
             return Ok(DnsDecision::Forward);
         };
+        if !self.peer_machine_held(mapping) {
+            return encode(&response_error(&request, ResponseCode::ServFail));
+        }
 
         let mut response = base_response(&request);
         add_mapping_answers(
             &mut response,
             query.name(),
             query.query_type(),
-            mapping.target(),
+            mapping,
             self.policy,
         )?;
         encode(&response)
+    }
+
+    /// A peer machine's name answers only while Remap holds a listener on
+    /// every one of its ports (ADR-0033). Otherwise a connection to the
+    /// address could reach whatever else listens on that port, such as a
+    /// local sshd on every address, instead of the peer.
+    fn peer_machine_held(&self, mapping: &Mapping) -> bool {
+        let (MappingTarget::PeerMachine(machine), Some(address)) =
+            (mapping.target(), mapping.peer_address())
+        else {
+            return true;
+        };
+        machine.services().iter().all(|service| {
+            self.snapshots
+                .holds(SocketAddrV4::new(address, service.port().get()))
+        })
     }
 
     fn health_response(&self, request: &Message) -> Option<Result<DnsDecision, NetworkError>> {
@@ -189,10 +208,10 @@ fn add_mapping_answers(
     response: &mut Message,
     owner: &Name,
     query_type: RecordType,
-    target: &MappingTarget,
+    mapping: &Mapping,
     policy: DnsPolicy,
 ) -> Result<(), NetworkError> {
-    match target {
+    match mapping.target() {
         MappingTarget::DnsAddress(address) => {
             add_address(response, owner, query_type, *address, policy.answer_ttl);
         }
@@ -204,6 +223,19 @@ fn add_mapping_answers(
                 policy.answer_ttl,
                 RData::CNAME(CNAME(target)),
             ));
+        }
+        // A peer machine's name answers its own reserved loopback address
+        // and no AAAA (ADR-0033); the snapshot guarantees it holds one.
+        MappingTarget::PeerMachine(_) => {
+            if let Some(address) = mapping.peer_address() {
+                add_address(
+                    response,
+                    owner,
+                    query_type,
+                    IpAddr::V4(address),
+                    policy.answer_ttl,
+                );
+            }
         }
         MappingTarget::Http(_) | MappingTarget::Peer(_) | MappingTarget::Moved(_) => {
             if let Some(address) = policy.routed_ipv4 {
@@ -355,6 +387,94 @@ mod tests {
         let answers = Message::from_vec(&bytes)?.answers;
         assert_eq!(answers.len(), 1);
         assert!(answers[0].to_string().contains("127.0.0.1"));
+        Ok(())
+    }
+
+    // A peer machine's name answers only its reserved address: A carries it
+    // at the ordinary TTL, AAAA is NOERROR with no data, and disabling the
+    // mapping hands the name back to the network.
+    #[test]
+    fn peer_machine_answers_its_reserved_address_and_no_aaaa()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let reserved = Ipv4Addr::new(127, 77, 0, 3);
+        let mapping = Mapping::new(
+            NamePattern::parse("pro.agenxy.internal")?,
+            "supgang://a8a37e32?ssh=22,k7=7443".parse()?,
+        )
+        .with_peer_address(Some(reserved));
+        let store = SnapshotStore::empty();
+        assert!(store.publish(RegistrySnapshot::new(4, vec![mapping.clone()])?));
+        store.publish_held(
+            [22, 7443]
+                .into_iter()
+                .map(|port| std::net::SocketAddrV4::new(reserved, port))
+                .collect(),
+        );
+        let engine = DnsEngine::new(store.clone(), DnsPolicy::default());
+
+        let DnsDecision::Respond(bytes) =
+            engine.decide(&query("pro.agenxy.internal.", RecordType::A)?)?
+        else {
+            return Err("peer machine was forwarded".into());
+        };
+        let answers = Message::from_vec(&bytes)?.answers;
+        assert_eq!(answers.len(), 1);
+        assert!(matches!(answers[0].data, RData::A(address) if address.0 == reserved));
+        assert_eq!(answers[0].ttl, DnsPolicy::default().answer_ttl);
+
+        let DnsDecision::Respond(bytes) =
+            engine.decide(&query("pro.agenxy.internal.", RecordType::AAAA)?)?
+        else {
+            return Err("peer machine AAAA was forwarded".into());
+        };
+        let response = Message::from_vec(&bytes)?;
+        assert_eq!(
+            response.response_code,
+            hickory_proto::op::ResponseCode::NoError
+        );
+        assert_eq!(response.answers, Vec::new());
+
+        assert!(store.publish(RegistrySnapshot::new(5, vec![mapping.with_enabled(false)])?));
+        assert_eq!(
+            engine.decide(&query("pro.agenxy.internal.", RecordType::A)?)?,
+            DnsDecision::Forward
+        );
+        Ok(())
+    }
+
+    // While any listed port is not held, the name fails instead of
+    // answering, so a connection can never reach a local service there.
+    #[test]
+    fn an_unheld_peer_machine_port_makes_the_name_fail() -> Result<(), Box<dyn std::error::Error>> {
+        let reserved = Ipv4Addr::new(127, 77, 0, 3);
+        let mapping = Mapping::new(
+            NamePattern::parse("pro.test")?,
+            "supgang://a8a37e32?ssh=22,k7=7443".parse()?,
+        )
+        .with_peer_address(Some(reserved));
+        let store = SnapshotStore::empty();
+        assert!(store.publish(RegistrySnapshot::new(4, vec![mapping])?));
+        let engine = DnsEngine::new(store.clone(), DnsPolicy::default());
+        for held in [Vec::new(), vec![22]] {
+            store.publish_held(
+                held.into_iter()
+                    .map(|port| std::net::SocketAddrV4::new(reserved, port))
+                    .collect(),
+            );
+            for query_type in [RecordType::A, RecordType::AAAA] {
+                let DnsDecision::Respond(bytes) =
+                    engine.decide(&query("pro.test.", query_type)?)?
+                else {
+                    return Err("an unheld peer machine was forwarded".into());
+                };
+                let response = Message::from_vec(&bytes)?;
+                assert_eq!(
+                    response.response_code,
+                    hickory_proto::op::ResponseCode::ServFail
+                );
+                assert_eq!(response.answers, Vec::new());
+            }
+        }
         Ok(())
     }
 

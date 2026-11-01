@@ -81,9 +81,10 @@ impl LandingPath {
                 Err(LandingPathError::NonRootUpstream)
             }
             MappingTarget::Http(_) | MappingTarget::Peer(_) => Ok(()),
-            MappingTarget::Moved(_) | MappingTarget::DnsAddress(_) | MappingTarget::DnsAlias(_) => {
-                Err(LandingPathError::DnsTarget)
-            }
+            MappingTarget::Moved(_)
+            | MappingTarget::DnsAddress(_)
+            | MappingTarget::DnsAlias(_)
+            | MappingTarget::PeerMachine(_) => Err(LandingPathError::DnsTarget),
         }
     }
 
