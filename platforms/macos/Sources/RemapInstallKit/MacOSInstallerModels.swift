@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import RemapSystemKit
 
 public enum MacOSInstallerPublicationAction: String, Codable, Equatable, Sendable {
     case create
@@ -208,6 +209,10 @@ public struct MacOSInstallerStatus: Codable, Equatable, Sendable {
     public let transactions: [MacOSInstallerTransactionStatus]
     public let services: [MacOSInstallerServiceStatus]
     public let dns: MacOSInstallerDNSStatus
+    /// Present while the owner has turned Remap DNS off on purpose
+    /// (ADR-0036). Absent from an older service, and while DNS is active,
+    /// falling back on its own, or was never activated.
+    public var dnsTurnedOff: DNSTurnedOffPayload?
 }
 
 public struct MacOSInstallerRecoveryResult: Codable, Equatable, Sendable {

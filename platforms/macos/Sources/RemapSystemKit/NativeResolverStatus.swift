@@ -9,6 +9,23 @@ public struct NativeResolverStatus: Encodable, Sendable {
     public let record: ActivationRecord?
     public let bypass: ResolverBypassPayload?
     public let bypassError: String?
+    /// The owner's deliberate turn-off, shown only while no activation exists.
+    public private(set) var turnedOff: DNSTurnedOffPayload?
+    public private(set) var turnedOffError: String?
+
+    public init(
+        record: ActivationRecord?,
+        bypassStore: ResolverBypassStore,
+        turnedOffStore: DNSTurnedOffStore
+    ) {
+        self.init(record: record, bypassStore: bypassStore)
+        guard record == nil else { return }
+        do {
+            turnedOff = try turnedOffStore.read()?.payload
+        } catch {
+            turnedOffError = String(describing: error)
+        }
+    }
 
     public init(record: ActivationRecord?, bypassStore: ResolverBypassStore) {
         let bypass: ResolverBypassPayload?
@@ -25,10 +42,16 @@ public struct NativeResolverStatus: Encodable, Sendable {
         self.init(record: record, bypass: bypass, bypassError: bypassError)
     }
 
-    init(record: ActivationRecord?, bypass: ResolverBypassPayload?, bypassError: String?) {
+    init(
+        record: ActivationRecord?,
+        bypass: ResolverBypassPayload?,
+        bypassError: String?,
+        turnedOff: DNSTurnedOffPayload? = nil
+    ) {
         self.record = record
         self.bypass = bypass
         self.bypassError = bypassError
+        self.turnedOff = record == nil ? turnedOff : nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -36,10 +59,13 @@ public struct NativeResolverStatus: Encodable, Sendable {
         case sha256
         case lastResolverBypass
         case lastResolverBypassError
+        case dnsTurnedOff
+        case dnsTurnedOffError
     }
 
     public func encode(to encoder: Encoder) throws {
-        guard record != nil || bypass != nil || bypassError != nil else {
+        let evidence = record != nil || bypass != nil || bypassError != nil
+        guard evidence || turnedOff != nil || turnedOffError != nil else {
             var container = encoder.singleValueContainer()
             try container.encodeNil()
             return
@@ -49,6 +75,36 @@ public struct NativeResolverStatus: Encodable, Sendable {
         try container.encodeIfPresent(record?.sha256, forKey: .sha256)
         try container.encodeIfPresent(bypass, forKey: .lastResolverBypass)
         try container.encodeIfPresent(bypassError, forKey: .lastResolverBypassError)
+        try container.encodeIfPresent(turnedOff, forKey: .dnsTurnedOff)
+        try container.encodeIfPresent(turnedOffError, forKey: .dnsTurnedOffError)
+    }
+
+    /// The headline: on, falling back on its own, off on purpose, or never on.
+    public func stateLines() -> [String] {
+        if let record {
+            guard record.payload.phase == .active else {
+                return [
+                    "Native DNS is falling back to ordinary DNS on its own and will re-arm",
+                    "  Services \(record.payload.services.count)",
+                    "  Version  \(record.payload.productVersion)"
+                ]
+            }
+            return [
+                "Native DNS is active",
+                "  Services \(record.payload.services.count)",
+                "  Version  \(record.payload.productVersion)"
+            ]
+        }
+        if let turnedOff {
+            return [
+                "Native DNS is \(turnedOff.statusLine)",
+                "  Turn on  \(turnedOff.turnOnCommand)"
+            ]
+        }
+        if let turnedOffError {
+            return ["Native DNS is inactive; its turned-off record is unreadable: \(turnedOffError)"]
+        }
+        return ["Native DNS is not activated"]
     }
 
     /// Human lines describing the last fallback, empty when there was none.
@@ -62,6 +118,9 @@ public struct NativeResolverStatus: Encodable, Sendable {
             "    Reason      \(bypass.reasonCode), failing since "
                 + statusTimestamp(bypass.failingSinceMilliseconds)
         ]
+        if let meaning = bypassReasonMeaning(bypass.reasonCode) {
+            lines.append("    Meaning     \(meaning)")
+        }
         if let rearmed = bypass.rearmedAtMilliseconds {
             lines.append("    Re-armed    \(statusTimestamp(rearmed))")
         } else {
@@ -77,6 +136,13 @@ public struct NativeResolverStatus: Encodable, Sendable {
         }
         return lines
     }
+}
+
+/// Plain words for a reason whose code alone does not say what to check.
+func bypassReasonMeaning(_ code: String) -> String? {
+    guard code == upstreamUnansweredCode else { return nil }
+    return "upstream DNS not answering; every resolver Remap forwards to stopped replying, "
+        + "as a VPN's DNS leak protection causes when it blocks them"
 }
 
 private func statusTimestamp(_ milliseconds: UInt64) -> String {

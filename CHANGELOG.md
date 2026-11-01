@@ -6,6 +6,45 @@ platform claims separate.
 
 ## Unreleased
 
+- Fixed Remap DNS taking all of a Mac's DNS down when a VPN blocked the
+  resolvers Remap forwarded to, while Remap still reported ready. On
+  31 October Private Internet Access's DNS leak protection dropped every
+  query `remapd` forwarded, so every name failed, and deactivating then put
+  back the router DNS the VPN also blocks (ADR-0036).
+  - `remapd` now notices when every upstream resolver stops answering, over
+    at least four queries and two seconds so one lost packet never counts,
+    and macOS returns to ordinary DNS within seconds. Remap re-arms only
+    once those resolvers answer again or the network offers different ones.
+  - `remap status`, `remap doctor`, and MCP status say "upstream DNS not
+    answering" with the cause, and `remap-system status` explains the
+    fallback the same way.
+  - When a VPN publishes its own DNS, Remap forwards to the VPN's resolver
+    and keeps answering its names, follows a VPN's own network service when
+    macOS uses it, and follows back when the VPN disconnects. Two services
+    with DNS are no longer refused when macOS's resolver says which one it
+    uses.
+  - When a VPN's DNS outranks Remap's, or a VPN changes the DNS of a service
+    Remap set, Remap writes nothing, so it never fights a VPN that
+    re-asserts its DNS; DNS keeps working through the VPN and Remap answers
+    its names again when the VPN lets go.
+  - Deactivation still never overwrites a VPN's change: it reports the
+    conflict and, once the VPN restores what it saved, restores the
+    configuration captured before the VPN connected.
+  - Status now tells DNS turned off on purpose apart from a fault. After
+    `remap-system deactivate`, `remap system status`, `remap-system status`,
+    `remap status`, `remap doctor`, and MCP status say, for example, "turned
+    off by the owner at 2026-10-31T01:20Z (`remap-system deactivate`)" and
+    give the exact command that turns it back on, where they used to say only
+    "inactive". A fallback the supervisor made on its own and DNS that was
+    never activated each have their own wording. Turning DNS back on, or any
+    installer operation, clears the record.
+- Fixed uninstall leaving `/Library/Application Support/Agenxy/Remap` behind
+  after the resolver supervisor had ever fallen back. Both the source and the
+  packaged uninstall now remove the resolver's own records there, the last
+  fallback and the turned-off record, after checking each is a regular,
+  root-owned file that is not a symlink, and leave the directory exactly as
+  empty as before Remap. Anything they cannot vouch for stops removal and is
+  kept.
 - Login Items and Background Items list Remap's services under the developer
   "Remap" instead of "Agenxy Local". macOS takes that name from the
   organisation of the self-signed certificate that signed them, and the

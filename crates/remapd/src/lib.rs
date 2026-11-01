@@ -4,6 +4,7 @@
 mod descriptor_handoff;
 mod engine;
 mod launchd;
+mod native_dns;
 mod network_bootstrap;
 mod peer;
 mod privilege;
@@ -14,4 +15,5 @@ mod system_control;
 mod systemd;
 
 pub use engine::Engine;
+pub use native_dns::TurnedOffRecordSource;
 pub use server::{DaemonBootstrap, DaemonConfig, RunAsUser, bootstrap, run, serve_until};

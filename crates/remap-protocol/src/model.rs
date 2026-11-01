@@ -196,9 +196,45 @@ pub struct RegistryStatus {
     /// Retryable retention failure currently blocking new mutations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maintenance: Option<Diagnostic>,
+    /// Present while every upstream DNS resolver has stopped answering the
+    /// names this daemon forwards (ADR-0036).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_upstream: Option<Diagnostic>,
+    /// Present while the owner has turned Remap's system DNS off on purpose
+    /// (ADR-0036); absent while it is on, falling back on its own, or was
+    /// never activated. Boxed, as `peer_machine_listeners` is, because both
+    /// are usually absent and would otherwise size every command result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_turned_off: Option<Box<DnsTurnedOff>>,
     /// The gateway's peer-machine listeners (ADR-0033), when it runs any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub peer_machine_listeners: Option<PeerMachineListeners>,
+    pub peer_machine_listeners: Option<Box<PeerMachineListeners>>,
+}
+
+/// The owner turned Remap's system DNS off on purpose. It carries a time and
+/// commands, never a name or an address.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DnsTurnedOff {
+    /// UTC time to the minute, such as `2026-10-31T01:20Z`.
+    pub turned_off_at: String,
+    /// The same time in Unix milliseconds.
+    pub turned_off_at_ms: u64,
+    /// The command that turned DNS off, such as `remap-system deactivate`.
+    pub command: String,
+    /// The exact root command that turns DNS back on.
+    pub turn_on: String,
+}
+
+impl DnsTurnedOff {
+    /// One line for status output, such as "turned off by the owner at
+    /// 2026-10-31T01:20Z (`remap-system deactivate`)".
+    #[must_use]
+    pub fn status_line(&self) -> String {
+        format!(
+            "turned off by the owner at {} (`{}`)",
+            self.turned_off_at, self.command
+        )
+    }
 }
 
 /// How many peer-machine service listeners accept connections, and why the

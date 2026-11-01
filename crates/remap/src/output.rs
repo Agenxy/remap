@@ -115,11 +115,12 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
         readiness(report.health.forwarding)
     )?;
     writeln!(writer, "  HTTP       {}", readiness(report.health.http))?;
+    write_dns_upstream(writer, report.dns_upstream.as_ref())?;
     write_peer_machines(writer, report.peer_machines.as_ref())?;
     writeln!(
         writer,
         "  Lookup     {}",
-        lookup_line(&report.system_lookup)
+        lookup_line(&report.system_lookup, report.dns_turned_off.as_ref())
     )?;
     writeln!(writer, "  Telemetry  none")?;
     writeln!(writer)?;
@@ -127,13 +128,26 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
         writer,
         "Doctor itself changed nothing. Telemetry remains absent."
     )?;
-    if matches!(
+    if let Some(turned_off) = &report.dns_turned_off {
+        writeln!(
+            writer,
+            "Remap DNS was {}, so the system is not asking Remap. Turn it on with: {}",
+            terminal_text(&turned_off.status_line()),
+            terminal_text(&turned_off.turn_on)
+        )?;
+    } else if matches!(
         report.system_lookup,
         SystemLookup::Bypassed { .. } | SystemLookup::Unresolved { .. }
     ) {
         writeln!(
             writer,
             "The system resolver is not returning Remap's answer. On macOS, `remap-system status` shows the recorded fallback reason."
+        )?;
+    }
+    if report.dns_upstream.is_some() {
+        writeln!(
+            writer,
+            "Every upstream resolver Remap forwards to has stopped answering. Remap's own names still answer; other names fail open to ordinary DNS."
         )?;
     }
     if report.revision.is_some()
@@ -153,8 +167,18 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
     }
 }
 
-fn lookup_line(lookup: &SystemLookup) -> String {
+fn lookup_line(lookup: &SystemLookup, turned_off: Option<&remap_protocol::DnsTurnedOff>) -> String {
     let name = lookup.name().map(terminal_text).unwrap_or_default();
+    if let Some(turned_off) = turned_off
+        && !matches!(lookup, SystemLookup::Matched { .. })
+    {
+        let line = terminal_text(&turned_off.status_line()).into_owned();
+        return if name.is_empty() {
+            format!("off ({line})")
+        } else {
+            format!("off ({line}; {name} uses ordinary DNS)")
+        };
+    }
     match (lookup, lookup.answer()) {
         (SystemLookup::Matched { .. }, Some(answer)) => format!("ready ({name} → {answer})"),
         (SystemLookup::Bypassed { .. }, Some(answer)) => {
@@ -286,7 +310,20 @@ fn write_status(writer: &mut dyn Write, status: &RegistryStatus) -> io::Result<(
         "  Daemon     {}",
         terminal_text(&status.daemon_version)
     )?;
-    write_peer_machines(writer, status.peer_machine_listeners.as_ref())?;
+    write_dns_upstream(writer, status.dns_upstream.as_ref())?;
+    if let Some(turned_off) = &status.dns_turned_off {
+        writeln!(
+            writer,
+            "  DNS        {}",
+            terminal_text(&turned_off.status_line())
+        )?;
+        writeln!(
+            writer,
+            "  Turn on    {}",
+            terminal_text(&turned_off.turn_on)
+        )?;
+    }
+    write_peer_machines(writer, status.peer_machine_listeners.as_deref())?;
     if let Some(error) = &status.maintenance {
         writeln!(writer, "  Mutations  blocked by maintenance")?;
         writeln!(writer, "  Reason     {}", terminal_text(&error.message))?;
@@ -295,6 +332,26 @@ fn write_status(writer: &mut dyn Write, status: &RegistryStatus) -> io::Result<(
         }
     } else {
         writeln!(writer, "  Mutations  ready")?;
+    }
+    Ok(())
+}
+
+/// Says plainly when every upstream resolver has stopped answering, and why.
+fn write_dns_upstream(
+    writer: &mut dyn Write,
+    upstream: Option<&remap_protocol::Diagnostic>,
+) -> io::Result<()> {
+    let Some(upstream) = upstream else {
+        return Ok(());
+    };
+    let reason = upstream
+        .message
+        .strip_prefix("upstream DNS not answering: ")
+        .unwrap_or(&upstream.message);
+    writeln!(writer, "  Upstream   DNS not answering")?;
+    writeln!(writer, "  Cause      {}", terminal_text(reason))?;
+    if let Some(hint) = &upstream.hint {
+        writeln!(writer, "  Effect     {}", terminal_text(hint))?;
     }
     Ok(())
 }
@@ -521,6 +578,8 @@ fn report_json(report: &Report) -> Value {
                 "dns_listener": report.health.dns,
                 "dns_forwarding": report.health.forwarding,
                 "http_gateway": report.health.http,
+                "dns_upstream": report.dns_upstream,
+                "dns_turned_off": report.dns_turned_off,
                 "peer_machine_listeners": report.peer_machines,
                 "system_lookup": {
                     "state": report.system_lookup.state(),
@@ -567,7 +626,9 @@ mod tests {
     };
     use serde_json::Value;
 
-    use super::{write_diagnostic, write_report};
+    use remap_mcp::system_lookup::SystemLookup;
+
+    use super::{lookup_line, write_diagnostic, write_report};
     use crate::app::{Report, ValidationReport};
     use crate::diagnostic::Diagnostic;
 
@@ -722,6 +783,8 @@ mod tests {
                     Some("release the other registry reader".to_owned()),
                     true,
                 )),
+                dns_upstream: None,
+                dns_turned_off: None,
                 peer_machine_listeners: None,
             }),
         };
@@ -746,7 +809,9 @@ mod tests {
                 schema_version: 4,
                 daemon_version: "0.2.0".to_owned(),
                 maintenance: None,
-                peer_machine_listeners: Some(remap_protocol::PeerMachineListeners {
+                dns_upstream: None,
+                dns_turned_off: None,
+                peer_machine_listeners: Some(Box::new(remap_protocol::PeerMachineListeners {
                     listening: 1,
                     not_listening: 1,
                     failures: vec![remap_protocol::PeerMachineListenerFailure {
@@ -760,7 +825,7 @@ mod tests {
                     refusals: [("refused".to_owned(), 3), ("unknown-peer".to_owned(), 1)]
                         .into_iter()
                         .collect(),
-                }),
+                })),
             }),
         };
         let mut bytes = Vec::new();
@@ -792,6 +857,8 @@ mod tests {
                 schema_version: 1,
                 daemon_version: "0.1.1".to_owned(),
                 maintenance: None,
+                dns_upstream: None,
+                dns_turned_off: None,
                 peer_machine_listeners: None,
             }),
         };
@@ -800,6 +867,91 @@ mod tests {
         let output = String::from_utf8(bytes)?;
         assert!(output.contains("Mutations  ready"));
         assert!(!output.contains("blocked"));
+        assert!(!output.contains("Upstream"));
+        Ok(())
+    }
+
+    #[test]
+    fn human_status_says_dns_was_turned_off_on_purpose_and_how_to_undo_it()
+    -> Result<(), Box<dyn Error>> {
+        let report = Report::Authority {
+            command: "status",
+            result: CommandResult::Status(RegistryStatus {
+                revision: 8,
+                mapping_count: 2,
+                enabled_count: 1,
+                schema_version: 1,
+                daemon_version: "0.2.0".to_owned(),
+                maintenance: None,
+                dns_upstream: None,
+                dns_turned_off: Some(Box::new(turned_off())),
+                peer_machine_listeners: None,
+            }),
+        };
+        let mut bytes = Vec::new();
+        write_report(&mut bytes, &report, false)?;
+        let output = String::from_utf8(bytes)?;
+        assert!(output.contains(
+            "DNS        turned off by the owner at 2026-10-31T01:20Z (`remap-system deactivate`)"
+        ));
+        assert!(output.contains("Turn on    sudo '/Library/"));
+        Ok(())
+    }
+
+    #[test]
+    fn doctor_lookup_says_dns_is_off_on_purpose_instead_of_unresolved() {
+        let unresolved = SystemLookup::Unresolved {
+            name: "atlas.test".to_owned(),
+        };
+        assert!(lookup_line(&unresolved, None).starts_with("unresolved"));
+        assert_eq!(
+            lookup_line(&unresolved, Some(&turned_off())),
+            "off (turned off by the owner at 2026-10-31T01:20Z (`remap-system deactivate`); \
+             atlas.test uses ordinary DNS)"
+        );
+    }
+
+    fn turned_off() -> remap_protocol::DnsTurnedOff {
+        remap_protocol::DnsTurnedOff {
+            turned_off_at: "2026-10-31T01:20Z".to_owned(),
+            turned_off_at_ms: 1_793_409_600_000,
+            command: "remap-system deactivate".to_owned(),
+            turn_on: "sudo '/Library/Application Support/Agenxy/Remap/Install/current/libexec/remap-system' \
+                      activate --owner-uid 501 --product-version 0.2.0 \
+                      --system-socket /var/run/org.agenxy.Remap.system.sock"
+                .to_owned(),
+        }
+    }
+
+    #[test]
+    fn human_status_says_upstream_dns_is_not_answering_and_why() -> Result<(), Box<dyn Error>> {
+        let failure = remap_protocol::UpstreamFailure {
+            cause: remap_protocol::UpstreamFailureCause::TimedOut,
+            unanswered_queries: 12,
+            unanswered_for_ms: 9_000,
+        };
+        let report = Report::Authority {
+            command: "status",
+            result: CommandResult::Status(RegistryStatus {
+                revision: 8,
+                mapping_count: 2,
+                enabled_count: 1,
+                schema_version: 1,
+                daemon_version: "0.2.0".to_owned(),
+                maintenance: None,
+                dns_upstream: Some(failure.diagnostic()),
+                dns_turned_off: None,
+                peer_machine_listeners: None,
+            }),
+        };
+        let mut bytes = Vec::new();
+        write_report(&mut bytes, &report, false)?;
+        let output = String::from_utf8(bytes)?;
+        assert!(output.contains("Upstream   DNS not answering"));
+        assert!(output.contains(
+            "Cause      every upstream resolver timed out for the last 12 queries over 9 seconds"
+        ));
+        assert!(output.contains("VPN"));
         Ok(())
     }
 

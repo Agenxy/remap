@@ -7,6 +7,7 @@ mod failure;
 mod forward;
 mod gateway;
 mod health;
+mod liveness;
 mod machine;
 mod machine_carry;
 mod machine_idle;
@@ -28,6 +29,7 @@ pub use health::{
     HEALTH_NONCE_BYTES, HEALTH_PROOF_BYTES, MAX_INSTANCE_ID_BYTES, MAX_RUNTIME_VERSION_BYTES,
     RuntimeIdentity, RuntimeProofs,
 };
+pub use liveness::{UpstreamFailureCause, UpstreamLivenessPolicy, UpstreamsUnanswered};
 pub use machine::{
     ListenerCause, ListenerReport, ListenerSource, ListenerState, PEER_MACHINE_CONNECTION_LIMIT,
     PEER_MACHINE_OPEN_TIMEOUT, PEER_MACHINE_RETRY_INTERVAL, PeerMachineListeners,

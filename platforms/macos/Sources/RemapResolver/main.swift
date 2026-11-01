@@ -75,6 +75,10 @@ enum RemapResolverCommand {
             logger.notice("resolver supervisor ready")
         case let .degraded(code):
             logger.error("resolver supervisor degraded: \(code, privacy: .public)")
+        case let .deferred(code):
+            logger.notice(
+                "resolver supervisor defers to another DNS agent and writes nothing: \(code, privacy: .public)"
+            )
         }
     }
 

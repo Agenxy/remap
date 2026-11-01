@@ -22,6 +22,42 @@ struct MacOSPortableAuthorityCleanupTests {
         }
     }
 
+    @Test(
+        "resolver records left by a fallback or a deliberate turn-off are removed with the product",
+        arguments: resolverRecordCases.indices
+    )
+    func resolverRecordsAreRemoved(_ index: Int) throws {
+        try withFixture { fixture in
+            for record in resolverRecordCases[index] {
+                try writeResolverRecord(record.name, mode: record.mode, in: fixture.remapRoot)
+            }
+            let plan = try fixture.plan()
+            try fixture.cleanup.prepare(plan)
+            try fixture.cleanup.perform(expectedApprovalToken: plan.approvalToken)
+
+            #expect(!FileManager.default.fileExists(atPath: fixture.remapRoot.path))
+            #expect(FileManager.default.fileExists(atPath: fixture.agenxyRoot.path))
+        }
+    }
+
+    @Test("a resolver record that is a symlink blocks cleanup without deleting it")
+    func symlinkedResolverRecordIsPreserved() throws {
+        try withFixture { fixture in
+            let elsewhere = fixture.root.appendingPathComponent("elsewhere.json")
+            try Data("keep".utf8).write(to: elsewhere)
+            let record = fixture.remapRoot.appendingPathComponent("dns-turned-off-v1.json")
+            try FileManager.default.createSymbolicLink(at: record, withDestinationURL: elsewhere)
+            let plan = try fixture.plan()
+            try fixture.cleanup.prepare(plan)
+
+            #expect(throws: InstallError.self) {
+                try fixture.cleanup.perform(expectedApprovalToken: plan.approvalToken)
+            }
+            #expect(try Data(contentsOf: elsewhere) == Data("keep".utf8))
+            #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: record.path)) != nil)
+        }
+    }
+
     @Test("unexpected installer content blocks cleanup without deleting it")
     func foreignContentIsPreserved() throws {
         try withFixture { fixture in

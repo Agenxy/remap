@@ -246,6 +246,7 @@ public enum ResolverError: Error, CustomStringConvertible, Equatable {
     case configurationConflict([String])
     case invalidActivationRecord
     case invalidBypassRecord
+    case invalidTurnedOffRecord
     case listenerUnavailable
     case noEnabledDNSService
     case noUsableUpstream
@@ -279,6 +280,8 @@ public enum ResolverError: Error, CustomStringConvertible, Equatable {
             "The native activation record is malformed or unsupported."
         case .invalidBypassRecord:
             "The resolver bypass record is malformed or failed its integrity check."
+        case .invalidTurnedOffRecord:
+            "The DNS turned-off record is malformed or failed its integrity check."
         case .listenerUnavailable:
             "The local Remap DNS listener did not answer a valid loopback query."
         case .noEnabledDNSService:

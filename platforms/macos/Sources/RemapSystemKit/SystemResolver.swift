@@ -97,6 +97,8 @@ public struct SystemResolver: Sendable {
         guard !store.exists() else {
             throw ResolverError.activationAlreadyExists
         }
+        // Turning DNS on ends the owner's deliberate turn-off (ADR-0036).
+        try DNSTurnedOffStore(directory: store.directory).clear()
         try DNSListenerProbe.run()
         let handles = try serviceHandles(
             preferences: makePreferences(),
@@ -137,7 +139,9 @@ public struct SystemResolver: Sendable {
 
     /// Restores ordinary DNS, then releases every loopback address held for
     /// peer-machine names (ADR-0033), so nothing outlives the activation.
-    /// DNS is restored first because it is what the owner depends on.
+    /// DNS is restored first because it is what the owner depends on. Any
+    /// turned-off record goes too: the installer, not the owner's earlier
+    /// command, now decides (ADR-0036).
     public func deactivate(store: ActivationStore = .standard) throws {
         try restoreOrdinaryDNS(store: store, retainPreparedRecord: false)
         // DNS is restored by now, and that is what deactivation promises. A
@@ -149,6 +153,26 @@ public struct SystemResolver: Sendable {
             loopbackLogger
                 .error("peer-machine loopback addresses not released: \(String(describing: error), privacy: .public)")
         }
+        try DNSTurnedOffStore(directory: store.directory).clear()
+    }
+
+    /// The owner turns Remap DNS off on purpose: ordinary DNS is restored
+    /// exactly as `deactivate` restores it, then a turned-off record says
+    /// when, by which command, and how to turn it back on (ADR-0036). A
+    /// record that cannot be written never undoes the deactivation; it is
+    /// returned so the command can say so.
+    public func turnOff(
+        command: String,
+        store: ActivationStore = .standard
+    ) throws -> DNSTurnOff {
+        let record = try store.read()
+        try deactivate(store: store)
+        return recordTurnOff(
+            command: command,
+            activation: record,
+            at: Date(),
+            store: DNSTurnedOffStore(directory: store.directory)
+        )
     }
 
     /// Restores ordinary DNS while retaining the integrity-covered activation
@@ -171,16 +195,25 @@ public struct SystemResolver: Sendable {
             .restoreOrdinaryDNS(retainPreparedRecord: retainPreparedRecord)
     }
 
-    /// Follows the single service that now carries DNS, when it is not the
-    /// recorded one. Nil means the recorded service should be reconciled.
+    /// Follows the service that now carries DNS, when it is not the recorded
+    /// one, or defers to another agent's DNS (ADR-0024, ADR-0036).
     func handOffIfNeeded(
         record: ActivationRecord,
         store: ActivationStore,
         publish: (DNSPlan) throws -> Void
-    ) throws -> DNSPlan? {
+    ) throws -> ResolverFollowing {
         try requireRoot()
         return try NativeResolverConfigurator(network: SystemNetworkConfiguration(), store: store)
             .handOffIfNeeded(record: record, publish: publish)
+    }
+
+    /// Commits an active record again when Remap's own restore left its
+    /// services at their prior state, and defers when Remap's configuration
+    /// is in place but macOS uses another resolver (ADR-0036).
+    func reassertActiveActivation(record: ActivationRecord, store: ActivationStore) throws {
+        try requireRoot()
+        try NativeResolverConfigurator(network: SystemNetworkConfiguration(), store: store)
+            .reassertActive(record: record)
     }
 
     public func activeRecord(store: ActivationStore = .standard) throws -> ActivationRecord? {
