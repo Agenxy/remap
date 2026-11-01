@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import RemapInstallKit
 import RemapLifecycleKit
+import RemapSystemKit
 
 enum RemapLifecycleCLICommand: Equatable {
     case help
@@ -85,10 +86,24 @@ enum RemapLifecycleCLIOutput {
         Remap is \(installation).
         \(package)Generations: \(status.generations.count)
         Services: \(loaded) of \(status.services.count) loaded
-        DNS: \(status.dns.active ? "active" : "inactive") (\(status.dns
-            .effectiveRemapServiceCount) effective service(s))
+        DNS: \(dnsLine(status))
         Recovery needed: \(recovery == 0 ? "no" : "yes (\(recovery))")
         """
+    }
+
+    /// On, falling back on its own, off on purpose, or never on (ADR-0036).
+    static func dnsLine(_ status: MacOSInstallerStatus) -> String {
+        let dns = status.dns
+        if dns.active {
+            return "active (\(dns.effectiveRemapServiceCount) effective service(s))"
+        }
+        if dns.configuredServiceCount > 0 {
+            return "falling back to ordinary DNS on its own; `remap-system status` shows why"
+        }
+        if let turnedOff = status.dnsTurnedOff {
+            return "\(turnedOff.statusLine); turn it on with \(turnedOff.turnOnCommand)"
+        }
+        return "not activated"
     }
 
     static func preview(title: String, effects: [String]) -> String {

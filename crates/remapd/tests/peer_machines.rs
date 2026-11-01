@@ -51,7 +51,7 @@ async fn listeners(client: &ControlClient) -> Result<PeerMachineListeners, Box<d
         if let CommandResult::Status(status) = client.execute(Command::Status).await?
             && let Some(listeners) = status.peer_machine_listeners
         {
-            return Ok(listeners);
+            return Ok(*listeners);
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }

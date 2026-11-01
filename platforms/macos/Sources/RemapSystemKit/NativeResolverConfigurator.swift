@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-/// What the current network asks of an activation (ADR-0024).
+/// What the current network asks of an activation (ADR-0024, ADR-0036).
 enum ResolverNetworkDecision: Equatable, Sendable {
-    /// The recorded service alone carries DNS; reconcile as before.
+    /// The recorded service carries DNS; reconcile as before.
     case recorded
-    /// Exactly one other service carries DNS; hand the activation over to it.
+    /// One other service carries DNS; hand the activation over to it.
     case handoff(serviceID: String, upstreams: [String])
+    /// Another agent's DNS holds the resolver macOS uses; write nothing.
+    case deferred(ResolverDeferral, adopted: DNSPlan?)
 }
 
 /// Follows the single service that carries DNS and restores every service
@@ -17,24 +19,77 @@ struct NativeResolverConfigurator: Sendable {
     var verificationTimeout: TimeInterval = 3
     var verificationInterval: TimeInterval = 0.05
 
-    /// Counts the services with a usable resolver. None is an unobserved
-    /// network, more than one is refused as split DNS, and one is either the
-    /// recorded service or the target of a handoff.
+    /// Follows the resolver macOS actually uses (ADR-0036). Another agent's
+    /// DNS ahead of Remap's own configuration defers to that agent. Otherwise
+    /// the services with a usable resolver are counted: none is an unobserved
+    /// network; one is either the recorded service or the target of a
+    /// handoff; and several are followed only when the global resolver names
+    /// which of them macOS uses, and refused as split DNS when it does not.
     func decide(record: ActivationRecord) throws -> ResolverNetworkDecision {
         try record.verify()
         let snapshot = try network.snapshot()
+        let carrier = resolverCarrier(snapshot)
+        if case let .deferred(reason, adopted)? = try foreignHold(
+            record: record,
+            snapshot: snapshot,
+            carrier: carrier
+        ) {
+            return .deferred(reason, adopted: adopted)
+        }
+        if record.payload.phase == .prepared, carrier == .outsidePreferences {
+            // Re-arming could not put Remap ahead of a resolver it cannot
+            // configure, so nothing is written until that one lets go.
+            return .deferred(.resolverHeldElsewhere, adopted: nil)
+        }
         let usable = try usableServices(snapshot: snapshot, record: record)
-        guard let only = usable.first else {
+        guard !usable.isEmpty else {
             throw ResolverError.noUsableUpstream
         }
-        guard usable.count == 1 else {
-            throw ResolverError.unsupportedResolverScope(usable.count)
-        }
+        let only = try carryingService(usable: usable, carrier: carrier, record: record, snapshot: snapshot)
         let recordedIDs = record.payload.services.map(\.serviceID)
         if recordedIDs == [only.serviceID], record.payload.handoffTargetServiceID == nil {
             return .recorded
         }
         return .handoff(serviceID: only.serviceID, upstreams: only.upstreams)
+    }
+
+    /// The one usable service that carries DNS. With several, the global
+    /// resolver decides: loopback keeps the recorded service that holds
+    /// Remap's configuration, and a service's own resolver selects it.
+    private func carryingService(
+        usable: [(serviceID: String, upstreams: [String])],
+        carrier: ResolverCarrier,
+        record: ActivationRecord,
+        snapshot: NetworkSnapshot
+    ) throws -> (serviceID: String, upstreams: [String]) {
+        if usable.count == 1 {
+            return usable[0]
+        }
+        let chosen: String? = switch carrier {
+        case .remap:
+            try armedServiceID(record: record, snapshot: snapshot)
+        case let .service(serviceID):
+            serviceID
+        case .outsidePreferences, .unattributed:
+            nil
+        }
+        guard let chosen, let carrying = usable.first(where: { $0.serviceID == chosen }) else {
+            throw ResolverError.unsupportedResolverScope(usable.count)
+        }
+        return carrying
+    }
+
+    /// The one service an unmoved record owns, when it holds Remap's
+    /// configuration.
+    private func armedServiceID(record: ActivationRecord, snapshot: NetworkSnapshot) throws -> String? {
+        guard record.payload.handoffTargetServiceID == nil,
+              record.payload.services.count == 1,
+              let owned = record.payload.services.first,
+              let current = snapshot.service(owned.serviceID)
+        else {
+            return nil
+        }
+        return try holdsInstalledConfiguration(current, record: owned) ? owned.serviceID : nil
     }
 
     /// Moves the activation to `target`, which must be the single usable
@@ -113,18 +168,22 @@ struct NativeResolverConfigurator: Sendable {
         return try validatedPlan(services)
     }
 
-    /// Hands the activation over when a different single service now carries
-    /// DNS, and returns the plan it published; nil otherwise. The record is
+    /// Hands the activation over when a different service now carries DNS,
+    /// or defers to another agent's DNS; `.recorded` otherwise. The record is
     /// the one the caller reconciled, so its identity is the one published.
     func handOffIfNeeded(
         record: ActivationRecord,
         publish: (DNSPlan) throws -> Void
-    ) throws -> DNSPlan? {
-        guard case let .handoff(target, upstreams) = try decide(record: record) else {
-            return nil
+    ) throws -> ResolverFollowing {
+        switch try decide(record: record) {
+        case .recorded:
+            return .recorded
+        case let .deferred(reason, adopted):
+            return .deferred(reason, adopted: adopted)
+        case let .handoff(target, upstreams):
+            _ = try handOff(record: record, to: target, upstreams: upstreams, publish: publish)
+            return .handedOff(DNSPlan(services: [DNSServicePlan(serviceID: target, upstreams: upstreams)]))
         }
-        _ = try handOff(record: record, to: target, upstreams: upstreams, publish: publish)
-        return DNSPlan(services: [DNSServicePlan(serviceID: target, upstreams: upstreams)])
     }
 
     /// Applies a prepared activation after the daemon has accepted the
@@ -150,11 +209,23 @@ struct NativeResolverConfigurator: Sendable {
         try store.replace(active)
         do {
             try network.commit(changes)
+        } catch {
+            try rollBackFailedCommit(to: prepared)
+            throw error
+        }
+        do {
             try awaitConfiguration { current in
                 try installationApplied(services: services, snapshot: current)
             }
             return active
         } catch {
+            // The commit applied, but another agent's DNS layered above
+            // Remap's configuration holds the resolver macOS uses. Restoring
+            // now would write against that agent at every re-arm; the active
+            // record already lists what is installed, so it is kept (ADR-0036).
+            if try heldAfterCommit(services: services) {
+                throw ResolverDeferral.resolverHeldElsewhere
+            }
             try rollBackFailedCommit(to: prepared)
             throw error
         }

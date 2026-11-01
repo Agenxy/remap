@@ -15,6 +15,10 @@ Remap is designed for local control and minimal knowledge.
 - No network communication except traffic required by mappings, user-configured
   DNS forwarding, explicit peer synchronization, and an explicit update check
   if that feature is later accepted.
+- While every upstream DNS resolver Remap forwards to has stopped answering,
+  `remapd` sends those same resolvers one root `NS` query every five seconds
+  to learn when they answer again, and none otherwise. It carries no name a
+  person chose (ADR-0036).
 
 ## Diagnostics
 

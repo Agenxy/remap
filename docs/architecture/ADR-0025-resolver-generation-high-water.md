@@ -161,3 +161,13 @@ Acceptance: `ResolverCommitRollbackTests.swift` fails against the sources
 before this amendment and passes after it: a restore that fails after a
 failed commit is reported and leaves the record active, deactivation then
 restores the service, and the record is active before any commit is made.
+
+## Amendment, 2026-10-31: a commit another agent's DNS outranks is kept
+
+ADR-0036 keeps one failed verification active instead of restoring it: when
+every owned service holds Remap's configuration and another agent's resolver,
+for one of those services or for a service outside the preferences, is the
+one macOS uses anyway. The record still lists every service that may hold
+Remap's configuration, which is the property this amendment protects, and a
+restore would be a write against that agent at every re-arm. Every other
+failed commit restores exactly as above.

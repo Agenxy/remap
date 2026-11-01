@@ -49,6 +49,7 @@ struct MacOSInstallTopology: Sendable {
         try removeEmptyOwnedDirectory(journalsPath, mode: 0o700)
         try removeEmptyOwnedDirectory(generationsPath, mode: Self.publicTraversalMode)
         try removeEmptyOwnedDirectory(installPath, mode: Self.publicTraversalMode)
+        try MacOSResolverRecords.remove(from: productPath, authority: authority, ownerUID: ownerUID)
         try removeProductParentIfEmpty()
     }
 

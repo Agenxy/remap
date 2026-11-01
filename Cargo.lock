@@ -1750,6 +1750,7 @@ dependencies = [
 name = "remapd"
 version = "0.2.0"
 dependencies = [
+ "chrono",
  "clap",
  "hickory-proto",
  "nix",
@@ -1759,7 +1760,9 @@ dependencies = [
  "remap-network",
  "remap-protocol",
  "remap-registry",
+ "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "uuid",

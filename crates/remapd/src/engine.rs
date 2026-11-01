@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use remap_core::{HostHeaderPolicy, Mapping, MappingTarget, NamePattern, RegistrySnapshot};
-use remap_network::{ListenerState, PeerMachineStatus, RuntimeIdentity};
+use remap_network::{ListenerState, PeerMachineStatus, ResolverPlanStore, RuntimeIdentity};
 use remap_protocol::{
     CONTROL_PROTOCOL_VERSION, Command, CommandResult, ControlRequest, ControlResponse, Diagnostic,
     HealthChallengeResult, HostPolicy, MAX_LISTENER_FAILURES, MAX_MAPPING_COUNT,
@@ -13,6 +13,8 @@ use remap_protocol::{
 use remap_registry::Registry;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Duration, timeout};
+
+use crate::native_dns::TurnedOffRecordSource;
 
 const ENGINE_QUEUE_CAPACITY: usize = 256;
 const SNAPSHOT_RETRY_LIMIT: usize = 4;
@@ -40,6 +42,11 @@ pub struct Engine {
 struct EngineState {
     sender: Mutex<Option<mpsc::Sender<Job>>>,
     writer: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// The DNS runtime's plans, once it exists, so status can say whether
+    /// its upstreams still answer (ADR-0036).
+    resolver_plans: OnceLock<ResolverPlanStore>,
+    /// Where the owner's deliberate DNS turn-off is recorded (ADR-0036).
+    dns_turned_off: OnceLock<TurnedOffRecordSource>,
 }
 
 impl Engine {
@@ -74,6 +81,8 @@ impl Engine {
             state: Arc::new(EngineState {
                 sender: Mutex::new(Some(sender)),
                 writer: Mutex::new(Some(writer)),
+                resolver_plans: OnceLock::new(),
+                dns_turned_off: OnceLock::new(),
             }),
             revision,
             identity,
@@ -105,6 +114,7 @@ impl Engine {
             request.command,
             Command::Preview { .. } | Command::Apply { .. }
         );
+        let status = matches!(request.command, Command::Status);
         let (response_sender, response_receiver) = oneshot::channel();
         self.sender()?
             .send(Job::Request {
@@ -117,10 +127,40 @@ impl Engine {
         if advisable && let Some(result) = response.result.as_mut() {
             crate::reachability::advise(result).await;
         }
-        if let Some(CommandResult::Status(status)) = response.result.as_mut() {
-            status.peer_machine_listeners = self.peer_machine_summary();
+        if status && let Some(CommandResult::Status(status)) = response.result.as_mut() {
+            status.dns_upstream = self.dns_upstream();
+            status.dns_turned_off = self.dns_turned_off().map(Box::new);
+            status.peer_machine_listeners = self.peer_machine_summary().map(Box::new);
         }
         Ok(response)
+    }
+
+    /// Lets status report whether the DNS runtime's upstreams still answer.
+    pub(crate) fn observe_resolver_plans(&self, plans: ResolverPlanStore) {
+        let _first = self.state.resolver_plans.set(plans);
+    }
+
+    /// Lets status say when the owner turned system DNS off on purpose.
+    pub(crate) fn observe_dns_turned_off(&self, source: TurnedOffRecordSource) {
+        let _first = self.state.dns_turned_off.set(source);
+    }
+
+    /// The owner's turn-off, unless a supervisor has since published a plan.
+    fn dns_turned_off(&self) -> Option<remap_protocol::DnsTurnedOff> {
+        let plans_active = self
+            .state
+            .resolver_plans
+            .get()
+            .is_some_and(|plans| plans.active_generation().is_some());
+        if plans_active {
+            return None;
+        }
+        self.state.dns_turned_off.get()?.read()
+    }
+
+    fn dns_upstream(&self) -> Option<Diagnostic> {
+        let failure = self.state.resolver_plans.get()?.upstream_failure()?;
+        Some(crate::system_control::upstream_failure(failure).diagnostic())
     }
 
     /// Runs retention maintenance on the registry writer.

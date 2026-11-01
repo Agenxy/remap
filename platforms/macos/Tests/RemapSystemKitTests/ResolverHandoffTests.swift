@@ -36,10 +36,13 @@ func remapFollowsATetheredServiceBackToWiFi() async throws {
     try mac.expectActive(on: wifi, resolver: wifiResolver, generation: 3)
 }
 
+/// Two services with DNS are split DNS only when the global resolver does
+/// not say which of them macOS uses (ADR-0036); when it does, Remap follows it.
 @Test
 func twoServicesWithUsableDNSAreRefusedAndNothingChanges() async throws {
     let mac = try ActivatedMac()
     mac.network.setUp(tether, true)
+    mac.network.update { $0.unattributedGlobal = ["198.51.100.9"] }
     let before = mac.store.current
 
     await #expect(throws: ResolverError.unsupportedResolverScope(2)) {
@@ -54,6 +57,7 @@ func twoServicesWithUsableDNSAreRefusedAndNothingChanges() async throws {
 func twoUsableServicesBypassPromptlyAndRecordWhy() async throws {
     let mac = try ActivatedMac()
     mac.network.setUp(tether, true)
+    mac.network.update { $0.unattributedGlobal = ["198.51.100.9"] }
     let log = HandoffBypassLog()
     let monitor = QuietResolverMonitor()
     let supervisor = ResolverSupervisor(

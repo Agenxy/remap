@@ -557,6 +557,9 @@ public struct MacOSPortableAuthorityCleanup: Sendable {
             at: InstallRelativePath(MacOSPortableAuthorityCleanupState.installerPathString)
         )
         let remapRoot = try InstallRelativePath("Library/Application Support/Agenxy/Remap")
+        if try authority.metadata(at: remapRoot) != nil {
+            try MacOSResolverRecords.remove(from: remapRoot, authority: authority, ownerUID: expectedUID)
+        }
         let remapRootIsPresent = try authority.metadata(at: remapRoot) != nil
         let remapRootIsEmpty = try !remapRootIsPresent || authority.listDirectory(at: remapRoot).isEmpty
         if remapRootIsPresent, remapRootIsEmpty {

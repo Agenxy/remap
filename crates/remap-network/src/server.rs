@@ -14,7 +14,10 @@ use tokio::time::{timeout, timeout_at};
 use crate::dns::encoded_error;
 use crate::forward::{Forwarder, eof};
 use crate::resolver::ResolverPlanStore;
-use crate::{DnsDecision, DnsEngine, DnsPolicy, NetworkError, RuntimeIdentity, SnapshotStore};
+use crate::{
+    DnsDecision, DnsEngine, DnsPolicy, NetworkError, RuntimeIdentity, SnapshotStore,
+    UpstreamLivenessPolicy,
+};
 
 const MAX_DNS_MESSAGE_BYTES: usize = 65_535;
 const MAX_TCP_REQUESTS_PER_CONNECTION: usize = 64;
@@ -35,6 +38,8 @@ pub struct DnsRuntimeConfig {
     pub shutdown_grace: Duration,
     /// Local mapped-answer synthesis policy.
     pub policy: DnsPolicy,
+    /// When every upstream counts as no longer answering (ADR-0036).
+    pub upstream_liveness: UpstreamLivenessPolicy,
 }
 
 impl DnsRuntimeConfig {
@@ -48,6 +53,7 @@ impl DnsRuntimeConfig {
             io_timeout: Duration::from_secs(3),
             shutdown_grace: Duration::from_secs(5),
             policy: DnsPolicy::default(),
+            upstream_liveness: UpstreamLivenessPolicy::default(),
         }
     }
 
@@ -72,6 +78,7 @@ impl DnsRuntimeConfig {
     }
 
     fn validate_common(&self) -> Result<(), NetworkError> {
+        self.upstream_liveness.validate()?;
         if !self.listen.ip().is_loopback() {
             return Err(NetworkError::Configuration(
                 "the DNS listener must use a loopback address",
@@ -290,7 +297,7 @@ impl DnsRuntime {
             snapshots,
             bindings,
             Some(identity),
-            ResolverPlanStore::dormant(),
+            ResolverPlanStore::dormant_with(config.upstream_liveness),
         )
     }
 
@@ -301,7 +308,8 @@ impl DnsRuntime {
         identity: Option<RuntimeIdentity>,
     ) -> Result<Self, NetworkError> {
         config.validate()?;
-        let resolver_plans = ResolverPlanStore::initial(config.upstreams.clone())?;
+        let resolver_plans =
+            ResolverPlanStore::initial_with(config.upstreams.clone(), config.upstream_liveness)?;
         Self::from_validated_parts(config, snapshots, bindings, identity, resolver_plans)
     }
 
@@ -354,6 +362,7 @@ impl DnsRuntime {
     /// Returns a sanitized listener or connection lifecycle failure.
     pub async fn serve(self, shutdown: watch::Receiver<bool>) -> Result<(), NetworkError> {
         let udp_shutdown = shutdown.clone();
+        let probe = run_liveness_probe(self.forwarder.clone(), shutdown.clone());
         let udp = run_udp(
             self.udp,
             self.engine.clone(),
@@ -371,7 +380,26 @@ impl DnsRuntime {
             shutdown_grace: self.shutdown_grace,
         };
         let tcp = run_tcp(self.tcp, tcp_context, shutdown);
-        tokio::try_join!(udp, tcp).map(|_| ())
+        tokio::try_join!(udp, tcp, probe).map(|_| ())
+    }
+}
+
+/// While every upstream is judged unanswered, probes them once per interval
+/// so the verdict clears when one answers again, even with no client asking.
+async fn run_liveness_probe(
+    forwarder: Forwarder,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<(), NetworkError> {
+    let interval = forwarder.probe_interval();
+    loop {
+        tokio::select! {
+            () = shutdown_requested(&mut shutdown) => return Ok(()),
+            () = tokio::time::sleep(interval) => {}
+        }
+        tokio::select! {
+            () = shutdown_requested(&mut shutdown) => return Ok(()),
+            () = forwarder.probe() => {}
+        }
     }
 }
 

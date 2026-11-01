@@ -173,22 +173,23 @@ pub(crate) async fn execute(
 }
 
 async fn doctor(data_dir: Option<&Path>) -> Result<Report, Diagnostic> {
-    let (authority, revision, mapping_count, authority_ready, health) =
-        inspect_runtime(data_dir).await;
-    let native_install = installation_ready(authority_ready, &health);
+    let inspection = inspect_runtime(data_dir).await;
+    let native_install = installation_ready(inspection.authority_ready, &inspection.health);
     let system_lookup = system_lookup(data_dir).await;
     let peer_machines = peer_machine_listeners(data_dir).await;
     Ok(Report::Doctor(app::DoctorReport {
         version: env!("CARGO_PKG_VERSION"),
         operating_system: std::env::consts::OS,
         architecture: std::env::consts::ARCH,
-        authority,
-        revision,
-        mapping_count,
-        health,
+        authority: inspection.authority,
+        revision: inspection.revision,
+        mapping_count: inspection.mapping_count,
+        health: inspection.health,
         native_install,
         installed_package: crate::installed_package::active(),
         system_lookup,
+        dns_upstream: inspection.dns_upstream,
+        dns_turned_off: inspection.dns_turned_off,
         peer_machines,
     }))
 }
@@ -200,7 +201,7 @@ async fn peer_machine_listeners(
 ) -> Option<remap_protocol::PeerMachineListeners> {
     let client = client(data_dir).ok()?;
     match client.execute(Command::Status).await {
-        Ok(CommandResult::Status(status)) => status.peer_machine_listeners,
+        Ok(CommandResult::Status(status)) => status.peer_machine_listeners.map(|boxed| *boxed),
         _ => None,
     }
 }
@@ -227,34 +228,44 @@ async fn system_lookup(data_dir: Option<&Path>) -> SystemLookup {
     remap_mcp::system_lookup::probe(name, &expected).await
 }
 
-async fn inspect_runtime(
-    data_dir: Option<&Path>,
-) -> (String, Option<u64>, Option<u64>, bool, RuntimeHealth) {
-    let unavailable = RuntimeHealth {
-        dns: false,
-        forwarding: false,
-        http: false,
-    };
+/// What doctor learned from the running authority.
+struct RuntimeInspection {
+    authority: String,
+    revision: Option<u64>,
+    mapping_count: Option<u64>,
+    authority_ready: bool,
+    health: RuntimeHealth,
+    dns_upstream: Option<remap_protocol::Diagnostic>,
+    dns_turned_off: Option<remap_protocol::DnsTurnedOff>,
+}
+
+impl RuntimeInspection {
+    const fn unavailable(authority: String) -> Self {
+        Self {
+            authority,
+            revision: None,
+            mapping_count: None,
+            authority_ready: false,
+            health: RuntimeHealth {
+                dns: false,
+                forwarding: false,
+                http: false,
+            },
+            dns_upstream: None,
+            dns_turned_off: None,
+        }
+    }
+}
+
+async fn inspect_runtime(data_dir: Option<&Path>) -> RuntimeInspection {
     let client = match client(data_dir) {
         Ok(client) => client,
         Err(error) => {
-            return (
-                format!("unavailable ({})", error.code()),
-                None,
-                None,
-                false,
-                unavailable,
-            );
+            return RuntimeInspection::unavailable(format!("unavailable ({})", error.code()));
         }
     };
     let Some(nonce) = runtime_health_nonce() else {
-        return (
-            "unavailable (E_RUNTIME_IDENTITY)".to_owned(),
-            None,
-            None,
-            false,
-            unavailable,
-        );
+        return RuntimeInspection::unavailable("unavailable (E_RUNTIME_IDENTITY)".to_owned());
     };
     let challenge = match client
         .execute(Command::HealthChallenge {
@@ -268,43 +279,21 @@ async fn inspect_runtime(
             challenge
         }
         Ok(_) => {
-            return (
+            return RuntimeInspection::unavailable(
                 "returned an invalid runtime identity".to_owned(),
-                None,
-                None,
-                false,
-                unavailable,
             );
         }
         Err(error) => {
-            return (
-                format!("unavailable ({})", error.code),
-                None,
-                None,
-                false,
-                unavailable,
-            );
+            return RuntimeInspection::unavailable(format!("unavailable ({})", error.code));
         }
     };
     let status = match client.execute(Command::Status).await {
         Ok(CommandResult::Status(status)) => status,
         Ok(_) => {
-            return (
-                "returned an invalid status result".to_owned(),
-                None,
-                None,
-                false,
-                unavailable,
-            );
+            return RuntimeInspection::unavailable("returned an invalid status result".to_owned());
         }
         Err(error) => {
-            return (
-                format!("unavailable ({})", error.code),
-                None,
-                None,
-                false,
-                unavailable,
-            );
+            return RuntimeInspection::unavailable(format!("unavailable ({})", error.code));
         }
     };
     let health = verify(
@@ -314,13 +303,15 @@ async fn inspect_runtime(
         SocketAddr::from((Ipv4Addr::LOCALHOST, 80)),
     )
     .await;
-    (
-        "ready".to_owned(),
-        Some(status.revision),
-        Some(status.mapping_count),
-        true,
+    RuntimeInspection {
+        authority: "ready".to_owned(),
+        revision: Some(status.revision),
+        mapping_count: Some(status.mapping_count),
+        authority_ready: true,
         health,
-    )
+        dns_upstream: status.dns_upstream,
+        dns_turned_off: status.dns_turned_off.map(|boxed| *boxed),
+    }
 }
 
 fn runtime_health_nonce() -> Option<String> {

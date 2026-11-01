@@ -97,3 +97,31 @@ func lifecycleStatusNamesARehearsalInstallAndNothingElse() throws {
     #expect(!release.contains("Package:"))
     #expect(release.contains("Remap is installed (0.2.0-abc).\nGenerations: 2"))
 }
+
+@Test
+func systemStatusTellsDNSOnFallbackOffOnPurposeAndNeverActivatedApart() throws {
+    func status(active: Bool, configured: Int, turnedOff: Bool) throws -> MacOSInstallerStatus {
+        let record = turnedOff ? #"""
+        ,"dnsTurnedOff":{"command":"remap-system deactivate","ownerUID":501,"productVersion":"0.2.0",\#
+        "schemaVersion":1,"turnedOffAtMilliseconds":1793409600000}
+        """# : ""
+        let json = #"""
+        {"schemaVersion":1,"generations":[],"transactions":[],"services":[],\#
+        "dns":{"active":\#(active),"configuredServiceCount":\#(configured),"effectiveRemapServiceCount":\#(
+            active ? 1 : 0
+        )}\#(record)}
+        """#
+        return try JSONDecoder().decode(MacOSInstallerStatus.self, from: Data(json.utf8))
+    }
+    #expect(try RemapLifecycleCLIOutput.dnsLine(status(active: true, configured: 1, turnedOff: false))
+        == "active (1 effective service(s))")
+    #expect(try RemapLifecycleCLIOutput.dnsLine(status(active: false, configured: 1, turnedOff: false))
+        .hasPrefix("falling back to ordinary DNS on its own"))
+    let off = try RemapLifecycleCLIOutput.dnsLine(status(active: false, configured: 0, turnedOff: true))
+    #expect(off.hasPrefix("turned off by the owner at 2026-10-31T01:20Z (`remap-system deactivate`)"))
+    #expect(off.contains("activate --owner-uid 501 --product-version 0.2.0"))
+    #expect(try RemapLifecycleCLIOutput.dnsLine(status(active: false, configured: 0, turnedOff: false))
+        == "not activated")
+    // An older service sends no turned-off key and still decodes.
+    #expect(try status(active: false, configured: 0, turnedOff: false).dnsTurnedOff == nil)
+}

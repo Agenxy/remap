@@ -318,7 +318,8 @@ public struct MacOSInstaller: Sendable {
             generations: generations,
             transactions: transactions,
             services: services,
-            dns: dns
+            dns: dns,
+            dnsTurnedOff: dnsState.turnedOff
         )
     }
 

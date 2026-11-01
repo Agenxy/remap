@@ -176,6 +176,8 @@ impl Registry {
             schema_version: SCHEMA_VERSION,
             daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
             maintenance: self.maintenance_error.clone(),
+            dns_upstream: None,
+            dns_turned_off: None,
             peer_machine_listeners: None,
         }
     }

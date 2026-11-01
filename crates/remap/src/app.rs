@@ -41,6 +41,10 @@ pub(crate) struct DoctorReport {
     /// `None` for a release, a source build, or no native installation.
     pub(crate) installed_package: Option<InstalledPackage>,
     pub(crate) system_lookup: SystemLookup,
+    /// Present while every upstream resolver has stopped answering (ADR-0036).
+    pub(crate) dns_upstream: Option<remap_protocol::Diagnostic>,
+    /// Present while the owner has turned system DNS off on purpose (ADR-0036).
+    pub(crate) dns_turned_off: Option<remap_protocol::DnsTurnedOff>,
     pub(crate) peer_machines: Option<remap_protocol::PeerMachineListeners>,
 }
 

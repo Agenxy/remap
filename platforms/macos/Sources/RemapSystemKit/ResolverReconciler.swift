@@ -18,13 +18,13 @@ public extension ResolverSystemExchanging {
 
 extension ResolverSystemChannel: ResolverSystemExchanging {}
 
-/// Follows a different single service that now carries DNS, publishing
-/// through `publish` before any service points at loopback, and returns the
-/// published plan; nil means the recorded service is the one to reconcile.
+/// Follows a different service that now carries DNS, publishing through
+/// `publish` before any service points at loopback, or defers to another
+/// agent's DNS without writing anything (ADR-0024, ADR-0036).
 typealias ResolverHandOff = @Sendable (
     _ record: ActivationRecord,
     _ publish: (DNSPlan) throws -> Void
-) throws -> DNSPlan?
+) throws -> ResolverFollowing
 
 /// Serializes complete resolver generations into the per-user daemon.
 public actor ResolverReconciler {
@@ -40,6 +40,9 @@ public actor ResolverReconciler {
     private var activeGeneration: UInt64?
     private var highestGeneration: UInt64 = 0
     private var lastUpstreams: [String]?
+    /// The daemon's most recent report, whose upstream verdict decides
+    /// whether Remap may stay the resolver macOS uses (ADR-0036).
+    private var latestReport: ResolverSystemResult?
     /// Activation a safe bypass meant to release from the daemon but could
     /// not. Only this exact identity may be released on a later mismatch.
     private var orphanedActivationID: UUID?
@@ -58,7 +61,7 @@ public actor ResolverReconciler {
         recordedOrphan = { (try? bypassStore.read())?.payload.outstandingOrphan }
         // Only the root supervisor changes SystemConfiguration after activation.
         if reactivatePreparedDNS {
-            handOff = { (record: ActivationRecord, publish: (DNSPlan) throws -> Void) throws -> DNSPlan? in
+            handOff = { (record: ActivationRecord, publish: (DNSPlan) throws -> Void) throws -> ResolverFollowing in
                 try resolver.handOffIfNeeded(record: record, store: activationStore, publish: publish)
             }
         } else {
@@ -89,10 +92,10 @@ public actor ResolverReconciler {
                 // installer can commit the record again before this supervisor
                 // observes that transition, leaving an active record while the
                 // effective resolver still bypasses Remap. Move that exact
-                // owned record back through the prepared phase and reapply it;
-                // an external configuration change fails closed in suspend().
-                try resolver.suspend(store: activationStore)
-                _ = try resolver.commitPreparedActivation(store: activationStore)
+                // owned record back through the prepared phase and reapply it.
+                // When Remap's configuration is already in place and another
+                // resolver still wins, nothing is written (ADR-0036).
+                try resolver.reassertActiveActivation(record: record, store: activationStore)
             }
         }
     }
@@ -116,6 +119,12 @@ public actor ResolverReconciler {
     }
 
     /// Reconciles daemon generation state after startup or a native network change.
+    ///
+    /// Another agent's DNS ahead of Remap's is a `ResolverDeferral`, thrown
+    /// after nothing was written. Upstreams that stopped answering are a
+    /// `ResolverUpstreamsUnanswered`, thrown before a prepared activation is
+    /// committed, so Remap never becomes the resolver macOS uses while every
+    /// name it does not own would fail (ADR-0036).
     public func reconcile() throws {
         var health = try channel.exchange(.health)
         observeGenerations(health)
@@ -129,40 +138,65 @@ public actor ResolverReconciler {
             orphan = try releasableOrphan(bound: bound, health: health)
         }
         if let handOff {
-            let handedOff = try handOff(record) { plan in
+            let following = try handOff(record) { plan in
                 if let orphan {
                     health = try release(orphan.activationID, generation: orphan.generation)
                 }
                 try publish(plan, identifier: identifier, after: health.activeGeneration)
             }
-            if handedOff != nil {
+            switch following {
+            case .recorded:
+                break
+            case .handedOff:
+                try requireAnsweringUpstreams()
                 return
+            case let .deferred(reason, adopted):
+                if let adopted {
+                    if let orphan {
+                        health = try release(orphan.activationID, generation: orphan.generation)
+                    }
+                    try publishUnlessCurrent(adopted, identifier: identifier, health: health)
+                }
+                throw reason
             }
         }
-        let plan: DNSPlan
-        do {
-            plan = try makePlan(record)
-        } catch {
-            // A network handoff may briefly expose no usable upstream. Keep the
-            // last complete generation active so a transient observation cannot
-            // turn ordinary DNS into an immediate SERVFAIL outage.
-            throw error
-        }
+        // A network handoff may briefly expose no usable upstream. The error
+        // keeps the last complete generation active so a transient
+        // observation cannot turn ordinary DNS into an immediate outage.
+        let plan = try makePlan(record)
         if let orphan {
             // Released only once a complete replacement plan exists.
             health = try release(orphan.activationID, generation: orphan.generation)
         }
+        try publishUnlessCurrent(plan, identifier: identifier, health: health)
+        try requireAnsweringUpstreams()
+        try commitPreparedDNS(record)
+    }
+
+    /// Publishes `plan` unless the daemon already holds exactly it for this
+    /// activation.
+    private func publishUnlessCurrent(
+        _ plan: DNSPlan,
+        identifier: UUID,
+        health: ResolverSystemResult
+    ) throws {
         let unchangedPublishedPlan = health.activationID == identifier
             && health.activeGeneration == activeGeneration
             && lastUpstreams == plan.upstreams
         if unchangedPublishedPlan {
             activationID = identifier
             activeGeneration = health.activeGeneration
-            try commitPreparedDNS(record)
             return
         }
         try publish(plan, identifier: identifier, after: health.activeGeneration)
-        try commitPreparedDNS(record)
+    }
+
+    /// Refuses to keep or make Remap the resolver macOS uses while the
+    /// daemon reports that every upstream has stopped answering.
+    private func requireAnsweringUpstreams() throws {
+        if let failure = latestReport?.upstreamFailure {
+            throw ResolverUpstreamsUnanswered(failure: failure)
+        }
     }
 
     /// Asks the daemon for its health and changes nothing: no publication,
@@ -187,6 +221,7 @@ public actor ResolverReconciler {
         guard result.activationID == identifier, result.activeGeneration == generation else {
             throw ResolverReconciliationError.invalidPublication
         }
+        latestReport = result
         activationID = identifier
         activeGeneration = generation
         highestGeneration = max(highestGeneration, generation)
@@ -269,6 +304,7 @@ public actor ResolverReconciler {
     }
 
     private func observeGenerations(_ result: ResolverSystemResult) {
+        latestReport = result
         highestGeneration = max(
             highestGeneration,
             result.activeGeneration ?? 0,

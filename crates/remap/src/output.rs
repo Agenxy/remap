@@ -119,11 +119,12 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
         readiness(report.health.forwarding)
     )?;
     writeln!(writer, "  HTTP       {}", readiness(report.health.http))?;
+    write_dns_upstream(writer, report.dns_upstream.as_ref())?;
     write_peer_machines(writer, report.peer_machines.as_ref())?;
     writeln!(
         writer,
         "  Lookup     {}",
-        lookup_line(&report.system_lookup)
+        lookup_line(&report.system_lookup, report.dns_turned_off.as_ref())
     )?;
     writeln!(writer, "  Telemetry  none")?;
     writeln!(writer)?;
@@ -131,13 +132,26 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
         writer,
         "Doctor itself changed nothing. Telemetry remains absent."
     )?;
-    if matches!(
+    if let Some(turned_off) = &report.dns_turned_off {
+        writeln!(
+            writer,
+            "Remap DNS was {}, so the system is not asking Remap. Turn it on with: {}",
+            terminal_text(&turned_off.status_line()),
+            terminal_text(&turned_off.turn_on)
+        )?;
+    } else if matches!(
         report.system_lookup,
         SystemLookup::Bypassed { .. } | SystemLookup::Unresolved { .. }
     ) {
         writeln!(
             writer,
             "The system resolver is not returning Remap's answer. On macOS, `remap-system status` shows the recorded fallback reason."
+        )?;
+    }
+    if report.dns_upstream.is_some() {
+        writeln!(
+            writer,
+            "Every upstream resolver Remap forwards to has stopped answering. Remap's own names still answer; other names fail open to ordinary DNS."
         )?;
     }
     if report.revision.is_some()
@@ -157,8 +171,18 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
     }
 }
 
-fn lookup_line(lookup: &SystemLookup) -> String {
+fn lookup_line(lookup: &SystemLookup, turned_off: Option<&remap_protocol::DnsTurnedOff>) -> String {
     let name = lookup.name().map(terminal_text).unwrap_or_default();
+    if let Some(turned_off) = turned_off
+        && !matches!(lookup, SystemLookup::Matched { .. })
+    {
+        let line = terminal_text(&turned_off.status_line()).into_owned();
+        return if name.is_empty() {
+            format!("off ({line})")
+        } else {
+            format!("off ({line}; {name} uses ordinary DNS)")
+        };
+    }
     match (lookup, lookup.answer()) {
         (SystemLookup::Matched { .. }, Some(answer)) => format!("ready ({name} → {answer})"),
         (SystemLookup::Bypassed { .. }, Some(answer)) => {
@@ -290,7 +314,20 @@ fn write_status(writer: &mut dyn Write, status: &RegistryStatus) -> io::Result<(
         "  Daemon     {}",
         terminal_text(&status.daemon_version)
     )?;
-    write_peer_machines(writer, status.peer_machine_listeners.as_ref())?;
+    write_dns_upstream(writer, status.dns_upstream.as_ref())?;
+    if let Some(turned_off) = &status.dns_turned_off {
+        writeln!(
+            writer,
+            "  DNS        {}",
+            terminal_text(&turned_off.status_line())
+        )?;
+        writeln!(
+            writer,
+            "  Turn on    {}",
+            terminal_text(&turned_off.turn_on)
+        )?;
+    }
+    write_peer_machines(writer, status.peer_machine_listeners.as_deref())?;
     if let Some(error) = &status.maintenance {
         writeln!(writer, "  Mutations  blocked by maintenance")?;
         writeln!(writer, "  Reason     {}", terminal_text(&error.message))?;
@@ -299,6 +336,26 @@ fn write_status(writer: &mut dyn Write, status: &RegistryStatus) -> io::Result<(
         }
     } else {
         writeln!(writer, "  Mutations  ready")?;
+    }
+    Ok(())
+}
+
+/// Says plainly when every upstream resolver has stopped answering, and why.
+fn write_dns_upstream(
+    writer: &mut dyn Write,
+    upstream: Option<&remap_protocol::Diagnostic>,
+) -> io::Result<()> {
+    let Some(upstream) = upstream else {
+        return Ok(());
+    };
+    let reason = upstream
+        .message
+        .strip_prefix("upstream DNS not answering: ")
+        .unwrap_or(&upstream.message);
+    writeln!(writer, "  Upstream   DNS not answering")?;
+    writeln!(writer, "  Cause      {}", terminal_text(reason))?;
+    if let Some(hint) = &upstream.hint {
+        writeln!(writer, "  Effect     {}", terminal_text(hint))?;
     }
     Ok(())
 }
@@ -526,6 +583,8 @@ fn report_json(report: &Report) -> Value {
                 "dns_listener": report.health.dns,
                 "dns_forwarding": report.health.forwarding,
                 "http_gateway": report.health.http,
+                "dns_upstream": report.dns_upstream,
+                "dns_turned_off": report.dns_turned_off,
                 "peer_machine_listeners": report.peer_machines,
                 "system_lookup": {
                     "state": report.system_lookup.state(),
@@ -564,314 +623,5 @@ fn write_json(writer: &mut dyn Write, value: &Value) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::error::Error;
-
-    use remap_protocol::{
-        ChangeEffect, CommandResult, HostPolicy, MappingView, PreviewResult, RegistryStatus,
-    };
-    use serde_json::Value;
-
-    use remap_mcp::system_lookup::SystemLookup;
-
-    use super::{write_diagnostic, write_report};
-    use crate::app::{DoctorReport, Report, ValidationReport};
-    use crate::diagnostic::Diagnostic;
-    use crate::installed_package::InstalledPackage;
-    use crate::runtime_health::RuntimeHealth;
-
-    fn doctor(installed_package: Option<InstalledPackage>) -> Report {
-        Report::Doctor(DoctorReport {
-            version: "0.2.0",
-            operating_system: "macos",
-            architecture: "aarch64",
-            authority: "ready".to_owned(),
-            revision: Some(3),
-            mapping_count: Some(1),
-            health: RuntimeHealth {
-                dns: true,
-                forwarding: true,
-                http: true,
-            },
-            native_install: true,
-            installed_package,
-            system_lookup: SystemLookup::NotChecked,
-            peer_machines: None,
-        })
-    }
-
-    #[test]
-    fn doctor_reports_a_rehearsal_install_as_one() -> Result<(), Box<dyn Error>> {
-        let mut human = Vec::new();
-        write_report(
-            &mut human,
-            &doctor(Some(InstalledPackage::Rehearsal)),
-            false,
-        )?;
-        let text = String::from_utf8(human)?;
-        assert!(text.contains("  Package    rehearsal install, not a release\n"));
-
-        let mut machine = Vec::new();
-        write_report(
-            &mut machine,
-            &doctor(Some(InstalledPackage::Rehearsal)),
-            true,
-        )?;
-        let value: Value = serde_json::from_slice(&machine)?;
-        assert_eq!(value["result"]["installed_package"], "rehearsal");
-
-        let mut release = Vec::new();
-        write_report(&mut release, &doctor(None), false)?;
-        assert!(!String::from_utf8(release)?.contains("Package"));
-        let mut release_json = Vec::new();
-        write_report(&mut release_json, &doctor(None), true)?;
-        let value: Value = serde_json::from_slice(&release_json)?;
-        assert!(value["result"]["installed_package"].is_null());
-        Ok(())
-    }
-
-    #[test]
-    fn validation_json_has_stable_envelope() -> Result<(), Box<dyn Error>> {
-        let report = Report::Validation(ValidationReport {
-            warnings: Vec::new(),
-            landing: None,
-            pattern: "atlas".to_owned(),
-            target: "http://127.0.0.1:5173/".to_owned(),
-            target_kind: "http",
-            host_header_policy: Some("preserve-client"),
-        });
-        let mut bytes = Vec::new();
-        write_report(&mut bytes, &report, true)?;
-        let value: Value = serde_json::from_slice(&bytes)?;
-        assert_eq!(value["schema"], "remap.cli/v1");
-        assert_eq!(value["ok"], true);
-        assert_eq!(value["result"]["system_state_changed"], false);
-        Ok(())
-    }
-
-    #[test]
-    fn human_diagnostics_escape_terminal_controls_without_changing_json()
-    -> Result<(), Box<dyn Error>> {
-        let rejected = "bad\u{001b}[2J\u{202e}name";
-        let diagnostic = Diagnostic::invalid_pattern(rejected.to_owned());
-        let mut human = Vec::new();
-        write_diagnostic(&mut human, &diagnostic, false)?;
-        assert!(!human.contains(&0x1b));
-        let displayed = String::from_utf8(human)?;
-        assert!(displayed.contains("\\u{001B}[2J\\u{202E}name"));
-
-        let mut machine = Vec::new();
-        write_diagnostic(&mut machine, &diagnostic, true)?;
-        let value: Value = serde_json::from_slice(&machine)?;
-        assert_eq!(value["error"]["detail"], rejected);
-        Ok(())
-    }
-
-    #[test]
-    fn usage_diagnostics_preserve_layout_and_indent_without_terminal_controls()
-    -> Result<(), Box<dyn Error>> {
-        let diagnostic = Diagnostic::usage(
-            "error: unknown command\r\n\nUsage:\tremap <COMMAND>\n  \u{001b}[31mbad",
-        );
-        let mut bytes = Vec::new();
-        write_diagnostic(&mut bytes, &diagnostic, false)?;
-        assert!(!bytes.contains(&0x1b));
-        let displayed = String::from_utf8(bytes)?;
-        assert!(displayed.contains("  error: unknown command\\r\n  \n"));
-        assert!(displayed.contains("  Usage:\\tremap <COMMAND>\n"));
-        assert!(displayed.contains("  \\u{001B}[31mbad\n"));
-        assert!(!displayed.contains("\\n\\nUsage"));
-        Ok(())
-    }
-
-    #[test]
-    fn empty_diagnostic_detail_is_not_replaced_with_filler() -> Result<(), Box<dyn Error>> {
-        let service = remap_protocol::Diagnostic::daemon_unavailable();
-        let diagnostic = Diagnostic::service(service);
-        let mut bytes = Vec::new();
-        write_diagnostic(&mut bytes, &diagnostic, false)?;
-        let displayed = String::from_utf8(bytes)?;
-        assert!(!displayed.contains("No additional context"));
-        assert_eq!(displayed.lines().count(), 2);
-        Ok(())
-    }
-
-    #[test]
-    fn human_preview_shows_the_exact_before_and_after_scope() -> Result<(), Box<dyn Error>> {
-        let effect = ChangeEffect {
-            pattern: "atlas".to_owned(),
-            action: "update".to_owned(),
-            before: Some(mapping("127.0.0.1:5173", HostPolicy::PreserveClient)),
-            after: Some(mapping("127.0.0.1:6173", HostPolicy::UseUpstream)),
-        };
-        let report = Report::Authority {
-            command: "preview",
-            result: CommandResult::Preview(PreviewResult {
-                warnings: Vec::new(),
-                base_revision: 8,
-                will_change: true,
-                effects: vec![effect],
-            }),
-        };
-        let mut bytes = Vec::new();
-        write_report(&mut bytes, &report, false)?;
-        let output = String::from_utf8(bytes)?;
-        assert!(output.contains("update  atlas"));
-        assert!(output.contains("127.0.0.1:5173 · socket · preserve-client · active"));
-        assert!(output.contains("127.0.0.1:6173 · socket · use-upstream · active"));
-        Ok(())
-    }
-
-    #[test]
-    fn human_mapping_spells_out_a_peer_machine() -> Result<(), Box<dyn Error>> {
-        let mut view = mapping("supgang://a8a37e32?ssh=22,k7=7443", HostPolicy::UseUpstream);
-        view.target_kind = "peer-machine".to_owned();
-        view.peer_address = Some("127.77.0.4".to_owned());
-        let report = Report::Authority {
-            command: "get",
-            result: CommandResult::Mapping(Some(view.clone())),
-        };
-        let mut bytes = Vec::new();
-        write_report(&mut bytes, &report, false)?;
-        let output = String::from_utf8(bytes)?;
-        assert!(output.contains("Address    127.77.0.4"), "{output}");
-        assert!(output.contains("Peer       a8a37e32"), "{output}");
-        assert!(output.contains("ssh at 127.77.0.4:22"), "{output}");
-        assert!(output.contains("k7 at 127.77.0.4:7443"), "{output}");
-
-        let mut bytes = Vec::new();
-        write_report(&mut bytes, &report, true)?;
-        let value: Value = serde_json::from_slice(&bytes)?;
-        assert_eq!(value["result"]["value"]["peer_address"], "127.77.0.4");
-
-        let effect = ChangeEffect {
-            pattern: "atlas".to_owned(),
-            action: "created".to_owned(),
-            before: None,
-            after: Some(view),
-        };
-        let preview = Report::Authority {
-            command: "preview",
-            result: CommandResult::Preview(PreviewResult {
-                warnings: Vec::new(),
-                base_revision: 1,
-                will_change: true,
-                effects: vec![effect],
-            }),
-        };
-        let mut bytes = Vec::new();
-        write_report(&mut bytes, &preview, false)?;
-        assert!(String::from_utf8(bytes)?.contains("· address 127.77.0.4"));
-        Ok(())
-    }
-
-    #[test]
-    fn human_status_surfaces_blocked_retention_maintenance() -> Result<(), Box<dyn Error>> {
-        let report = Report::Authority {
-            command: "status",
-            result: CommandResult::Status(RegistryStatus {
-                revision: 8,
-                mapping_count: 2,
-                enabled_count: 1,
-                schema_version: 1,
-                daemon_version: "0.1.0".to_owned(),
-                maintenance: Some(remap_protocol::Diagnostic::new(
-                    "E_REGISTRY_CHECKPOINT",
-                    "the private journal is awaiting retention maintenance",
-                    Some("release the other registry reader".to_owned()),
-                    true,
-                )),
-                peer_machine_listeners: None,
-            }),
-        };
-        let mut bytes = Vec::new();
-        write_report(&mut bytes, &report, false)?;
-        let output = String::from_utf8(bytes)?;
-        assert!(output.contains("Mutations  blocked by maintenance"));
-        assert!(output.contains("private journal is awaiting retention maintenance"));
-        assert!(output.contains("release the other registry reader"));
-        Ok(())
-    }
-
-    #[test]
-    fn human_status_names_each_peer_machine_listener_that_cannot_bind() -> Result<(), Box<dyn Error>>
-    {
-        let report = Report::Authority {
-            command: "status",
-            result: CommandResult::Status(RegistryStatus {
-                revision: 8,
-                mapping_count: 2,
-                enabled_count: 2,
-                schema_version: 4,
-                daemon_version: "0.2.0".to_owned(),
-                maintenance: None,
-                peer_machine_listeners: Some(remap_protocol::PeerMachineListeners {
-                    listening: 1,
-                    not_listening: 1,
-                    failures: vec![remap_protocol::PeerMachineListenerFailure {
-                        pattern: "pro.test".to_owned(),
-                        service: "ssh".to_owned(),
-                        address: "127.77.0.1".to_owned(),
-                        port: 22,
-                        cause: "address-not-reserved".to_owned(),
-                        detail: "this address is not reserved on this machine yet".to_owned(),
-                    }],
-                    refusals: [("refused".to_owned(), 3), ("unknown-peer".to_owned(), 1)]
-                        .into_iter()
-                        .collect(),
-                }),
-            }),
-        };
-        let mut bytes = Vec::new();
-        write_report(&mut bytes, &report, false)?;
-        let output = String::from_utf8(bytes)?;
-        assert!(
-            output.contains("Peers      1 listening, 1 not listening"),
-            "{output}"
-        );
-        assert!(
-            output.contains("pro.test ssh at 127.77.0.1:22 not listening: address-not-reserved"),
-            "{output}"
-        );
-        assert!(
-            output.contains("connections not carried since start: refused 3, unknown-peer 1"),
-            "{output}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn human_status_confirms_mutation_readiness() -> Result<(), Box<dyn Error>> {
-        let report = Report::Authority {
-            command: "status",
-            result: CommandResult::Status(RegistryStatus {
-                revision: 8,
-                mapping_count: 2,
-                enabled_count: 1,
-                schema_version: 1,
-                daemon_version: "0.1.1".to_owned(),
-                maintenance: None,
-                peer_machine_listeners: None,
-            }),
-        };
-        let mut bytes = Vec::new();
-        write_report(&mut bytes, &report, false)?;
-        let output = String::from_utf8(bytes)?;
-        assert!(output.contains("Mutations  ready"));
-        assert!(!output.contains("blocked"));
-        Ok(())
-    }
-
-    fn mapping(target: &str, host_policy: HostPolicy) -> MappingView {
-        MappingView {
-            landing: None,
-            pattern: "atlas".to_owned(),
-            target: target.to_owned(),
-            target_kind: "socket".to_owned(),
-            host_policy,
-            enabled: true,
-            updated_revision: 8,
-            peer_address: None,
-        }
-    }
-}
+#[path = "output_tests.rs"]
+mod tests;

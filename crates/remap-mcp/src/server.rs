@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use crate::health::{self, HealthReport};
+use crate::status_summary::status_summary;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -57,6 +58,9 @@ type LegacyWatchers = Arc<Mutex<BTreeMap<String, LegacyWatcher>>>;
 struct WatchState {
     revision: u64,
     maintenance: Option<Diagnostic>,
+    /// Whether upstream DNS is answering; its counts change on every query,
+    /// so only the transition notifies (ADR-0036).
+    dns_upstream_unanswered: bool,
 }
 
 impl RemapMcp {
@@ -107,21 +111,6 @@ impl RemapMcp {
             }
             _ => Err(unexpected_result("an apply receipt")),
         }
-    }
-}
-
-fn status_summary(status: &RegistryStatus) -> String {
-    let base = format!(
-        "Revision {} contains {} mappings; {} are active.",
-        status.revision, status.mapping_count, status.enabled_count
-    );
-    if let Some(error) = &status.maintenance {
-        format!(
-            "{base} Mutations are blocked by maintenance ({}).",
-            error.code
-        )
-    } else {
-        base
     }
 }
 
@@ -708,6 +697,7 @@ async fn current_watch_state(client: &ControlClient) -> Result<WatchState, Error
         CommandResult::Status(status) => Ok(WatchState {
             revision: status.revision,
             maintenance: status.maintenance,
+            dns_upstream_unanswered: status.dns_upstream.is_some(),
         }),
         _ => Err(ErrorData::internal_error(
             "the daemon returned a non-status result to a resource watcher",
@@ -846,7 +836,9 @@ async fn next_watch_state(
 
 fn resource_changed(uri: &str, previous: &WatchState, current: &WatchState) -> bool {
     previous.revision != current.revision
-        || (uri == resources::STATUS_URI && previous.maintenance != current.maintenance)
+        || (uri == resources::STATUS_URI
+            && (previous.maintenance != current.maintenance
+                || previous.dns_upstream_unanswered != current.dns_upstream_unanswered))
 }
 
 fn retryable_watch_error(error: &ErrorData) -> bool {
@@ -901,38 +893,17 @@ fn subscription_capacity_error() -> ErrorData {
 
 #[cfg(test)]
 mod status_tests {
-    use remap_protocol::{Diagnostic, RegistryStatus};
+    use remap_protocol::Diagnostic;
 
-    use super::{WatchState, resource_changed, status_summary};
+    use super::{WatchState, resource_changed};
     use crate::resources;
-
-    #[test]
-    fn status_summary_identifies_mutation_blocking_maintenance() {
-        let status = RegistryStatus {
-            revision: 8,
-            mapping_count: 2,
-            enabled_count: 1,
-            schema_version: 1,
-            daemon_version: "0.1.0".to_owned(),
-            maintenance: Some(Diagnostic::new(
-                "E_REGISTRY_CHECKPOINT",
-                "checkpoint blocked",
-                None,
-                true,
-            )),
-            peer_machine_listeners: None,
-        };
-
-        let summary = status_summary(&status);
-        assert!(summary.contains("Mutations are blocked by maintenance"));
-        assert!(summary.contains("E_REGISTRY_CHECKPOINT"));
-    }
 
     #[test]
     fn maintenance_only_changes_notify_status_but_not_mappings() {
         let healthy = WatchState {
             revision: 8,
             maintenance: None,
+            dns_upstream_unanswered: false,
         };
         let degraded = WatchState {
             revision: 8,
@@ -942,6 +913,7 @@ mod status_tests {
                 None,
                 true,
             )),
+            dns_upstream_unanswered: false,
         };
 
         assert!(resource_changed(resources::STATUS_URI, &healthy, &degraded));
@@ -953,11 +925,31 @@ mod status_tests {
         let advanced = WatchState {
             revision: 9,
             maintenance: None,
+            dns_upstream_unanswered: false,
         };
         assert!(resource_changed(
             resources::MAPPINGS_URI,
             &healthy,
             &advanced
+        ));
+    }
+
+    #[test]
+    fn dns_upstream_transitions_notify_status_but_not_mappings() {
+        let healthy = WatchState {
+            revision: 8,
+            maintenance: None,
+            dns_upstream_unanswered: false,
+        };
+        let failing = WatchState {
+            dns_upstream_unanswered: true,
+            ..healthy.clone()
+        };
+        assert!(resource_changed(resources::STATUS_URI, &healthy, &failing));
+        assert!(!resource_changed(
+            resources::MAPPINGS_URI,
+            &healthy,
+            &failing
         ));
     }
 }
