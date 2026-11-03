@@ -74,10 +74,11 @@ partial stage. Recovery reports and token-binds their exact metadata and digest;
 invalid or partial bytes are never executed, and normal lifecycle work never
 silently deletes a possibly active helper from another process.
 
-The pinned Xcode 27 beta currently passes the macOS 27 SDK to Swift while its
-Swift driver stamps `LC_BUILD_VERSION sdk 15.0`. The package builder repairs
-that Apple-toolchain defect with Apple's own `vtool`, then revalidates every
-Mach-O as macOS 15 minimum / SDK 27.0 before signing or packaging. It never
+The pinned Xcode, 27.2 (27B52) as of its review, still passes the macOS SDK to
+Swift while SwiftPM stamps `LC_BUILD_VERSION sdk 15.0`, the deployment target.
+The 27 betas had the same defect. The package builder repairs it with Apple's
+own `vtool`, then revalidates every Mach-O as macOS 15 minimum and the SDK
+version that `XCODE_VERSION` names before signing or packaging. It never
 changes executable instructions or claims a different minimum operating
 system. This normalization remains covered by byte-level release tests and is
-required only while the pinned Apple beta emits the incorrect load command.
+required only while the pinned Xcode emits the incorrect load command.
