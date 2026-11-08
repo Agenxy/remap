@@ -33,7 +33,9 @@ pub(crate) fn bypass_hint(
 ) -> Option<&'static str> {
     (!recovery_required
         && activation.is_some_and(|value| value.phase() == ActivationPhase::Bypassed))
-    .then_some(UPSTREAM_BYPASS_HINT)
+    .then_some(BYPASS_HINT)
 }
 
-pub(crate) const UPSTREAM_BYPASS_HINT: &str = "upstream DNS stopped answering, so ordinary DNS is in effect; Remap DNS returns by itself once those resolvers answer again or the network offers others";
+/// The record does not say which fault caused the bypass, so the hint names
+/// both and points at the journal line that does.
+pub(crate) const BYPASS_HINT: &str = "Remap DNS stopped answering, so ordinary DNS is in effect; Remap DNS returns by itself once the Remap daemon and its upstream resolvers answer again, and the remap-resolver.service journal says which stopped";

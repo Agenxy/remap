@@ -286,6 +286,7 @@ impl NativeResolverTransaction {
     pub(crate) fn bypass_observed(
         &mut self,
         observed: &NativeStartupObservation,
+        rearm_after_healthy: std::time::Duration,
     ) -> remap_linux::LinuxResult<ActivationRecord> {
         match (self, observed) {
             (
@@ -296,15 +297,16 @@ impl NativeResolverTransaction {
                 NativeStartupObservation::Systemd(observed),
             ) => {
                 if *migrate_legacy_manager {
-                    transaction.bypass_observed(observed)
+                    transaction.bypass_observed(observed, rearm_after_healthy)
                 } else {
-                    transaction.bypass_observed_preserving_legacy_manager(observed)
+                    transaction
+                        .bypass_observed_preserving_legacy_manager(observed, rearm_after_healthy)
                 }
             }
             (
                 Self::NetworkManager(transaction),
                 NativeStartupObservation::NetworkManager(observed),
-            ) => transaction.bypass_observed(observed),
+            ) => transaction.bypass_observed(observed, rearm_after_healthy),
             (Self::Systemd { .. }, NativeStartupObservation::NetworkManager(_))
             | (Self::NetworkManager(_), NativeStartupObservation::Systemd(_)) => {
                 Err(manager_changed())
@@ -341,6 +343,13 @@ impl NativeResolverTransaction {
             | (Self::NetworkManager(_), NativeStartupObservation::Systemd(_)) => {
                 Err(manager_changed())
             }
+        }
+    }
+
+    pub(crate) fn forget_fallback(&mut self) -> remap_linux::LinuxResult<ActivationRecord> {
+        match self {
+            Self::Systemd { transaction, .. } => transaction.forget_fallback(),
+            Self::NetworkManager(transaction) => transaction.forget_fallback(),
         }
     }
 

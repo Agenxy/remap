@@ -12,6 +12,8 @@ use super::{
     LAST_STEP, ResolverStartupObservation, ResolverTransaction, manager_not_ready,
     ownership_conflict, recovery_required,
 };
+use std::time::Duration;
+
 use crate::{
     ActivationPhase, ActivationRecord, ActivationStore, LinuxResult, RecordMetadata,
     ResolvedBackend,
@@ -32,8 +34,9 @@ where
     pub fn bypass_observed(
         &mut self,
         observed: &ResolverStartupObservation,
+        rearm_after_healthy: Duration,
     ) -> LinuxResult<ActivationRecord> {
-        self.bypass_observed_with_policy(observed, true)
+        self.bypass_observed_with_policy(observed, rearm_after_healthy, true)
     }
 
     /// Bypasses a legacy activation without upgrading its manager encoding.
@@ -44,13 +47,15 @@ where
     pub fn bypass_observed_preserving_legacy_manager(
         &mut self,
         observed: &ResolverStartupObservation,
+        rearm_after_healthy: Duration,
     ) -> LinuxResult<ActivationRecord> {
-        self.bypass_observed_with_policy(observed, false)
+        self.bypass_observed_with_policy(observed, rearm_after_healthy, false)
     }
 
     fn bypass_observed_with_policy(
         &mut self,
         observed: &ResolverStartupObservation,
+        rearm_after_healthy: Duration,
         migrate_legacy_manager: bool,
     ) -> LinuxResult<ActivationRecord> {
         let mut record = self
@@ -66,6 +71,7 @@ where
                 "resolver state changed outside Remap before ordinary DNS could be restored",
             ));
         }
+        record.set_rearm_after_healthy(rearm_after_healthy)?;
         record.set_phase(ActivationPhase::Bypassing { completed_steps: 0 })?;
         self.store.save(&record)?;
         self.continue_bypass(record)
@@ -152,12 +158,13 @@ where
         } else {
             observed.manager.clone()
         };
-        let successor = ActivationRecord::prepare_with_manager(
+        let mut successor = ActivationRecord::prepare_with_manager(
             metadata,
             std::slice::from_ref(&observed.state),
             record.owned().clone(),
             manager,
         )?;
+        successor.keep_fallback_of(&record, true)?;
         self.store.replace(&record, &successor)?;
         self.continue_transition(successor)
     }
@@ -171,6 +178,27 @@ where
     pub fn release_bypassed(&mut self) -> LinuxResult<()> {
         let record = self.load_bypassed()?;
         self.store.remove(record.metadata())
+    }
+
+    /// Drops the re-arm period from an active record without touching the
+    /// link, so the generation an update rollback restores can read it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the durable record is active.
+    pub fn forget_fallback(&mut self) -> LinuxResult<ActivationRecord> {
+        let mut record = self
+            .store
+            .load()?
+            .ok_or_else(|| ownership_conflict("no resolver activation is available"))?;
+        if record.phase() != ActivationPhase::Active {
+            return Err(recovery_required());
+        }
+        if record.has_bypassed() {
+            record.forget_fallback();
+            self.store.save(&record)?;
+        }
+        Ok(record)
     }
 
     fn load_bypassed(&mut self) -> LinuxResult<ActivationRecord> {

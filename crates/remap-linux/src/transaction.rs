@@ -219,16 +219,16 @@ where
         match record.phase() {
             ActivationPhase::Applying { completed_steps } => {
                 if completed_steps == 0 {
-                    return self.store.remove(record.metadata());
+                    return self.forget_or_bypass(record).map(|_kept| ());
                 }
                 record.set_phase(ActivationPhase::Aborting {
                     applied_steps: completed_steps,
                     completed_steps: 0,
                 })?;
                 self.store.save(&record)?;
-                self.continue_abort(record)
+                self.continue_abort(record).map(|_kept| ())
             }
-            ActivationPhase::Aborting { .. } => self.continue_abort(record),
+            ActivationPhase::Aborting { .. } => self.continue_abort(record).map(|_kept| ()),
             ActivationPhase::Active
             | ActivationPhase::Restoring { .. }
             | ActivationPhase::Bypassing { .. }
@@ -354,12 +354,13 @@ where
         } else {
             observed.manager.clone()
         };
-        let successor = ActivationRecord::prepare_active_rebase_with_manager(
+        let mut successor = ActivationRecord::prepare_active_rebase_with_manager(
             metadata,
             rebased_before,
             record.owned().clone(),
             successor_manager,
         )?;
+        successor.keep_fallback_of(&record, false)?;
         self.store.replace(&record, &successor)?;
         for completed_steps in 0..LAST_STEP {
             self.apply_step(&successor, completed_steps, false)?;
@@ -391,10 +392,7 @@ where
         self.reconcile_progress(&mut record)?;
         match record.phase() {
             ActivationPhase::Applying { .. } => self.continue_transition(record).map(Some),
-            ActivationPhase::Aborting { .. } => {
-                self.continue_abort(record)?;
-                Ok(None)
-            }
+            ActivationPhase::Aborting { .. } => self.continue_abort(record),
             ActivationPhase::Active | ActivationPhase::Bypassed => Ok(Some(record)),
             ActivationPhase::Restoring { .. } => {
                 self.continue_restore(record)?;
@@ -547,7 +545,10 @@ where
         self.store.remove(record.metadata())
     }
 
-    fn continue_abort(&mut self, mut record: ActivationRecord) -> LinuxResult<()> {
+    fn continue_abort(
+        &mut self,
+        mut record: ActivationRecord,
+    ) -> LinuxResult<Option<ActivationRecord>> {
         let ActivationPhase::Aborting {
             applied_steps,
             mut completed_steps,
@@ -565,7 +566,23 @@ where
             self.require_expected(&record)?;
             self.store.save(&record)?;
         }
-        self.store.remove(record.metadata())
+        self.forget_or_bypass(record)
+    }
+
+    /// Ends an abort with the captured state in effect. A first activation is
+    /// forgotten; an activation that bypassed before is an interrupted re-arm
+    /// and stays bypassed, because only an installer may create a new one.
+    fn forget_or_bypass(
+        &mut self,
+        mut record: ActivationRecord,
+    ) -> LinuxResult<Option<ActivationRecord>> {
+        if !record.has_bypassed() {
+            self.store.remove(record.metadata())?;
+            return Ok(None);
+        }
+        record.set_phase(ActivationPhase::Bypassed)?;
+        self.store.save(&record)?;
+        Ok(Some(record))
     }
 
     fn apply_step(

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Ordinary DNS while the daemon's upstreams do not answer (ADR-0036), and
-//! the damped return to Remap DNS (ADR-0030).
+//! Ordinary DNS while the daemon or its upstreams do not answer (ADR-0036),
+//! and the damped return to Remap DNS (ADR-0030).
 //!
-//! When the daemon reports that every upstream stopped answering, the
-//! supervisor restores the link's captured state through the same journaled,
-//! compare-first restoration deactivation uses, keeps the activation record,
-//! and invalidates the daemon's plan. It writes nothing when the link no
-//! longer holds exactly Remap's state. While bypassed it only probes the
-//! daemon; once the daemon has answered for the damped period, it re-arms
+//! When the daemon reports that every upstream stopped answering, or does not
+//! answer its resolver channel at all, the supervisor restores the link's
+//! captured state through the same journaled, compare-first restoration
+//! deactivation uses, keeps the activation record with the period the next
+//! re-arm owes, and invalidates the daemon's plan. It writes nothing when the
+//! link no longer holds exactly Remap's state. While bypassed it only probes
+//! the daemon; once the daemon has answered for the damped period, it re-arms
 //! from a fresh capture of the link, unless the network still offers the
 //! same upstreams the daemon still judges unanswered.
 
@@ -47,11 +48,11 @@ pub(crate) struct Supervised {
 
 impl Supervised {
     pub(crate) fn new(record: ActivationRecord, upstreams: Vec<SocketAddr>) -> Self {
-        let fallback = if record.phase() == ActivationPhase::Bypassed {
-            ResolverFallback::resumed_bypassed(RearmDamping::STANDARD)
-        } else {
-            ResolverFallback::armed(RearmDamping::STANDARD)
-        };
+        let fallback = ResolverFallback::resumed(
+            RearmDamping::STANDARD,
+            record.phase() == ActivationPhase::Bypassed,
+            record.rearm_after_healthy(),
+        );
         Self {
             record,
             upstreams,
@@ -71,6 +72,16 @@ impl Supervised {
     }
 }
 
+/// Why the supervisor restored ordinary DNS.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BypassCause {
+    /// The daemon's verdict: every upstream of the active plan stopped
+    /// answering.
+    Unanswered(UpstreamFailure),
+    /// The daemon did not answer its resolver channel.
+    DaemonUnreachable,
+}
+
 /// Restores ordinary DNS when `latest` carries the daemon's verdict that
 /// every upstream of the active plan stopped answering.
 pub(crate) async fn bypass_if_unanswered(
@@ -83,16 +94,61 @@ pub(crate) async fn bypass_if_unanswered(
     let Some(failure) = latest.upstream_failure else {
         return Ok(());
     };
+    bypass(
+        transaction,
+        channel,
+        supervised,
+        BypassCause::Unanswered(failure),
+        shutdown,
+    )
+    .await
+    .map(|_bypassed| ())
+}
+
+/// Restores ordinary DNS when the daemon stopped answering its channel, then
+/// ends the supervisor so systemd restarts it, which starts the daemon again
+/// if it stopped: nothing else would once DNS no longer reaches its sockets.
+/// The restarted supervisor resumes the bypass and its period from the
+/// record. When ordinary DNS could not be restored it returns `unreachable`,
+/// as before.
+pub(crate) async fn bypass_unreachable(
+    transaction: &BoundedWorker<NativeResolverTransaction>,
+    channel: &SystemChannel,
+    supervised: &mut Supervised,
+    unreachable: io::Error,
+    shutdown: &mut tokio::sync::watch::Receiver<bool>,
+) -> io::Result<()> {
+    let cause = BypassCause::DaemonUnreachable;
+    if !bypass(transaction, channel, supervised, cause, shutdown).await? {
+        return Err(unreachable);
+    }
+    Err(io::Error::other(DAEMON_RESTART))
+}
+
+/// The supervisor's exit after a channel bypass, which systemd restarts.
+pub(crate) const DAEMON_RESTART: &str = "restarting the resolver supervisor so systemd starts the Remap daemon again; ordinary DNS stays in effect meanwhile";
+
+/// Restores ordinary DNS for `cause`, and reports whether it did. A link that
+/// changed outside Remap is left as it is.
+async fn bypass(
+    transaction: &BoundedWorker<NativeResolverTransaction>,
+    channel: &SystemChannel,
+    supervised: &mut Supervised,
+    cause: BypassCause,
+    shutdown: &mut tokio::sync::watch::Receiver<bool>,
+) -> io::Result<bool> {
     if supervised.record.phase() != ActivationPhase::Active {
-        return Ok(());
+        return Ok(false);
     }
     let link = supervised.record.owned().link();
     let Some(observed) = worker_startup_observation(transaction, link, shutdown).await? else {
-        return Ok(());
+        return Ok(false);
     };
+    let now = supervised.now();
+    let period = supervised.fallback.bypass_period(now);
     let settled = native_effect(
         transaction,
-        move |transaction| transaction.bypass_observed(&observed),
+        move |transaction| transaction.bypass_observed(&observed, period),
         shutdown,
         "restoring ordinary DNS has an unknown bounded outcome",
     )
@@ -103,9 +159,10 @@ pub(crate) async fn bypass_if_unanswered(
         Err(error) => {
             refused_without_effect(transaction, &supervised.record, error, shutdown).await?;
             eprintln!(
-                "upstream DNS not answering; ordinary DNS was not restored because the resolver link changed outside Remap, and nothing was written"
+                "{}; ordinary DNS was not restored because the resolver link changed outside Remap, and nothing was written",
+                cause_summary(cause)
             );
-            return stopped_result(stopped);
+            return stopped_result(stopped).map(|()| false);
         }
     };
     let identity = (
@@ -113,14 +170,50 @@ pub(crate) async fn bypass_if_unanswered(
         record.metadata().generation(),
     );
     supervised.record = record;
-    supervised.fallback.note_bypass(supervised.now());
+    supervised.fallback.note_bypass(now);
     invalidate_plan(channel, identity).await;
-    eprintln!(
-        "{}; ordinary DNS restored; Remap DNS returns after {} of continuous daemon health once they answer or the network offers other resolvers",
-        unanswered_summary(failure),
-        seconds_phrase(supervised.fallback.required()),
-    );
-    stopped_result(stopped)
+    eprintln!("{}", bypass_line(cause, supervised.fallback.required()));
+    stopped_result(stopped).map(|()| true)
+}
+
+/// Restores ordinary DNS at startup for a recovered active record whose
+/// daemon does not answer, from a stable observation of the link. A
+/// restarted supervisor remembers only the period the record carries, so it
+/// counts as just re-armed and owes the doubled period.
+pub(crate) fn startup_bypass(
+    transaction: &mut NativeResolverTransaction,
+    record: &ActivationRecord,
+    observed: &NativeStartupObservation,
+) -> LinuxResult<ActivationRecord> {
+    let period =
+        ResolverFallback::resumed(RearmDamping::STANDARD, false, record.rearm_after_healthy())
+            .bypass_period(Duration::ZERO);
+    let bypassed = transaction.bypass_observed(observed, period)?;
+    eprintln!("{}", bypass_line(BypassCause::DaemonUnreachable, period));
+    Ok(bypassed)
+}
+
+/// The journal line for a bypass: the cause and the period the next re-arm
+/// owes, never an address.
+pub(crate) fn bypass_line(cause: BypassCause, period: Duration) -> String {
+    let returns = match cause {
+        BypassCause::Unanswered(_) => "once they answer or the network offers other resolvers",
+        BypassCause::DaemonUnreachable => "once the daemon answers again",
+    };
+    format!(
+        "{}; ordinary DNS restored; Remap DNS returns after {} of continuous daemon health {returns}",
+        cause_summary(cause),
+        seconds_phrase(period),
+    )
+}
+
+fn cause_summary(cause: BypassCause) -> String {
+    match cause {
+        BypassCause::Unanswered(failure) => unanswered_summary(failure),
+        BypassCause::DaemonUnreachable => {
+            "the Remap daemon is not answering its resolver channel".to_owned()
+        }
+    }
 }
 
 /// One reconciliation while ordinary DNS is in effect: probe the daemon and,
@@ -137,6 +230,15 @@ pub(crate) async fn reconcile_bypassed(
     let Ok(health) = health else {
         return Ok(());
     };
+    // A daemon that hung through the bypass may still hold the plan; while
+    // bypassed it is expected to hold none.
+    let identity = (
+        supervised.record.metadata().activation_id(),
+        supervised.record.metadata().generation(),
+    );
+    if health.activation_id == Some(identity.0) {
+        invalidate_plan(channel, identity).await;
+    }
     if !supervised.fallback.rearm_due(now) {
         return Ok(());
     }
@@ -167,10 +269,19 @@ pub(crate) async fn reconcile_bypassed(
     };
     supervised.upstreams = upstreams(&record)?;
     supervised.record = record;
-    publish_if_needed(channel, &supervised.record, supervised.upstreams.clone())
-        .await
-        .map_err(|failure| failure.error)?;
+    let published =
+        publish_if_needed(channel, &supervised.record, supervised.upstreams.clone()).await;
     supervised.fallback.note_armed(supervised.now());
+    match published {
+        Ok(_latest) => {}
+        // The link is on loopback again; a daemon gone since the probe must
+        // not leave it there.
+        Err(failure) if failure.unreachable && !stopped => {
+            return bypass_unreachable(transaction, channel, supervised, failure.error, shutdown)
+                .await;
+        }
+        Err(failure) => return Err(failure.error),
+    }
     eprintln!("Remap DNS re-armed after sustained daemon health");
     stopped_result(stopped)
 }

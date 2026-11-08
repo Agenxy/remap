@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -8,6 +10,8 @@ const RECORD_SCHEMA: &str = "remap.linux-resolver/v2";
 /// Maximum encoded activation-record size accepted before JSON parsing.
 pub const MAX_RECORD_BYTES: usize = 16 * 1024;
 const TRANSITION_STEPS: u8 = 3;
+/// The longest re-arm period a record may carry, far above the damping cap.
+const MAX_REARM_AFTER_HEALTHY_MS: u64 = 60 * 60 * 1000;
 
 /// Durable phase of a resolver ownership transition.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -116,6 +120,12 @@ pub struct ActivationRecord {
     owned: LinkState,
     manager: ResolverManagerRecord,
     phase: ActivationPhase,
+    /// Continuous daemon health the next re-arm owes. Written with the first
+    /// bypass and kept by every later generation of the activation, so a
+    /// restarted supervisor keeps its damping and an interrupted re-arm falls
+    /// back instead of forgetting the activation (ADR-0036).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rearm_after_healthy_ms: Option<u64>,
 }
 
 impl ActivationRecord {
@@ -156,6 +166,7 @@ impl ActivationRecord {
             owned,
             manager,
             phase: ActivationPhase::Applying { completed_steps: 0 },
+            rearm_after_healthy_ms: None,
         };
         record.validate()?;
         Ok(record)
@@ -234,6 +245,44 @@ impl ActivationRecord {
         self.phase
     }
 
+    /// Returns the continuous daemon health the next re-arm owes, once this
+    /// activation has restored ordinary DNS at least once.
+    #[must_use]
+    pub fn rearm_after_healthy(&self) -> Option<Duration> {
+        self.rearm_after_healthy_ms.map(Duration::from_millis)
+    }
+
+    /// Whether this activation has restored ordinary DNS before. Its abort
+    /// then ends bypassed, because only an installer may create a new one.
+    pub(crate) const fn has_bypassed(&self) -> bool {
+        self.rearm_after_healthy_ms.is_some()
+    }
+
+    pub(crate) fn set_rearm_after_healthy(&mut self, period: Duration) -> LinuxResult<()> {
+        let milliseconds = u64::try_from(period.as_millis())
+            .map_err(|_error| invalid_record("the resolver re-arm period is invalid"))?;
+        validate_rearm_after(Some(milliseconds))?;
+        self.rearm_after_healthy_ms = Some(milliseconds);
+        Ok(())
+    }
+
+    /// Drops the re-arm period from an active record, so a helper built
+    /// before the field existed can read it after an update rollback.
+    pub(crate) fn forget_fallback(&mut self) {
+        self.rearm_after_healthy_ms = None;
+    }
+
+    /// Carries a predecessor's damping into a successor generation. A re-arm
+    /// always carries one, so a predecessor written before the field existed
+    /// owes the base period.
+    pub(crate) fn keep_fallback_of(&mut self, previous: &Self, rearm: bool) -> LinuxResult<()> {
+        self.rearm_after_healthy_ms = match previous.rearm_after_healthy_ms {
+            None if rearm => u64::try_from(crate::RearmDamping::STANDARD.base().as_millis()).ok(),
+            kept => kept,
+        };
+        self.validate()
+    }
+
     pub(crate) fn expected_state(&self) -> LinuxResult<LinkState> {
         match self.phase {
             ActivationPhase::Applying { completed_steps } => {
@@ -274,6 +323,7 @@ impl ActivationRecord {
             self.metadata.created_unix_seconds,
         )?;
         self.manager.validate()?;
+        validate_rearm_after(self.rearm_after_healthy_ms)?;
         validate_phase(self.phase)
     }
 }
@@ -408,6 +458,16 @@ fn validate_phase(phase: ActivationPhase) -> LinuxResult<()> {
     }
 }
 
+fn validate_rearm_after(milliseconds: Option<u64>) -> LinuxResult<()> {
+    match milliseconds {
+        Some(0) => Err(invalid_record("the resolver re-arm period is invalid")),
+        Some(value) if value > MAX_REARM_AFTER_HEALTHY_MS => {
+            Err(invalid_record("the resolver re-arm period is invalid"))
+        }
+        Some(_) | None => Ok(()),
+    }
+}
+
 fn validate_steps(steps: u8) -> LinuxResult<()> {
     if steps > TRANSITION_STEPS {
         return Err(invalid_record(
@@ -431,6 +491,7 @@ const fn persistence_error() -> LinuxError {
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
 
     use uuid::Uuid;
 
@@ -508,6 +569,85 @@ mod tests {
                 .set_phase(ActivationPhase::Bypassing { completed_steps: 4 })
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn the_rearm_period_round_trips_and_is_absent_until_a_bypass()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let link = LinkIndex::new(7)?;
+        let before = LinkState::new(
+            link,
+            vec![DnsServer::new(
+                IpAddr::V4(Ipv4Addr::new(192, 0, 2, 53)),
+                53,
+                "",
+            )?],
+            Vec::new(),
+            true,
+        )?;
+        let mut record = ActivationRecord::prepare(
+            RecordMetadata::new(Uuid::new_v4(), 7, 1000, 1)?,
+            &[before],
+            LinkState::remap_loopback(link)?,
+        )?;
+        let fresh = String::from_utf8(RecordCodec::encode(&record)?)?;
+        assert!(!fresh.contains("rearm_after_healthy_ms"));
+        assert!(!record.has_bypassed());
+        assert_eq!(record.rearm_after_healthy(), None);
+
+        record.set_rearm_after_healthy(Duration::from_secs(20))?;
+        record.set_phase(ActivationPhase::Bypassed)?;
+        let decoded = RecordCodec::decode(&RecordCodec::encode(&record)?)?;
+        assert_eq!(decoded, record);
+        assert_eq!(decoded.rearm_after_healthy(), Some(Duration::from_secs(20)));
+        assert!(decoded.has_bypassed());
+
+        assert!(record.set_rearm_after_healthy(Duration::ZERO).is_err());
+        assert!(
+            record
+                .set_rearm_after_healthy(Duration::from_secs(60 * 60 + 1))
+                .is_err()
+        );
+        assert_eq!(record.rearm_after_healthy(), Some(Duration::from_secs(20)));
+        Ok(())
+    }
+
+    #[test]
+    fn a_rearm_successor_keeps_or_starts_the_damping() -> Result<(), Box<dyn std::error::Error>> {
+        let link = LinkIndex::new(7)?;
+        let before = LinkState::new(
+            link,
+            vec![DnsServer::new(
+                IpAddr::V4(Ipv4Addr::new(192, 0, 2, 53)),
+                53,
+                "",
+            )?],
+            Vec::new(),
+            true,
+        )?;
+        let prepare = || {
+            ActivationRecord::prepare(
+                RecordMetadata::new(Uuid::new_v4(), 7, 1000, 1)?,
+                std::slice::from_ref(&before),
+                LinkState::remap_loopback(link)?,
+            )
+        };
+        let legacy = prepare()?;
+        let mut successor = prepare()?;
+        successor.keep_fallback_of(&legacy, false)?;
+        assert_eq!(successor.rearm_after_healthy(), None);
+        successor.keep_fallback_of(&legacy, true)?;
+        assert_eq!(
+            successor.rearm_after_healthy(),
+            Some(Duration::from_secs(5))
+        );
+
+        let mut damped = prepare()?;
+        damped.set_rearm_after_healthy(Duration::from_secs(40))?;
+        let mut rebased = prepare()?;
+        rebased.keep_fallback_of(&damped, false)?;
+        assert_eq!(rebased.rearm_after_healthy(), Some(Duration::from_secs(40)));
         Ok(())
     }
 }
