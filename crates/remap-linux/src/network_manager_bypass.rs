@@ -11,6 +11,8 @@ use super::{
     external_change, manager_not_ready, network_manager, observation_changed, ownership_conflict,
     prepare_ownership, recovery_required, restore_dns,
 };
+use std::time::Duration;
+
 use crate::{
     ActivationPhase, ActivationRecord, ActivationStore, LinuxResult, ResolverManagerRecord,
 };
@@ -29,6 +31,7 @@ where
     pub fn bypass_observed(
         &mut self,
         observed: &NetworkManagerStartupObservation,
+        rearm_after_healthy: Duration,
     ) -> LinuxResult<ActivationRecord> {
         let mut record = self
             .store
@@ -37,6 +40,7 @@ where
         if self.observation_requires_rebase(&record, observed)? {
             return Err(external_change());
         }
+        record.set_rearm_after_healthy(rearm_after_healthy)?;
         record.set_phase(ActivationPhase::Bypassing { completed_steps: 0 })?;
         self.store.save(&record)?;
         self.bypass(record)
@@ -97,12 +101,13 @@ where
             return Err(observation_changed());
         }
         let (ownership, prepared) = prepare_ownership(&self.backend, &applied)?;
-        let successor = ActivationRecord::prepare_managed(
+        let mut successor = ActivationRecord::prepare_managed(
             metadata,
             current.resolved,
             record.owned().clone(),
             ResolverManagerRecord::NetworkManager(Box::new(ownership)),
         )?;
+        successor.keep_fallback_of(&record, true)?;
         self.store.replace(&record, &successor)?;
         self.apply_owned(successor, &applied, prepared)
     }
@@ -116,6 +121,51 @@ where
     pub fn release_bypassed(&mut self) -> LinuxResult<()> {
         let record = self.load_bypassed()?;
         self.store.remove(record.metadata())
+    }
+
+    /// Ends an interrupted re-arm as a bypass. A connection still in the
+    /// fresh capture is kept as it is; one already reapplied is restored by the
+    /// same compare-and-swap a bypass uses. Either way the record is kept,
+    /// because only an installer may create a new activation (ADR-0036).
+    pub(super) fn abandon_rearm(&mut self, mut record: ActivationRecord) -> LinuxResult<()> {
+        let applied = self.backend.applied()?;
+        let ownership = network_manager(&record)?;
+        if applied.digest == ownership.before_connection_digest()
+            && record.phase() == (ActivationPhase::Applying { completed_steps: 0 })
+        {
+            self.require_before_connection(&record)?;
+            record.set_phase(ActivationPhase::Bypassed)?;
+            return self.store.save(&record);
+        }
+        if !connection_is_owned(&applied, ownership)? {
+            return Err(external_change());
+        }
+        let mut active = self.finish_apply(record)?;
+        self.require_owned(&active)?;
+        active.set_phase(ActivationPhase::Bypassing { completed_steps: 0 })?;
+        self.store.save(&active)?;
+        self.bypass(active).map(|_bypassed| ())
+    }
+
+    /// Drops the re-arm period from an active record without touching the
+    /// link, so the generation an update rollback restores can read it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the durable record is active.
+    pub fn forget_fallback(&mut self) -> LinuxResult<ActivationRecord> {
+        let mut record = self
+            .store
+            .load()?
+            .ok_or_else(|| ownership_conflict("no resolver activation is available"))?;
+        if record.phase() != ActivationPhase::Active {
+            return Err(recovery_required());
+        }
+        if record.has_bypassed() {
+            record.forget_fallback();
+            self.store.save(&record)?;
+        }
+        Ok(record)
     }
 
     fn load_bypassed(&mut self) -> LinuxResult<ActivationRecord> {

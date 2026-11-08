@@ -44,6 +44,13 @@ platform claims separate.
     at least four queries and two seconds so one lost packet never counts,
     and macOS returns to ordinary DNS within seconds. Remap re-arms only
     once those resolvers answer again or the network offers different ones.
+  - Linux does the same for systemd-resolved, systemd-networkd and
+    NetworkManager links, and also returns to ordinary DNS when `remapd`
+    itself stops answering, where the link used to stay on loopback and
+    every lookup failed. It never writes over another program's DNS change,
+    keeps the activation so Remap DNS returns by itself with the same
+    back-off as macOS, and an interrupted return now falls back to ordinary
+    DNS instead of needing `make recover`.
   - `remap status`, `remap doctor`, and MCP status say "upstream DNS not
     answering" with the cause, and `remap-system status` explains the
     fallback the same way.

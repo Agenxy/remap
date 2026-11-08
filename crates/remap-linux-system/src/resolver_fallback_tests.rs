@@ -10,9 +10,10 @@ use remap_protocol::{SystemResult, UpstreamFailure, UpstreamFailureCause};
 use uuid::Uuid;
 
 use super::{
-    Supervised, rearm_permitted, refusal_kind, seconds_phrase, stopped_result, unanswered_summary,
+    BypassCause, DAEMON_RESTART, Supervised, bypass_line, rearm_permitted, refusal_kind,
+    seconds_phrase, stopped_result, unanswered_summary,
 };
-use crate::lifecycle_hints::{UPSTREAM_BYPASS_HINT, bypass_hint};
+use crate::lifecycle_hints::{BYPASS_HINT, bypass_hint};
 use crate::lifecycle_recovery::expected_daemon_plan;
 use crate::resolver_acceptance::accepted;
 
@@ -30,6 +31,11 @@ fn upstream(octet: u8) -> SocketAddr {
 /// A record in `phase`, built through the public serialized form because only
 /// the native transactions move a record between phases.
 fn record_in(phase: &str) -> io::Result<ActivationRecord> {
+    record_carrying(phase, None)
+}
+
+/// A record in `phase` that carries `rearm_after_ms`, as one that bypassed.
+fn record_carrying(phase: &str, rearm_after_ms: Option<u64>) -> io::Result<ActivationRecord> {
     let before = link_with(53)?;
     let owned = LinkState::remap_loopback(before.link()).map_err(io::Error::other)?;
     let metadata =
@@ -38,6 +44,9 @@ fn record_in(phase: &str) -> io::Result<ActivationRecord> {
         ActivationRecord::prepare(metadata, &[before], owned).map_err(io::Error::other)?;
     let mut encoded = serde_json::to_value(prepared).map_err(io::Error::other)?;
     encoded["phase"] = serde_json::Value::String(phase.to_owned());
+    if let Some(milliseconds) = rearm_after_ms {
+        encoded["rearm_after_healthy_ms"] = serde_json::Value::from(milliseconds);
+    }
     serde_json::from_value(encoded).map_err(io::Error::other)
 }
 
@@ -118,6 +127,45 @@ fn a_supervisor_restarted_while_bypassed_resumes_bypassed() -> io::Result<()> {
 }
 
 #[test]
+fn a_restarted_supervisor_resumes_the_period_the_record_carries() -> io::Result<()> {
+    let bypassed = Supervised::new(record_carrying("bypassed", Some(40_000))?, Vec::new());
+    assert_eq!(bypassed.fallback.required(), Duration::from_secs(40));
+    let armed = Supervised::new(record_carrying("active", Some(40_000))?, Vec::new());
+    assert_eq!(
+        armed.fallback.bypass_period(Duration::ZERO),
+        Duration::from_secs(80)
+    );
+    let fresh = Supervised::new(record_in("active")?, Vec::new());
+    assert_eq!(
+        fresh.fallback.bypass_period(Duration::ZERO),
+        Duration::from_secs(5)
+    );
+    Ok(())
+}
+
+#[test]
+fn each_bypass_cause_has_its_own_journal_line() {
+    let unanswered = bypass_line(
+        BypassCause::Unanswered(UpstreamFailure {
+            cause: UpstreamFailureCause::TimedOut,
+            unanswered_queries: 4,
+            unanswered_for_ms: 2_600,
+        }),
+        Duration::from_secs(5),
+    );
+    assert_eq!(
+        unanswered,
+        "upstream DNS not answering: every upstream resolver timed out for the last 4 queries over 3 seconds; ordinary DNS restored; Remap DNS returns after 5 seconds of continuous daemon health once they answer or the network offers other resolvers"
+    );
+    let unreachable = bypass_line(BypassCause::DaemonUnreachable, Duration::from_secs(10));
+    assert_eq!(
+        unreachable,
+        "the Remap daemon is not answering its resolver channel; ordinary DNS restored; Remap DNS returns after 10 seconds of continuous daemon health once the daemon answers again"
+    );
+    assert!(DAEMON_RESTART.contains("ordinary DNS stays in effect"));
+}
+
+#[test]
 fn a_bypassed_activation_expects_no_daemon_plan() -> io::Result<()> {
     let active = record_in("active")?;
     let bypassed = record_in("bypassed")?;
@@ -151,12 +199,9 @@ fn lifecycle_acceptance_takes_a_bypass_with_no_daemon_plan() -> io::Result<()> {
 fn status_explains_a_bypass_only_when_nothing_needs_recovery() -> io::Result<()> {
     let bypassed = record_in("bypassed")?;
     let active = record_in("active")?;
-    assert_eq!(
-        bypass_hint(Some(&bypassed), false),
-        Some(UPSTREAM_BYPASS_HINT)
-    );
+    assert_eq!(bypass_hint(Some(&bypassed), false), Some(BYPASS_HINT));
     assert_eq!(bypass_hint(Some(&bypassed), true), None);
     assert_eq!(bypass_hint(Some(&active), false), None);
-    assert!(UPSTREAM_BYPASS_HINT.len() <= 512);
+    assert!(BYPASS_HINT.len() <= 512);
     Ok(())
 }

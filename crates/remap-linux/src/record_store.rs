@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::path::{Component, Path};
+use std::time::Duration;
 
 use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg, OFlag, open, openat, renameat};
@@ -121,7 +122,10 @@ impl RootRecordStore {
                     || existing.before() != record.before()
                     || existing.owned() != record.owned()
                     || existing.manager() != record.manager()
-                    || !valid_phase_transition(existing.phase(), record.phase()) =>
+                    || !journaled_transition_admitted(
+                        (existing.phase(), existing.rearm_after_healthy()),
+                        (record.phase(), record.rearm_after_healthy()),
+                    ) =>
             {
                 return Err(ownership_error());
             }
@@ -171,6 +175,55 @@ fn read_record_from(directory: &OwnedFd) -> LinuxResult<Option<ActivationRecord>
         .read_to_end(&mut encoded)
         .map_err(|_error| store_error("the resolver activation record could not be read"))?;
     RecordCodec::decode(&encoded).map(Some)
+}
+
+/// A journaled save keeps the record's re-arm period, except that starting a
+/// bypass writes the period the next re-arm owes, and an update rollback may
+/// drop it from an active record for the generation it restores, which
+/// cannot read it. An activation that has
+/// bypassed before may also abandon an interrupted re-arm as bypassed: its
+/// abort restores the fresh capture and keeps the record (ADR-0036).
+fn journaled_transition_admitted(
+    (before, carried): (ActivationPhase, Option<Duration>),
+    (after, written): (ActivationPhase, Option<Duration>),
+) -> bool {
+    if carried != written {
+        return match written {
+            Some(_) => {
+                before == ActivationPhase::Active
+                    && after == (ActivationPhase::Bypassing { completed_steps: 0 })
+            }
+            None => before == ActivationPhase::Active && after == ActivationPhase::Active,
+        };
+    }
+    valid_phase_transition(before, after)
+        || written.is_some() && abandoned_rearm_transition(before, after)
+}
+
+const fn abandoned_rearm_transition(before: ActivationPhase, after: ActivationPhase) -> bool {
+    match (before, after) {
+        (ActivationPhase::Applying { completed_steps: 0 }, ActivationPhase::Bypassed) => true,
+        (
+            ActivationPhase::Aborting {
+                applied_steps,
+                completed_steps,
+            },
+            ActivationPhase::Bypassed,
+        ) => applied_steps == completed_steps,
+        _ => false,
+    }
+}
+
+/// Every later generation of an activation keeps its re-arm period; a re-arm
+/// of a record written before the period existed starts one.
+fn fallback_carried(expected: &ActivationRecord, successor: &ActivationRecord) -> bool {
+    match (
+        expected.rearm_after_healthy(),
+        successor.rearm_after_healthy(),
+    ) {
+        (None, Some(_)) => expected.phase() == ActivationPhase::Bypassed,
+        (carried, kept) => carried == kept,
+    }
 }
 
 const fn valid_phase_transition(before: ActivationPhase, after: ActivationPhase) -> bool {
@@ -289,6 +342,7 @@ impl ActivationStore for RootRecordStore {
             || successor.metadata().owner_uid() != expected.metadata().owner_uid()
             || successor.metadata().generation() <= expected.metadata().generation()
             || successor.owned() != expected.owned()
+            || !fallback_carried(expected, successor)
             || (successor.phase() == ActivationPhase::Active
                 && !active_manager_rebase_compatible(expected, successor))
         {
@@ -483,8 +537,88 @@ const fn ownership_error() -> LinuxError {
 
 #[cfg(test)]
 mod tests {
-    use super::{replacement_phases_admitted, valid_phase_transition};
+    use std::time::Duration;
+
+    use super::{
+        journaled_transition_admitted, replacement_phases_admitted, valid_phase_transition,
+    };
     use crate::ActivationPhase;
+
+    #[test]
+    fn only_starting_a_bypass_writes_the_rearm_period() {
+        let period = Some(Duration::from_secs(10));
+        let bypassing = |completed_steps| ActivationPhase::Bypassing { completed_steps };
+        assert!(journaled_transition_admitted(
+            (ActivationPhase::Active, None),
+            (bypassing(0), period)
+        ));
+        assert!(journaled_transition_admitted(
+            (ActivationPhase::Active, Some(Duration::from_secs(5))),
+            (bypassing(0), period)
+        ));
+        assert!(journaled_transition_admitted(
+            (bypassing(3), period),
+            (ActivationPhase::Bypassed, period)
+        ));
+        assert!(!journaled_transition_admitted(
+            (bypassing(0), period),
+            (bypassing(1), Some(Duration::from_secs(20)))
+        ));
+        assert!(!journaled_transition_admitted(
+            (ActivationPhase::Active, period),
+            (bypassing(0), None)
+        ));
+        assert!(journaled_transition_admitted(
+            (ActivationPhase::Active, period),
+            (ActivationPhase::Active, None)
+        ));
+        assert!(!journaled_transition_admitted(
+            (ActivationPhase::Bypassed, period),
+            (ActivationPhase::Bypassed, None)
+        ));
+        assert!(!journaled_transition_admitted(
+            (ActivationPhase::Active, None),
+            (ActivationPhase::Active, period)
+        ));
+    }
+
+    #[test]
+    fn only_an_activation_that_bypassed_abandons_a_rearm_as_bypassed() {
+        let period = Some(Duration::from_secs(10));
+        let applying = ActivationPhase::Applying { completed_steps: 0 };
+        let restored = ActivationPhase::Aborting {
+            applied_steps: 2,
+            completed_steps: 2,
+        };
+        let halfway = ActivationPhase::Aborting {
+            applied_steps: 2,
+            completed_steps: 1,
+        };
+        assert!(journaled_transition_admitted(
+            (applying, period),
+            (ActivationPhase::Bypassed, period)
+        ));
+        assert!(journaled_transition_admitted(
+            (restored, period),
+            (ActivationPhase::Bypassed, period)
+        ));
+        assert!(!journaled_transition_admitted(
+            (halfway, period),
+            (ActivationPhase::Bypassed, period)
+        ));
+        assert!(!journaled_transition_admitted(
+            (ActivationPhase::Applying { completed_steps: 1 }, period),
+            (ActivationPhase::Bypassed, period)
+        ));
+        assert!(!journaled_transition_admitted(
+            (applying, None),
+            (ActivationPhase::Bypassed, None)
+        ));
+        assert!(!journaled_transition_admitted(
+            (restored, None),
+            (ActivationPhase::Bypassed, None)
+        ));
+    }
 
     #[test]
     fn a_bypass_is_journaled_like_a_restoration_and_ends_in_a_kept_record() {
