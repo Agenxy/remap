@@ -46,8 +46,8 @@ def normalize_macos_sdk_metadata(
 ) -> None:
     """Correct Apple Swift's stale SDK stamp before product code signing.
 
-    The pinned Xcode 27 beta passes the macOS 27 SDK to Swift correctly, but its Swift
-    linker currently records the deployment target as both `minos` and `sdk`.
+    The pinned Xcode passes the macOS SDK to Swift correctly, but SwiftPM still
+    records the deployment target as both `minos` and `sdk` (27.2, 27B52).
     Apple's vtool is the narrow supported editor for this load command. Every
     rewritten build product is immediately ad-hoc signed so no invalid Mach-O
     artifact remains available to a later packaging step.

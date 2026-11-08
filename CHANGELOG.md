@@ -6,6 +6,11 @@ platform claims separate.
 
 ## Unreleased
 
+- macOS builds now pin the released Xcode 27.2 (27B52). The 27.0 beta builds
+  27A5237l and 27A5252f are no longer accepted. Apple has withdrawn them, and
+  no development machine or CI image still runs them. SwiftPM in 27.2 still
+  stamps the deployment target as the SDK version, so the `vtool`
+  normalization stays.
 - Every release can be rehearsed on its own channel before it ships
   (ADR-0035). `make package-macos REMAP_REHEARSAL_PACKAGE=1` builds
   `Remap-<version>-<arch>-rehearsal.pkg`, signed by a rehearsal key named by
