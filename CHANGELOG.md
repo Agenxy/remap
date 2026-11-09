@@ -6,6 +6,15 @@ platform claims separate.
 
 ## Unreleased
 
+- Remap DNS keeps working when two network services carry DNS at once, as
+  Wi-Fi and a wired adapter on the same network do. Activation, which every
+  install and update runs, now picks the service macOS's global resolver
+  uses, as supervision already did (ADR-0036). Before, it refused both as
+  split DNS, and local names stopped resolving. `remap system status` now
+  says why DNS is falling back, for example "several network services have
+  their own DNS and macOS does not say which one it uses
+  (E_RESOLVER_SCOPE)", and that it comes back by itself. `remap doctor`
+  points at `remap system status`, not the root-only `remap-system status`.
 - macOS builds now pin the released Xcode 27.2 (27B52). The 27.0 beta builds
   27A5237l and 27A5252f are no longer accepted. Apple has withdrawn them, and
   no development machine or CI image still runs them. SwiftPM in 27.2 still

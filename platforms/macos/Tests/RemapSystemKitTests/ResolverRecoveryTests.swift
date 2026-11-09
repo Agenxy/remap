@@ -348,10 +348,11 @@ func statusKeepsTheActivationKeysAndAddsTheLastBypass() throws {
     #expect(Set(object.keys) == ["payload", "sha256", "lastResolverBypass"])
     #expect(object["sha256"] as? String == record.sha256)
     let lines = status.bypassLines()
-    #expect(lines.count == 3)
+    #expect(lines.count == 4)
     #expect(lines[0].contains("E_RESOLVER_SAFE_BYPASS"))
     #expect(lines[1].contains("E_RESOLVER_NETWORK_UNOBSERVED"))
-    #expect(lines[2].contains("not yet"))
+    #expect(lines[2].contains("Meaning     the network exposed no usable DNS server"))
+    #expect(lines[3].contains("not yet"))
 
     let unreadable = NativeResolverStatus(record: nil, bypass: nil, bypassError: "damaged")
     #expect(unreadable.bypassLines() == ["  Last fallback record unreadable: damaged"])

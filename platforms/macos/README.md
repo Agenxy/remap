@@ -7,8 +7,11 @@ prior DNS dictionaries in a root-owned integrity-covered activation record,
 and applies or conditionally restores loopback DNS without invoking
 `networksetup`, `scutil`, `/etc/hosts`, or a shell script.
 
-The source backend deliberately refuses multiple active DNS service scopes. It
-will not flatten split-DNS or VPN resolvers and risk leaking private queries.
+The source backend never flattens several resolvers into one. When more than
+one service carries DNS, as Wi-Fi and a wired adapter on the same network do,
+it configures the one macOS's global resolver uses, and moves with it when that
+changes (ADR-0036). It refuses services it cannot tell apart, so split-DNS and
+VPN resolvers are never merged and private queries never leak.
 Launchd owns the privileged loopback sockets; `remapd` consumes them through
 socket activation and runs as the signed-in non-root account.
 

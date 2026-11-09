@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import RemapSystemKit
 
 /// High-level native installer used by the privileged source-install executable.
 public struct MacOSInstaller: Sendable {
@@ -319,7 +320,14 @@ public struct MacOSInstaller: Sendable {
             transactions: transactions,
             services: services,
             dns: dns,
-            dnsTurnedOff: dnsState.turnedOff
+            dnsTurnedOff: dnsState.turnedOff,
+            dnsFallback: dnsState.fallback.map { fallback in
+                MacOSInstallerDNSFallback(
+                    reasonCode: fallback.reasonCode,
+                    meaning: bypassReasonMeaning(fallback.reasonCode),
+                    bypassedAtMilliseconds: fallback.bypassedAtMilliseconds
+                )
+            }
         )
     }
 
