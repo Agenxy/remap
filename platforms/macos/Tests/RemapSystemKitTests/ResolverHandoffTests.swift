@@ -74,7 +74,7 @@ func twoUsableServicesBypassPromptlyAndRecordWhy() async throws {
     await task.value
     monitor.finish()
 
-    #expect(log.payloads().first?.reasonCode == "E_RESOLVER_PLAN")
+    #expect(log.payloads().first?.reasonCode == "E_RESOLVER_SCOPE")
     #expect(log.payloads().first?.outcomeCode == "E_RESOLVER_SAFE_BYPASS")
     #expect(try mac.network.loopbackServiceIDs().isEmpty)
     #expect(mac.store.current?.payload.phase == .prepared)
