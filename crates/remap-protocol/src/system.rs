@@ -178,7 +178,7 @@ impl UpstreamFailure {
             ),
             Some(
                 "names Remap does not own fall back to ordinary DNS; a VPN's DNS leak protection \
-                 can block the resolvers Remap forwards to; 'remap-system status' on macOS and \
+                 can block the resolvers Remap forwards to; 'remap system status' on macOS and \
                  the remap-resolver.service journal on Linux show the fallback"
                     .to_owned(),
             ),

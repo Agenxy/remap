@@ -145,7 +145,7 @@ fn write_doctor(writer: &mut dyn Write, report: &DoctorReport) -> io::Result<()>
     ) {
         writeln!(
             writer,
-            "The system resolver is not returning Remap's answer. On macOS, `remap-system status` shows the recorded fallback reason."
+            "The system resolver is not returning Remap's answer. On macOS, `remap system status` says why and whether it comes back by itself."
         )?;
     }
     if report.dns_upstream.is_some() {

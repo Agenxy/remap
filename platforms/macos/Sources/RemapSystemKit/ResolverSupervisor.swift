@@ -277,7 +277,10 @@ public final class ResolverSupervisor: Sendable {
 
 private let monitorDegradedCode = "E_RESOLVER_MONITOR"
 let upstreamUnansweredCode = "E_RESOLVER_UPSTREAM_UNANSWERED"
-private let networkUnobservedCode = "E_RESOLVER_NETWORK_UNOBSERVED"
+let networkUnobservedCode = "E_RESOLVER_NETWORK_UNOBSERVED"
+/// Several services carry DNS and the global resolver does not say which
+/// one macOS uses (ADR-0036).
+let resolverScopeCode = "E_RESOLVER_SCOPE"
 
 /// The supervisor loop's own memory between reconciliations.
 private struct SupervisorProgress {
@@ -349,6 +352,8 @@ private func supervisorErrorCode(_ error: Error) -> String {
         "E_RESOLVER_RECONCILIATION"
     case let error as ResolverError where error.isIncompleteNetworkObservation:
         networkUnobservedCode
+    case ResolverError.unsupportedResolverScope:
+        resolverScopeCode
     case is ResolverError:
         "E_RESOLVER_PLAN"
     default:

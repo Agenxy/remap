@@ -16,6 +16,11 @@ applies ADR-0030's damping on Linux. Its native effects are proven against a
 modelled systemd-resolved link in the `remap-linux` tests; neither it nor the
 `NetworkManager` path has yet run on a live Linux host.
 
+Amended 2026-11-09: activation follows the same rule, and a fallback says
+why ("Activation picks the service macOS uses, and a fallback says why"
+below). This adds the optional `dnsFallback` key to the installer status and
+the stable reason code `E_RESOLVER_SCOPE` to the bypass record.
+
 ## Context
 
 On 31 October at about 01:15Z the owner's Mac had Private Internet Access
@@ -335,6 +340,49 @@ status`, `remap doctor`, and MCP status, which gain `dns_turned_off`
 only while no resolver plan is active, so a stale record can never
 contradict a supervisor that has re-armed. `remap doctor`'s Lookup line says
 "off (turned off by the owner at ...)" instead of a bare "unresolved".
+
+### Activation picks the service macOS uses, and a fallback says why (amended 2026-11-09)
+
+On 9 November the owner plugged a USB-C Ethernet adapter into an office
+network while Wi-Fi was also joined to it. Each service took its own DHCP
+resolvers. The installed build, from before this ADR, saw two services
+carrying DNS, refused them as split DNS, and fell back to ordinary DNS.
+`agenxy.internal` and every other local name stopped resolving while the
+sites themselves kept answering on loopback. `remap system status` said
+"DNS: inactive (0 effective service(s))" and "Recovery needed: no".
+`remap doctor` said "Lookup unresolved" and pointed at `remap-system
+status`, which is not on `PATH` and needs root.
+
+Supervision under this ADR already follows the service the global resolver
+names. Activation did not: it still demanded exactly one service with DNS,
+and every install and update activates afresh, so an update on that network
+would have refused and rolled back. Activation, and `remap-system plan`,
+now choose their one service by the same rule. The only service with a
+usable resolver is chosen. When several have one, the service whose
+effective servers are the global resolver's is chosen, and macOS's primary
+ranking breaks a tie between services on the same resolvers. Services the
+global resolver cannot tell apart are still refused. Two resolvers are never
+merged into one plan, so a split-DNS or VPN resolver still never receives
+another network's queries.
+
+A fallback now explains itself where the owner looks:
+
+- The supervisor records a refusal of several services as the stable reason
+  code `E_RESOLVER_SCOPE` instead of the generic `E_RESOLVER_PLAN`.
+  `remap-system status` gives it, an unobserved network, and an unanswering
+  daemon a plain meaning, as it already did for unanswered upstreams.
+- The installer status gains the optional key `dnsFallback`
+  (`reasonCode`, `meaning`, `bypassedAtMilliseconds`). The root installer
+  service reads it from the bypass record while a prepared activation waits
+  to re-arm. Like the record, it holds no name, address, or traffic. An older
+  service omits it, and the CLI still decodes the status.
+- `remap system status` says, for example: "falling back to ordinary DNS on
+  its own since 2026-11-09T23:47:00Z: several network services have their own
+  DNS and macOS does not say which one it uses (E_RESOLVER_SCOPE); Remap DNS
+  comes back by itself when that clears". "Recovery needed" keeps meaning an
+  interrupted lifecycle transaction, which a fallback is not.
+- `remap doctor` and the upstream diagnostic point at `remap system status`,
+  which every install puts on `PATH`.
 
 ## Alternatives considered
 

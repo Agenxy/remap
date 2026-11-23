@@ -47,7 +47,11 @@ public struct SystemResolver: Sendable {
         guard !services.isEmpty else {
             throw ResolverError.noEnabledDNSService
         }
-        let plan = try validatedPlan(services)
+        let chosen = try activationServiceID(
+            usable: services.map(\.serviceID),
+            snapshot: SystemNetworkConfiguration().snapshot()
+        )
+        let plan = try validatedPlan(services.filter { $0.serviceID == chosen })
         guard !plan.upstreams.isEmpty else {
             throw ResolverError.noUsableUpstream
         }
@@ -100,16 +104,18 @@ public struct SystemResolver: Sendable {
         // Turning DNS on ends the owner's deliberate turn-off (ADR-0036).
         try DNSTurnedOffStore(directory: store.directory).clear()
         try DNSListenerProbe.run()
-        let handles = try serviceHandles(
+        let usable = try serviceHandles(
             preferences: makePreferences(),
             dynamicStore: makeDynamicStore()
         ).filter { !$0.upstreams.isEmpty }
-        guard !handles.isEmpty else {
+        guard !usable.isEmpty else {
             throw ResolverError.noUsableUpstream
         }
-        guard handles.count == 1 else {
-            throw ResolverError.unsupportedResolverScope(handles.count)
-        }
+        let chosen = try activationServiceID(
+            usable: usable.map(\.serviceID),
+            snapshot: SystemNetworkConfiguration().snapshot()
+        )
+        let handles = usable.filter { $0.serviceID == chosen }
         let payload = try ActivationPayload(
             ownerUID: ownerUID,
             createdAtMilliseconds: UInt64(Date().timeIntervalSince1970 * 1000),

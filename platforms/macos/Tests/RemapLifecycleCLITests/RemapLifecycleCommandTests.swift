@@ -125,3 +125,35 @@ func systemStatusTellsDNSOnFallbackOffOnPurposeAndNeverActivatedApart() throws {
     // An older service sends no turned-off key and still decodes.
     #expect(try status(active: false, configured: 0, turnedOff: false).dnsTurnedOff == nil)
 }
+
+/// On 9 November the owner read "DNS: inactive" beside "Recovery needed: no"
+/// and could not tell why lookups failed. A fallback now says why, in plain
+/// words, and that it comes back by itself.
+@Test
+func systemStatusSaysWhyDNSIsFallingBack() throws {
+    let json = #"""
+    {"schemaVersion":1,"generations":[],"transactions":[],"services":[],\#
+    "dns":{"active":false,"configuredServiceCount":1,"effectiveRemapServiceCount":0},\#
+    "dnsFallback":{"reasonCode":"E_RESOLVER_SCOPE","meaning":"several network services have their own DNS \#
+    and macOS does not say which one it uses","bypassedAtMilliseconds":1794268800000}}
+    """#
+    let status = try JSONDecoder().decode(MacOSInstallerStatus.self, from: Data(json.utf8))
+    let line = RemapLifecycleCLIOutput.dnsLine(status)
+    #expect(line.hasPrefix("falling back to ordinary DNS on its own since 2026-11-10T00:00:00Z: "))
+    let reason = "several network services have their own DNS and macOS does not say which one it uses"
+    #expect(line.contains("\(reason) (E_RESOLVER_SCOPE)"))
+    #expect(line.hasSuffix("; Remap DNS comes back by itself when that clears"))
+    #expect(!line.contains("remap-system"))
+    // A reason Remap has no words for still names its stable code.
+    let coded = RemapLifecycleCLIOutput.fallbackLine(
+        MacOSInstallerDNSFallback(
+            reasonCode: "E_RESOLVER_PLAN",
+            meaning: nil,
+            bypassedAtMilliseconds: 1_794_268_800_000
+        )
+    )
+    #expect(coded.contains(": E_RESOLVER_PLAN; "))
+    // An older service sends no fallback key and still decodes.
+    #expect(RemapLifecycleCLIOutput.fallbackLine(nil)
+        == "falling back to ordinary DNS on its own; Remap DNS comes back by itself when that clears")
+}

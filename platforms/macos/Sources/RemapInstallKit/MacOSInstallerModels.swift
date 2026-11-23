@@ -221,6 +221,23 @@ public struct MacOSInstallerStatus: Codable, Equatable, Sendable {
     /// (ADR-0036). Absent from an older service, and while DNS is active,
     /// falling back on its own, or was never activated.
     public var dnsTurnedOff: DNSTurnedOffPayload?
+    /// Why DNS is falling back to ordinary DNS on its own, while it waits to
+    /// re-arm (ADR-0036). Absent from an older service, and in every other state.
+    public var dnsFallback: MacOSInstallerDNSFallback?
+}
+
+/// The supervisor's recorded reason for falling back, in stable codes and
+/// times only: never a name, an address, or traffic.
+public struct MacOSInstallerDNSFallback: Codable, Equatable, Sendable {
+    public let reasonCode: String
+    public let meaning: String?
+    public let bypassedAtMilliseconds: UInt64
+
+    public init(reasonCode: String, meaning: String?, bypassedAtMilliseconds: UInt64) {
+        self.reasonCode = reasonCode
+        self.meaning = meaning
+        self.bypassedAtMilliseconds = bypassedAtMilliseconds
+    }
 }
 
 public struct MacOSInstallerRecoveryResult: Codable, Equatable, Sendable {
