@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use crate::health::{self, HealthReport};
+use crate::receipt::CommitReceipt;
 use crate::status_summary::status_summary;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,9 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use remap_protocol::{
-    ApplyResult, Change, Command, CommandResult, ControlClient, Diagnostic, ListResult,
-    MAX_REVISION_WAIT_MS, MappingView, PreviewResult, RegistryStatus, ResolutionResult,
-    RevisionNotice, ValidationResult,
+    Change, Command, CommandResult, ControlClient, Diagnostic, ListResult, MAX_REVISION_WAIT_MS,
+    MappingView, PreviewResult, RegistryStatus, ResolutionResult, RevisionNotice, ValidationResult,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -84,7 +84,7 @@ impl RemapMcp {
         expected_revision: u64,
         operation_id: String,
         change: Change,
-    ) -> Result<ToolSuccess<ApplyResult>, CallToolResult> {
+    ) -> Result<ToolSuccess<CommitReceipt>, CallToolResult> {
         self.apply_batch(expected_revision, operation_id, vec![change])
             .await
     }
@@ -94,7 +94,7 @@ impl RemapMcp {
         expected_revision: u64,
         operation_id: String,
         changes: Vec<Change>,
-    ) -> Result<ToolSuccess<ApplyResult>, CallToolResult> {
+    ) -> Result<ToolSuccess<CommitReceipt>, CallToolResult> {
         let command = Command::Apply {
             expected_revision,
             operation_id,
@@ -107,9 +107,20 @@ impl RemapMcp {
                 } else {
                     format!("No state change; revision remains {}.", result.revision)
                 };
-                Ok(success(summary, result))
+                let status = self.status_after_commit().await;
+                Ok(success(summary, CommitReceipt::new(result, status)))
             }
             _ => Err(unexpected_result("an apply receipt")),
+        }
+    }
+
+    /// Reads registry status after a commit, for the receipt. The commit has
+    /// already happened, so a failed read leaves the counts out of the
+    /// receipt instead of failing the tool.
+    async fn status_after_commit(&self) -> Option<RegistryStatus> {
+        match self.client.execute(Command::Status).await {
+            Ok(CommandResult::Status(status)) => Some(status),
+            _ => None,
         }
     }
 }
@@ -301,14 +312,14 @@ impl RemapMcp {
     /// Create or retarget one mapping using optimistic concurrency and idempotent retry. Warns, without refusing, when a loopback HTTP target refuses a TCP connection; no other target is probed and no bytes are sent.
     #[tool(
         name = "remap_set",
-        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<ApplyResult>>(),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<CommitReceipt>>(),
         annotations(title = "Set a Remap mapping", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
         meta = ui::model_tool_meta()
     )]
     async fn set(
         &self,
         Parameters(params): Parameters<SetParams>,
-    ) -> Result<ToolSuccess<ApplyResult>, CallToolResult> {
+    ) -> Result<ToolSuccess<CommitReceipt>, CallToolResult> {
         let change = Change::Set {
             landing: params.landing,
             pattern: params.pattern,
@@ -323,14 +334,14 @@ impl RemapMcp {
     /// Enable one existing mapping using optimistic concurrency and idempotent retry. Warns, without refusing, when a loopback HTTP target refuses a TCP connection; no other target is probed and no bytes are sent.
     #[tool(
         name = "remap_enable",
-        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<ApplyResult>>(),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<CommitReceipt>>(),
         annotations(title = "Enable a Remap mapping", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
         meta = ui::model_tool_meta()
     )]
     async fn enable(
         &self,
         Parameters(params): Parameters<MutationParams>,
-    ) -> Result<ToolSuccess<ApplyResult>, CallToolResult> {
+    ) -> Result<ToolSuccess<CommitReceipt>, CallToolResult> {
         let change = Change::Enable {
             pattern: params.pattern,
         };
@@ -341,14 +352,14 @@ impl RemapMcp {
     /// Disable one mapping without deleting it, using revision and idempotency guards.
     #[tool(
         name = "remap_disable",
-        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<ApplyResult>>(),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<CommitReceipt>>(),
         annotations(title = "Disable a Remap mapping", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
         meta = ui::model_tool_meta()
     )]
     async fn disable(
         &self,
         Parameters(params): Parameters<MutationParams>,
-    ) -> Result<ToolSuccess<ApplyResult>, CallToolResult> {
+    ) -> Result<ToolSuccess<CommitReceipt>, CallToolResult> {
         let change = Change::Disable {
             pattern: params.pattern,
         };
@@ -359,14 +370,14 @@ impl RemapMcp {
     /// Delete one mapping using optimistic concurrency and idempotent retry.
     #[tool(
         name = "remap_remove",
-        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<ApplyResult>>(),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<CommitReceipt>>(),
         annotations(title = "Remove a Remap mapping", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
         meta = ui::model_tool_meta()
     )]
     async fn remove(
         &self,
         Parameters(params): Parameters<MutationParams>,
-    ) -> Result<ToolSuccess<ApplyResult>, CallToolResult> {
+    ) -> Result<ToolSuccess<CommitReceipt>, CallToolResult> {
         let change = Change::Remove {
             pattern: params.pattern,
         };
@@ -377,14 +388,14 @@ impl RemapMcp {
     /// Commit an ordered change set atomically using revision and idempotency guards. Warns, without refusing, when a loopback HTTP target refuses a TCP connection; no other target is probed and no bytes are sent.
     #[tool(
         name = "remap_apply",
-        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<ApplyResult>>(),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ToolSuccess<CommitReceipt>>(),
         annotations(title = "Apply Remap changes", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
         meta = ui::model_tool_meta()
     )]
     async fn apply(
         &self,
         Parameters(params): Parameters<ApplyParams>,
-    ) -> Result<ToolSuccess<ApplyResult>, CallToolResult> {
+    ) -> Result<ToolSuccess<CommitReceipt>, CallToolResult> {
         validate_change_count(params.changes.len()).map_err(failure)?;
         let changes = params.changes.into_iter().map(Change::from).collect();
         self.apply_batch(params.expected_revision, params.operation_id, changes)
