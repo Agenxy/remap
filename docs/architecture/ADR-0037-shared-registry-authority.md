@@ -173,8 +173,20 @@ control path. None needs administrator approval or a new install.
   action, done once.
 - **Supgang, wanted but not blocking**: the caller's attested node ID on an
   exposed stream. With it, the operation log names the author, and the
-  authority can limit `--shared` writes to members the owner chooses. This is
-  requested from Supgang's lead and recorded here as v1.1.
+  authority can limit `--shared` writes to members the owner chooses.
+  Supgang's lead agreed the form on 24 November:
+  - It is an opt-in identity preamble per exposure (`identity_preamble = v1`).
+  - It is one fixed-size, versioned frame that Supgang writes before any
+    service bytes: the caller's 32-byte node ID and a member-or-guest flag.
+  - Its trust rests on only Supgang dialling the service. A loopback TCP
+    listener cannot prove that, since any local process could forge the frame.
+    So when Remap adopts it, the registry service moves to a Unix socket that
+    only the `supgang` user can open, and it refuses any connection that does
+    not begin with a valid preamble.
+
+  The Supgang ADR amendment is due 11 December 2026, and the implementation
+  is targeted for 8 January 2027. Remap's adoption, recorded here as v1.1,
+  follows that implementation.
 
 ## Consequences
 
