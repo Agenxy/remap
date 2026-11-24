@@ -6,6 +6,13 @@ platform claims separate.
 
 ## Unreleased
 
+- The Remap panel that opens for a change now shows the mapping counts at the
+  committed revision and the mappings the change left in place. Before, a host
+  that opens a fresh panel per result and lets it call no tools showed the new
+  revision beside "Not available" counts and "Awaiting registry state". Every
+  mutation tool's result gains an optional `registry` field with the status
+  read at exactly that revision (ADR-0005).
+
 - Remap DNS keeps working when two network services carry DNS at once, as
   Wi-Fi and a wired adapter on the same network do. Activation, which every
   install and update runs, now picks the service macOS's global resolver

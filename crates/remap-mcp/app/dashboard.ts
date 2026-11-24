@@ -44,8 +44,25 @@ const accept = (result: unknown): void => {
     const summary = asString(envelope.summary) ?? "Remap returned a result.";
     state.outcome = { kind: classifyOutcome(envelope.data), summary, data: envelope.data };
     setNotice(summary, false);
+    adoptReceiptRegistry(data);
   }
   draw();
+};
+
+// A commit receipt carries the registry counts read at its own revision, so a
+// panel the host opened for that one result can show them without calling a
+// tool. Counts from another revision, or older than what the panel holds, are
+// not adopted.
+const adoptReceiptRegistry = (data: JsonRecord | null): void => {
+  const registry = asRecord(data?.registry);
+  if (!isStatus(registry)) return;
+  const revision = resultDataRevision(registry);
+  if (revision === null || revision !== resultDataRevision(data)) return;
+  const held = resultDataRevision(state.status) ?? resultDataRevision(state.list);
+  if (held !== null && revision < held) return;
+  state.status = registry;
+  state.maintenance = asRecord(registry.maintenance);
+  if (resultDataRevision(state.list) !== revision) state.list = null;
 };
 
 const isStatus = (data: JsonRecord | null): data is JsonRecord =>
