@@ -7,8 +7,11 @@ prior DNS dictionaries in a root-owned integrity-covered activation record,
 and applies or conditionally restores loopback DNS without invoking
 `networksetup`, `scutil`, `/etc/hosts`, or a shell script.
 
-The source backend deliberately refuses multiple active DNS service scopes. It
-will not flatten split-DNS or VPN resolvers and risk leaking private queries.
+The source backend never flattens several resolvers into one. When more than
+one service carries DNS, as Wi-Fi and a wired adapter on the same network do,
+it configures the one macOS's global resolver uses, and moves with it when that
+changes (ADR-0036). It refuses services it cannot tell apart, so split-DNS and
+VPN resolvers are never merged and private queries never leak.
 Launchd owns the privileged loopback sockets; `remapd` consumes them through
 socket activation and runs as the signed-in non-root account.
 
@@ -74,10 +77,11 @@ partial stage. Recovery reports and token-binds their exact metadata and digest;
 invalid or partial bytes are never executed, and normal lifecycle work never
 silently deletes a possibly active helper from another process.
 
-The pinned Xcode 27 beta currently passes the macOS 27 SDK to Swift while its
-Swift driver stamps `LC_BUILD_VERSION sdk 15.0`. The package builder repairs
-that Apple-toolchain defect with Apple's own `vtool`, then revalidates every
-Mach-O as macOS 15 minimum / SDK 27.0 before signing or packaging. It never
+The pinned Xcode, 27.2 (27B52) as of its review, still passes the macOS SDK to
+Swift while SwiftPM stamps `LC_BUILD_VERSION sdk 15.0`, the deployment target.
+The 27 betas had the same defect. The package builder repairs it with Apple's
+own `vtool`, then revalidates every Mach-O as macOS 15 minimum and the SDK
+version that `XCODE_VERSION` names before signing or packaging. It never
 changes executable instructions or claims a different minimum operating
 system. This normalization remains covered by byte-level release tests and is
-required only while the pinned Apple beta emits the incorrect load command.
+required only while the pinned Xcode emits the incorrect load command.

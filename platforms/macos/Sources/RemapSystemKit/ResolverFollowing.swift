@@ -50,6 +50,22 @@ func resolverCarrier(_ snapshot: NetworkSnapshot) -> ResolverCarrier {
     return .unattributed
 }
 
+/// The one service an activation configures among those with a usable
+/// resolver: the only one, or, when several have one, the service the global
+/// resolver says macOS uses, the rule supervision already follows. Wi-Fi and
+/// a wired adapter joined to the same network each carry DNS, and that is
+/// not split DNS. Several that the global resolver cannot tell apart are
+/// refused, as before.
+func activationServiceID(usable: [String], snapshot: NetworkSnapshot) throws -> String {
+    if usable.count == 1 {
+        return usable[0]
+    }
+    guard case let .service(serviceID) = resolverCarrier(snapshot), usable.contains(serviceID) else {
+        throw ResolverError.unsupportedResolverScope(usable.count)
+    }
+    return serviceID
+}
+
 /// What reconciliation should do about the resolver macOS uses.
 enum ResolverFollowing: Equatable, Sendable {
     /// The recorded service carries DNS; reconcile it as before.

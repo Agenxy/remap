@@ -5,6 +5,7 @@ mod health;
 mod lifecycle;
 mod output;
 mod params;
+mod receipt;
 mod resources;
 mod server;
 mod status_summary;

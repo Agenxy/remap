@@ -98,12 +98,26 @@ enum RemapLifecycleCLIOutput {
             return "active (\(dns.effectiveRemapServiceCount) effective service(s))"
         }
         if dns.configuredServiceCount > 0 {
-            return "falling back to ordinary DNS on its own; `remap-system status` shows why"
+            return fallbackLine(status.dnsFallback)
         }
         if let turnedOff = status.dnsTurnedOff {
             return "\(turnedOff.statusLine); turn it on with \(turnedOff.turnOnCommand)"
         }
         return "not activated"
+    }
+
+    /// A fallback says why, in plain words where Remap has them, and that it
+    /// comes back by itself, so it never reads as a fault the owner must fix.
+    static func fallbackLine(_ fallback: MacOSInstallerDNSFallback?) -> String {
+        let head = "falling back to ordinary DNS on its own"
+        let tail = "Remap DNS comes back by itself when that clears"
+        guard let fallback else {
+            return "\(head); \(tail)"
+        }
+        let since = Date(timeIntervalSince1970: TimeInterval(fallback.bypassedAtMilliseconds) / 1000)
+            .formatted(.iso8601)
+        let reason = fallback.meaning.map { "\($0) (\(fallback.reasonCode))" } ?? fallback.reasonCode
+        return "\(head) since \(since): \(plain(reason)); \(tail)"
     }
 
     static func preview(title: String, effects: [String]) -> String {

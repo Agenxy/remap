@@ -139,10 +139,20 @@ public struct NativeResolverStatus: Encodable, Sendable {
 }
 
 /// Plain words for a reason whose code alone does not say what to check.
-func bypassReasonMeaning(_ code: String) -> String? {
-    guard code == upstreamUnansweredCode else { return nil }
-    return "upstream DNS not answering; every resolver Remap forwards to stopped replying, "
-        + "as a VPN's DNS leak protection causes when it blocks them"
+public func bypassReasonMeaning(_ code: String) -> String? {
+    switch code {
+    case upstreamUnansweredCode:
+        "upstream DNS not answering; every resolver Remap forwards to stopped replying, "
+            + "as a VPN's DNS leak protection causes when it blocks them"
+    case resolverScopeCode:
+        "several network services have their own DNS and macOS does not say which one it uses"
+    case networkUnobservedCode:
+        "the network exposed no usable DNS server, as while it is asleep, rejoining, or down"
+    case "E_RESOLVER_CHANNEL":
+        "remapd did not answer the resolver supervisor in time"
+    default:
+        nil
+    }
 }
 
 private func statusTimestamp(_ milliseconds: UInt64) -> String {

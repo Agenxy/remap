@@ -175,7 +175,7 @@ Build and verify every workspace crate archive, then create the deterministic
 unsigned source-artifact evidence set:
 
 ```sh
-DEVELOPER_DIR=/Applications/Xcode-27.0.0-Beta.5.app/Contents/Developer \
+DEVELOPER_DIR=/Applications/Xcode-27.2.0.app/Contents/Developer \
   make release-evidence
 ```
 
@@ -184,7 +184,7 @@ instead of replacing an existing evidence directory. Verify the same archive
 and evidence bytes later:
 
 ```sh
-DEVELOPER_DIR=/Applications/Xcode-27.0.0-Beta.5.app/Contents/Developer \
+DEVELOPER_DIR=/Applications/Xcode-27.2.0.app/Contents/Developer \
   make release-evidence-verify
 ```
 
@@ -198,7 +198,7 @@ artifact set:
 
 ```sh
 mise install
-DEVELOPER_DIR=/Applications/Xcode-27.0.0-Beta.5.app/Contents/Developer \
+DEVELOPER_DIR=/Applications/Xcode-27.2.0.app/Contents/Developer \
   mise exec -- uv run python -m tools.remap_release_evidence create \
   --artifact remap-0.2.0.crate=target/package/remap-0.2.0.crate \
   --evidence dist/remap-0.2.0-evidence
@@ -207,7 +207,7 @@ DEVELOPER_DIR=/Applications/Xcode-27.0.0-Beta.5.app/Contents/Developer \
 Verify the same bytes later:
 
 ```sh
-DEVELOPER_DIR=/Applications/Xcode-27.0.0-Beta.5.app/Contents/Developer \
+DEVELOPER_DIR=/Applications/Xcode-27.2.0.app/Contents/Developer \
   mise exec -- uv run python -m tools.remap_release_evidence verify \
   --artifact remap-0.2.0.crate=target/package/remap-0.2.0.crate \
   --evidence dist/remap-0.2.0-evidence

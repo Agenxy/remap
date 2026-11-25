@@ -295,7 +295,8 @@ public enum ResolverError: Error, CustomStringConvertible, Equatable {
         case let .secureStorage(operation):
             "The root-owned activation store could not \(operation)."
         case let .unsupportedResolverScope(count):
-            "Remap found \(count) active DNS service scopes; this source backend refuses to flatten split DNS."
+            "Remap found \(count) network services with their own DNS, and macOS does not say which one it uses; "
+                + "Remap keeps ordinary DNS rather than merge them."
         }
     }
 }

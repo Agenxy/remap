@@ -235,6 +235,39 @@ test("renders preview diffs and all five mutation receipts", async ({ page }) =>
   expect(errors).toEqual([]);
 });
 
+test("a panel opened for one commit shows its counts and the changed mapping", async ({ page }) => {
+  // 24 November: a host that renders a fresh panel per tool result, and lets
+  // it call no tools, showed revision 37 beside "Not available" counts.
+  const errors = runtimeErrors(page);
+  await mount(page);
+  const frame = page.frameLocator("#app");
+  const counted = { ...receipt("set"), registry: { ...statusData(4), mapping_count: 8 } };
+  await send(page, "ui/notifications/tool-result", toolResult("Committed.", counted));
+  await expect(frame.locator("#revision")).toHaveText("4");
+  await expect(frame.locator("#total")).toHaveText("8");
+  await expect(frame.locator("#enabled")).toHaveText("1");
+  await expect(frame.locator("#count")).toHaveText("1 changed");
+  await expect(frame.locator("#mappings")).toContainText("127.0.0.1:6173");
+  await expect(frame.locator("#mappings")).toContainText("Other mappings: not read yet");
+  await expect(frame.locator("#outcome")).toContainText("set-operation");
+  expect(errors).toEqual([]);
+});
+
+test("a commit receipt's counts from another revision are not shown", async ({ page }) => {
+  const errors = runtimeErrors(page);
+  await mount(page);
+  const frame = page.frameLocator("#app");
+  const stale = { ...receipt("set"), registry: statusData(3) };
+  await send(page, "ui/notifications/tool-result", toolResult("Committed.", stale));
+  await expect(frame.locator("#revision")).toHaveText("4");
+  await expect(frame.locator("#total")).toHaveText("Not available");
+  await send(page, "ui/notifications/tool-result", toolResult("Status.", statusData(6)));
+  const older = { ...receipt("set"), registry: { ...statusData(4), mapping_count: 9 } };
+  await send(page, "ui/notifications/tool-result", toolResult("Committed.", older));
+  await expect(frame.locator("#total")).toHaveText("1");
+  expect(errors).toEqual([]);
+});
+
 test("shows landing-only changes and advisories", async ({ page }) => {
   const errors = runtimeErrors(page);
   await mount(page);

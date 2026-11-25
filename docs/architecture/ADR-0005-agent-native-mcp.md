@@ -179,3 +179,17 @@ remains useful without an agent. Neither is a degraded wrapper around the other.
 Remote MCP access is intentionally unavailable until it can be authenticated
 and authorized without relying on network location. Users can still compose
 the stdio server through an agent host on their own machine.
+
+## Amendment, 2026-11-24: commit receipts carry the counts at their revision
+
+A host may render a fresh dashboard for every tool result and grant it no
+`serverTools`, so the dashboard cannot read status itself. On 24 November the
+owner saw revision 37 after a `remap_set` beside "Not available" counts. Every
+mutation tool's result now carries an optional `registry` field: the
+`remap_status` result read right after the commit, included only when its
+revision equals the receipt's `revision`. The receipt's other fields are
+unchanged, and a failed read leaves `registry` out rather than failing a
+commit that already happened. The dashboard adopts those counts unless it
+already holds a newer revision, and lists the mappings the commit left in place
+from each effect's `after`. It no longer shows "Awaiting registry state", which
+read as a hang.

@@ -96,9 +96,18 @@ export const render = (state: DashboardState, sizes: SizeReporter): void => {
   byId("enabled").textContent = String(status?.enabled_count ?? activeFallback);
   renderMaintenance(state.maintenance);
   renderOutcome(outcome);
-  renderMappings(list, mappings);
+  renderMappings(list, mappings, changedMappings(outcome?.data));
   sizes.schedule();
 };
+
+// The mappings a commit receipt left in place, from each effect's `after`.
+const changedMappings = (data: unknown): MappingView[] => {
+  const effects = asRecord(data)?.effects;
+  if (!Array.isArray(effects)) return [];
+  return asMappings(effects.map((effect) => asRecord(effect)?.after));
+};
+
+const UNREAD = "Not read yet. Refresh, or ask your agent to run remap_list.";
 
 const renderMaintenance = (maintenance: JsonRecord | null): void => {
   const banner = byId("maintenance");
@@ -113,17 +122,26 @@ const renderMaintenance = (maintenance: JsonRecord | null): void => {
   banner.textContent = `${message} New mutations are blocked.${recovery}`;
 };
 
-const renderMappings = (list: JsonRecord | null, mappings: MappingView[]): void => {
+const renderMappings = (
+  list: JsonRecord | null,
+  mappings: MappingView[],
+  changed: MappingView[],
+): void => {
   const root = byId("mappings");
   root.replaceChildren();
-  const more = asString(list?.next_cursor) === null ? "" : " · more available";
-  byId("count").textContent = list === null ? "" : `${mappings.length} shown${more}`;
-  if (list === null || mappings.length === 0) {
-    const message =
-      list === null
-        ? "Awaiting registry state."
-        : "No mappings yet. Ask your agent to create one, or use remap set.";
-    root.append(text("div", message, "empty"));
+  if (list === null) {
+    byId("count").textContent = changed.length === 0 ? "" : `${changed.length} changed`;
+    for (const mapping of changed) root.append(mappingRow(mapping));
+    const rest = changed.length === 0 ? UNREAD : `Other mappings: ${UNREAD.toLowerCase()}`;
+    root.append(text("div", rest, "empty"));
+    return;
+  }
+  const more = asString(list.next_cursor) === null ? "" : " · more available";
+  byId("count").textContent = `${mappings.length} shown${more}`;
+  if (mappings.length === 0) {
+    root.append(
+      text("div", "No mappings yet. Ask your agent to create one, or use remap set.", "empty"),
+    );
     return;
   }
   for (const mapping of mappings) root.append(mappingRow(mapping));

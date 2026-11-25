@@ -6,6 +6,27 @@ platform claims separate.
 
 ## Unreleased
 
+- The Remap panel that opens for a change now shows the mapping counts at the
+  committed revision and the mappings the change left in place. Before, a host
+  that opens a fresh panel per result and lets it call no tools showed the new
+  revision beside "Not available" counts and "Awaiting registry state". Every
+  mutation tool's result gains an optional `registry` field with the status
+  read at exactly that revision (ADR-0005).
+
+- Remap DNS keeps working when two network services carry DNS at once, as
+  Wi-Fi and a wired adapter on the same network do. Activation, which every
+  install and update runs, now picks the service macOS's global resolver
+  uses, as supervision already did (ADR-0036). Before, it refused both as
+  split DNS, and local names stopped resolving. `remap system status` now
+  says why DNS is falling back, for example "several network services have
+  their own DNS and macOS does not say which one it uses
+  (E_RESOLVER_SCOPE)", and that it comes back by itself. `remap doctor`
+  points at `remap system status`, not the root-only `remap-system status`.
+- macOS builds now pin the released Xcode 27.2 (27B52). The 27.0 beta builds
+  27A5237l and 27A5252f are no longer accepted. Apple has withdrawn them, and
+  no development machine or CI image still runs them. SwiftPM in 27.2 still
+  stamps the deployment target as the SDK version, so the `vtool`
+  normalization stays.
 - Every release can be rehearsed on its own channel before it ships
   (ADR-0035). `make package-macos REMAP_REHEARSAL_PACKAGE=1` builds
   `Remap-<version>-<arch>-rehearsal.pkg`, signed by a rehearsal key named by
