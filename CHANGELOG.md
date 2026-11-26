@@ -4,7 +4,7 @@ Remap follows semantic versioning while the public interfaces are still young.
 Every release keeps source installation, signed distribution, and supported
 platform claims separate.
 
-## Unreleased
+## 0.2.0 - 2026-11-26
 
 - The Remap panel that opens for a change now shows the mapping counts at the
   committed revision and the mappings the change left in place. Before, a host
@@ -329,8 +329,6 @@ platform claims separate.
   Supgang, a peer with no route, or a service the peer does not advertise is a
   gateway error that says which. M7 is redefined on Supgang's identity: Remap
   builds no enrollment, discovery, or revocation of its own.
-
-## 0.2.0 - 2026-08-19
 
 - Added the authoritative daemon, private registry, revision-safe preview and
   atomic apply, exact retry receipts, and complete CLI mapping lifecycle.

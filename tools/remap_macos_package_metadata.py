@@ -129,11 +129,15 @@ def _extended_attributes(path: Path, *, root: Path) -> str:
     result = subprocess.run(
         ("/usr/bin/xattr", str(path)),
         cwd=root,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=120,
     )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "no output"
+        message = f"xattr could not list the attributes of {path} (exit {result.returncode}): {detail}"
+        raise RuntimeError(message)
     return result.stdout.strip()
 
 
