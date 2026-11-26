@@ -47,6 +47,14 @@ from tools.remap_release_model import (
 class ReleaseEvidenceTests(unittest.TestCase):
     """Prove determinism, integrity, coverage, and honest negative claims."""
 
+    def test_the_syft_requirement_is_the_mise_pin(self) -> None:
+        from tools import remap_release_inventory
+        from tools.remap_freshness import pinned_mise_tool
+
+        self.assertEqual(remap_release_inventory.SYFT_VERSION, pinned_mise_tool("syft"))
+        with self.assertRaises(KeyError):
+            _ = pinned_mise_tool("no-such-tool")
+
     def test_create_is_deterministic_and_records_release_limits(self) -> None:
         with tempfile.TemporaryDirectory(prefix="remap-release-evidence-") as directory:
             root = Path(directory)

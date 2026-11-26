@@ -36,10 +36,10 @@ Linux uses systemd socket activation, runs the data plane as the selected
 non-root account, and changes resolver state through the native owner over
 D-Bus. Remap now builds a native Apple Installer package whose release bytes
 are signed with Remap's public release key and whose executables are signed on
-the target Mac with a durable local identity. This is still a release candidate:
-privileged clean-machine acceptance, public artifact publication,
-client-facing HTTPS/CA lifecycle, wider platform acceptance, peers, and the
-remaining native-app proof gates are still open.
+the target Mac with a durable local identity, and each release publishes it.
+Still open are privileged clean-machine acceptance, the client-facing HTTPS/CA
+lifecycle, wider platform acceptance, peers, and the remaining native-app proof
+gates.
 
 ## Install on macOS
 
