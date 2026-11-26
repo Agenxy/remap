@@ -1,0 +1,26 @@
+class Remap < Formula
+  desc "Command-line client for Remap; the DNS service installs from the signed package"
+  homepage "https://github.com/Agenxy/remap"
+  url "{{source_url}}"
+  sha256 "{{source_sha256}}"
+  license "GPL-3.0-or-later"
+
+  depends_on "rust" => :build
+
+  def install
+    system "cargo", "install", *std_cargo_args(path: "crates/remap")
+  end
+
+  def caveats
+    <<~EOS
+      This installs the remap command only. Names resolve once the Remap DNS
+      service is installed from the signed macOS package or the Linux source
+      install; see https://github.com/Agenxy/remap#install-on-macos.
+    EOS
+  end
+
+  test do
+    assert_match "remap {{version}}", shell_output("#{bin}/remap --version")
+    assert_match "No system state changed.", shell_output("#{bin}/remap validate atlas 127.0.0.1")
+  end
+end

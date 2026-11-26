@@ -1,0 +1,42 @@
+name: dependency-drift
+
+# `make check` is the offline development gate, so it never asks a registry
+# whether a pin is still current; only `make dependencies` and
+# `make release-check` do. Without this job a pin went stale whenever nobody
+# happened to run either. It runs the same audit daily, and a failed run is
+# the notice: it names every stale pin, advisory, or unapproved licence.
+
+on:
+  schedule:
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-drift
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+      # The audit resolves each workflow action's latest release and mise's own
+      # through api.github.com, whose anonymous quota hosted runners share.
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      # Third-party actions are pinned to immutable commits. The comments are
+      # human-readable versions; the SHA is the authority.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          version: 2026.10.23
+          experimental: true
+      - name: Install pinned JavaScript dependencies
+        run: mise exec -- bun install --frozen-lockfile
+      - name: Audit every pin against its registry
+        run: make dependencies

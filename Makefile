@@ -1,49 +1,146 @@
 .DEFAULT_GOAL := help
-REMAP_INSTALL_ROOT ?= $(HOME)/.local
-# Keep this explicit selector synchronized with mise.toml. It prevents rustup's
-# inherited-toolchain warning during `cargo install`.
-RUST_TOOLCHAIN := 1.97.1
+TASK := mise exec -- uv run python -m tools.remap_tasks
+NATIVE_TASK = MISE_AUTO_INSTALL=0 \
+	"$$(MISE_AUTO_INSTALL=0 mise which uv)" run \
+	--python "$$(MISE_AUTO_INSTALL=0 mise which python)" \
+	python -m tools.remap_tasks
+MISE_VERSION := 2026.10.23
+export PREFIX REMAP_INSTALL_ROOT REMAP_LINUX_LINK REMAP_REHEARSAL_ROOT REMAP_REHEARSAL_URL REMAP_REHEARSAL_SE_KEY
 
-.PHONY: help setup format check test quality dependencies docs install
+.PHONY: help setup setup-install _require-mise format check release-check test quality dependencies docs package-macos rehearsal-key rehearsal-publish release-evidence release-evidence-verify install install-cli install-system install-check install-package-macos recover run-macos verify-macos update uninstall uninstall-cli uninstall-system
 
 help:
 	@printf '%s\n' \
-	  'Remap development' \
-	  '' \
-	  '  make setup         Install exactly pinned tools' \
-	  '  make format        Format first-party Rust code' \
-	  '  make check         Run the complete local quality suite' \
-	  '  make test          Run all Rust tests' \
-	  '  make quality       Enforce structural ceilings' \
-	  '  make dependencies  Audit advisories, licenses, sources, and versions' \
-	  '  make docs          Build warning-free Rust documentation' \
-	  '  make install       Install the remap CLI with Cargo'
+		'Remap development' \
+		'' \
+		'  make setup-install Install only the pinned tools needed for native install' \
+		'  make setup         Install all pinned contributor and browser tools' \
+		'  make format        Format first-party Rust, Swift, Python, and TypeScript code' \
+		'  make check         Run the development gate without installation or signing trust' \
+		'  make release-check Add release audits, signed native image and install checks' \
+		'  make test          Run Rust, Swift, Python, and browser development tests' \
+		'  make quality       Enforce structural and repository policy' \
+		'  make dependencies  Audit advisories, licenses, sources, and versions' \
+		'  make docs          Build warning-free API documentation' \
+		'  make package-macos Build the target-Mac-self-signed installer (release key required)' \
+		'  make install-package-macos Verify, root-pin, and install REMAP_MACOS_PACKAGE' \
+		'  make rehearsal-publish     Build a rehearsal and publish it to REMAP_REHEARSAL_ROOT' \
+		'  make rehearsal-key         Create the rehearsal Enclave key and write its pin, once' \
+		'  make release-evidence        Build crates and create unsigned local evidence' \
+		'  make release-evidence-verify Verify existing crate bytes and evidence' \
+		'  make install       Preview, install, activate, and verify native Remap' \
+		'  make update        Preview and transactionally update native Remap' \
+		'  make recover       Preview lifecycle recovery and verified crash cleanup' \
+		'  make uninstall     Remove native Remap while preserving user data' \
+		'  make install-cli   Install only the portable remap CLI for development' \
+		'  make install-check Verify CLI install and uninstall in an isolated prefix' \
+		'  make run-macos     Build and launch a project-local native Remap.app' \
+		'  make verify-macos  Build, launch, and prove the native app remains running' \
+		'' \
+		'CLI-only installation defaults to PREFIX=~/.local. Native installation asks' \
+		'for administrator approval. macOS requires a reviewed Xcode build listed in' \
+		'platforms/macos/XCODE_VERSION. Linux selects exactly one supported primary DNS' \
+		'link; otherwise use REMAP_LINUX_LINK=<interface index> from its typed candidate' \
+		'list. The index identifies the host interface whose DNS scope Remap will own. See' \
+		'docs/tutorials/first-map-linux.md for the complete native workflow.'
 
-setup:
-	mise install
+_require-mise:
+	@if ! command -v mise >/dev/null 2>&1; then \
+		printf '%s\n' \
+			'mise $(MISE_VERSION) is required to install Remap development tools.' \
+			'Install that exact release from:' \
+			'https://github.com/jdx/mise/releases/tag/v$(MISE_VERSION)' \
+			'Native macOS installation also requires a reviewed Xcode build' \
+			'listed in platforms/macos/XCODE_VERSION; command-line tools alone are insufficient.' \
+			'Then run make setup-install and retry your command.' >&2; \
+		exit 2; \
+	fi
+	@actual="$$(mise --version | awk '{print $$1}')"; \
+	if [ "$$actual" != '$(MISE_VERSION)' ]; then \
+		printf '%s\n' \
+			"mise $$actual is selected; Remap requires $(MISE_VERSION)." \
+			'For a standalone mise install, run:' \
+		'mise self-update $(MISE_VERSION) --yes --no-plugins' \
+		'For a package-managed install, update it through that manager.' >&2; \
+		exit 2; \
+	fi
+	@mise trust --quiet
 
-format:
-	mise exec -- cargo fmt --all
+setup-install: _require-mise
+	@mise install rust python uv
+	@$(NATIVE_TASK) setup-install
 
-check:
-	mise exec -- cargo fmt --all --check
-	mise exec -- cargo clippy --workspace --all-targets --all-features
-	mise exec -- cargo test --workspace --all-targets
-	mise exec -- cargo run --quiet -p remap-quality -- check
-	mise exec -- cargo deny check
-	RUSTDOCFLAGS='-D warnings' mise exec -- cargo doc --workspace --no-deps
+setup: _require-mise
+	@$(TASK) setup
 
-test:
-	mise exec -- cargo test --workspace --all-targets
+format: _require-mise
+	@$(TASK) format
 
-quality:
-	mise exec -- cargo run --quiet -p remap-quality -- check
+check: _require-mise
+	@$(TASK) check
 
-dependencies:
-	mise exec -- cargo deny check
+release-check: _require-mise
+	@$(TASK) release-check
 
-docs:
-	RUSTDOCFLAGS='-D warnings' mise exec -- cargo doc --workspace --no-deps
+test: _require-mise
+	@$(TASK) test
 
-install:
-	mise exec -- cargo +$(RUST_TOOLCHAIN) install --locked --path crates/remap --root '$(REMAP_INSTALL_ROOT)'
+quality: _require-mise
+	@$(TASK) quality
+
+dependencies: _require-mise
+	@$(TASK) dependencies
+
+docs: _require-mise
+	@$(TASK) docs
+
+package-macos: _require-mise
+	@$(TASK) package-macos
+
+install-package-macos: _require-mise
+	@$(NATIVE_TASK) install-package-macos
+
+rehearsal-publish: _require-mise
+	@$(TASK) rehearsal-publish
+
+rehearsal-key: _require-mise
+	@$(TASK) rehearsal-key
+
+release-evidence: _require-mise
+	@$(TASK) release-evidence
+
+release-evidence-verify: _require-mise
+	@$(TASK) release-evidence-verify
+
+install: _require-mise
+	@$(NATIVE_TASK) install
+
+install-cli: _require-mise
+	@$(NATIVE_TASK) install-cli
+
+install-system: _require-mise
+	@$(NATIVE_TASK) install-system
+
+install-check: _require-mise
+	@$(NATIVE_TASK) install-check
+
+run-macos: _require-mise
+	@$(TASK) run-macos
+
+verify-macos: _require-mise
+	@$(TASK) verify-macos
+
+update: _require-mise
+	@$(NATIVE_TASK) update
+
+recover: _require-mise
+	@$(NATIVE_TASK) recover
+
+uninstall: _require-mise
+	@$(NATIVE_TASK) uninstall
+
+uninstall-cli: _require-mise
+	@$(NATIVE_TASK) uninstall-cli
+
+uninstall-system: _require-mise
+	@$(NATIVE_TASK) uninstall-system

@@ -1,0 +1,36 @@
+[package]
+name = "remap-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Agent-native MCP control surface for Remap"
+readme = "../../README.md"
+build = "build.rs"
+
+[dependencies]
+futures.workspace = true
+remap-protocol = { path = "../remap-protocol", version = "=0.2.0" }
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+remapd = { path = "../remapd", version = "=0.2.0" }
+rmcp = { workspace = true, features = ["client"] }
+rusqlite.workspace = true
+tempfile.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

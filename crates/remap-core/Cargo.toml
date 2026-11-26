@@ -11,6 +11,9 @@ readme = "../../README.md"
 keywords = ["dns", "hostname", "networking", "routing"]
 categories = ["network-programming"]
 
+[dependencies]
+chrono.workspace = true
+
 [package.metadata.docs.rs]
 all-features = true
 

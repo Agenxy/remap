@@ -1,0 +1,8 @@
+# Revoked Remap rehearsal signing keys (ADR-0035).
+#
+# One SHA-256 fingerprint per line, as `ssh-keygen -l -E sha256` prints it, then the
+# date it was revoked and why. A rotation adds the old key's line here in the same
+# commit that pins the new key. The documented rehearsal steps refuse any fingerprint
+# listed here, and a rehearsal build refuses a committed pin listed here.
+#
+# Lines starting with # are comments. No key has been revoked.

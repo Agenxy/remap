@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Canonical first-party structural ceilings.
 
 pub(crate) const MAX_FILE_LINES: usize = 1_024;

@@ -1,0 +1,333 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+use remap_protocol::{
+    Command, CommandResult, ControlClient, Diagnostic, MAX_MAPPING_PAGE_SIZE, Surface,
+};
+use rmcp::ErrorData;
+use rmcp::model::{
+    CacheScope, ListResourcesResult, ReadResourceResponse, ReadResourceResult, Resource,
+    ResourceContents,
+};
+use serde::Serialize;
+
+use crate::ui::{APP_MIME_TYPE, dashboard_html, dashboard_uri, resource_meta};
+
+pub(crate) const HELP_URI: &str = "remap://help";
+pub(crate) const PRIVACY_URI: &str = "remap://privacy";
+pub(crate) const STATUS_URI: &str = "remap://status";
+pub(crate) const MAPPINGS_URI: &str = "remap://mappings";
+
+const STATIC_TTL_MS: u64 = 3_600_000;
+const STATE_TTL_MS: u64 = 1_000;
+const PRIVACY: &str = include_str!("privacy.md");
+const HELP: &str = r"# Remap MCP
+
+Remap maps arbitrary names to network destinations through one per-user authority.
+
+Read before write: call `remap_status`, then `remap_preview`. Every mutation requires
+the observed `expected_revision` and a fresh UUIDv4 `operation_id`. Reuse an operation
+ID only when retrying the exact same request. A stale revision fails instead of
+overwriting somebody else's work.
+
+Prefer `remap_set` for one create or retarget operation and `remap_apply` for a batch.
+`remap_health` asks the operating system's resolver for one mapped name: `bypassed` or
+`unresolved` means the system is not using Remap right now, even if Remap is healthy.
+
+The batch is atomic. `remap_resolve` explains exact and wildcard precedence without
+performing network I/O. Read `remap://privacy` for the data boundary.
+
+## Reachability advice
+
+`remap_preview`, `remap_set`, `remap_enable` and `remap_apply` try one TCP connection, for
+at most a second, to each loopback HTTP target they leave enabled. A warning such as
+`target refused connection` means nothing listens there yet. It is advice: the change is
+still previewed or committed. Peer targets and targets on other machines are never
+probed, and the probe sends no bytes.
+
+When a routed request fails, the gateway answers `502 E_GATEWAY_UPSTREAM` or
+`504 E_GATEWAY_TIMEOUT` with the matched mapping and a cause: `refused`, `timeout`,
+`tls`, `reset`, `unreachable` or `other`. It never shows the target's address; read the
+target with `remap_get`.
+
+## Templates for peer services
+
+A wildcard's `supgang://` or `supgang+http://` target may read its peer or service from
+the name asked for: `{1}` is the label nearest the wildcard's suffix and `{2}` the next.
+With `*.k7.internal` mapped to `supgang://{1}/{2}`, `preview.solis.k7.internal` routes to
+`supgang://solis/preview`. Only a whole peer or service is a placeholder, `{2}` needs
+`{1}`, and an exact name cannot carry a template. The wildcard still owns every name
+under its suffix: a name with another number of labels, or a label its field cannot
+hold, is `404 E_GATEWAY_TEMPLATE_NAME` naming the mapping, never another service.
+
+## A name for a peer machine
+
+`supgang://<node-id>?<service>=<port>[,<service>=<port>...]` gives a Supgang peer
+machine one name that works on any network. Example: `pro.agenxy.internal` mapped to
+`supgang://<node-id>?ssh=22,k7=7443`, then `ssh pro.agenxy.internal`.
+
+- The peer is selected by its Supgang node ID (64 lowercase hex) or fingerprint (8
+  lowercase hex), never by its name, because names may repeat or change. `supgang
+  resolve <name>` shows both.
+- Each pair is a service the peer's owner exposes with `supgang expose <name> <port>`,
+  and the port this machine listens on for it. Names and ports are unique within the
+  target, with 1 through 16 pairs. Templates do not apply to this target.
+- The name answers A with one loopback address in `127.77.0.0/16` that the daemon
+  allocates and keeps while the mapping exists, and answers no AAAA. `remap_get`,
+  `remap_list` and `remap_preview` show it as `peer_address`. It answers only while
+  Remap holds every listed port; otherwise it fails with SERVFAIL, and `remap_status`
+  names each port not held and why in `peer_machine_listeners`.
+- Each connection to that address and a listed port is carried through Supgang's local
+  stream to the peer's exposed service. TCP only: UDP and services the owner has not
+  exposed are not reachable, and Supgang decides whether each stream opens.
+- Every listed port is reachable from anything on this Mac that can open a loopback TCP
+  connection, including other accounts and web pages, and is carried with this user's
+  Supgang identity. List only services the peer protects itself, such as ssh.
+- On macOS the installed helper reserves the address and creates the listening sockets as
+  root, so `ssh=22` works beside Remote Login. On Linux `remapd` binds them itself: ports
+  below 1024 need `CAP_NET_BIND_SERVICE`, and a port another service holds on every
+  address cannot be held, so the name fails instead.
+
+## Choosing names
+
+Remap reserves no namespace, and any name the owner chooses is valid. The trade-offs:
+
+- A single-label name such as `api` is the shortest to type. Browsers may treat a bare
+  word as a search, so type `http://api/`. Resolvers and tools may append a search
+  domain, and the name can collide with a host of the same name on a local network.
+- A suffix you choose groups your names, keeps them visibly yours, and lets one wildcard
+  such as `*.example.test` cover a project. `.test` and `.internal` are reserved and
+  never resolve publicly; a suffix of your own works just as well.
+- `.local` belongs to multicast DNS, so a mapping there competes with Bonjour and
+  Avahi. Names under a public suffix whose HTTPS is preloaded in browsers, such as
+  `.dev` or `.app`, make browsers upgrade every request to `https://`.
+- Shadowing a public name is allowed when you mean it; that name's public site is out of
+  reach from this machine while the mapping is enabled.
+";
+
+/// Lists the fixed, bounded resource catalog.
+pub(crate) fn list(cache_hints: bool, include_app: bool) -> ListResourcesResult {
+    let mut resources = vec![
+        resource(
+            HELP_URI,
+            "help",
+            "Agent workflow and mutation discipline",
+            "text/markdown",
+        ),
+        resource(
+            PRIVACY_URI,
+            "privacy",
+            "Remap's local-first privacy contract",
+            "text/markdown",
+        ),
+        resource(
+            STATUS_URI,
+            "status",
+            "Current authoritative registry status",
+            "application/json",
+        ),
+        resource(
+            MAPPINGS_URI,
+            "mappings",
+            "First bounded page of authoritative mappings",
+            "application/json",
+        ),
+    ];
+    if include_app {
+        resources.push(
+            Resource::new(dashboard_uri(), "dashboard")
+                .with_title("Remap dashboard")
+                .with_description("Accessible human view of registry status and mappings")
+                .with_mime_type(APP_MIME_TYPE)
+                .with_size(size_of(dashboard_html()))
+                .with_meta(resource_meta()),
+        );
+    }
+    let result = ListResourcesResult::with_all_items(resources);
+    if cache_hints {
+        result
+            .with_ttl_ms(STATIC_TTL_MS)
+            .with_cache_scope(CacheScope::Private)
+    } else {
+        result
+    }
+}
+
+/// Reads one fixed resource, consulting the daemon only for private state.
+pub(crate) async fn read(
+    uri: &str,
+    client: &ControlClient,
+    cache_hints: bool,
+    include_app: bool,
+) -> Result<ReadResourceResponse, ErrorData> {
+    if uri == dashboard_uri() && include_app {
+        return Ok(app_resource(cache_hints));
+    }
+    match uri {
+        HELP_URI => Ok(static_text(HELP_URI, HELP, "text/markdown", cache_hints)),
+        PRIVACY_URI => Ok(static_text(
+            PRIVACY_URI,
+            PRIVACY,
+            "text/markdown",
+            cache_hints,
+        )),
+        STATUS_URI => read_status(client, cache_hints).await,
+        MAPPINGS_URI => read_mappings(client, cache_hints).await,
+        _ => Err(ErrorData::resource_not_found(
+            format!("unknown Remap resource: {uri}"),
+            None,
+        )),
+    }
+}
+
+fn resource(uri: &str, name: &str, description: &str, mime: &str) -> Resource {
+    Resource::new(uri, name)
+        .with_title(format!("Remap {name}"))
+        .with_description(description)
+        .with_mime_type(mime)
+}
+
+fn static_text(uri: &str, text: &str, mime: &str, cache_hints: bool) -> ReadResourceResponse {
+    let result =
+        ReadResourceResult::new(vec![ResourceContents::text(text, uri).with_mime_type(mime)]);
+    with_cache(result, cache_hints, STATIC_TTL_MS, CacheScope::Public).into()
+}
+
+fn app_resource(cache_hints: bool) -> ReadResourceResponse {
+    let result = ReadResourceResult::new(vec![
+        ResourceContents::text(dashboard_html(), dashboard_uri())
+            .with_mime_type(APP_MIME_TYPE)
+            .with_meta(resource_meta()),
+    ]);
+    with_cache(result, cache_hints, STATIC_TTL_MS, CacheScope::Public).into()
+}
+
+async fn read_status(
+    client: &ControlClient,
+    cache_hints: bool,
+) -> Result<ReadResourceResponse, ErrorData> {
+    match client
+        .execute(Command::Status)
+        .await
+        .map_err(daemon_error)?
+    {
+        CommandResult::Status(status) => private_json(STATUS_URI, &status, cache_hints),
+        _ => Err(internal_variant("status")),
+    }
+}
+
+async fn read_mappings(
+    client: &ControlClient,
+    cache_hints: bool,
+) -> Result<ReadResourceResponse, ErrorData> {
+    let command = Command::List {
+        after: None,
+        limit: MAX_MAPPING_PAGE_SIZE,
+        include_disabled: true,
+    };
+    match client.execute(command).await.map_err(daemon_error)? {
+        CommandResult::List(mappings) => private_json(MAPPINGS_URI, &mappings, cache_hints),
+        _ => Err(internal_variant("mapping list")),
+    }
+}
+
+fn private_json<T: Serialize>(
+    uri: &str,
+    value: &T,
+    cache_hints: bool,
+) -> Result<ReadResourceResponse, ErrorData> {
+    let text = serde_json::to_string_pretty(value).map_err(|error| {
+        ErrorData::internal_error(format!("could not encode Remap resource: {error}"), None)
+    })?;
+    let result = ReadResourceResult::new(vec![
+        ResourceContents::text(text, uri).with_mime_type("application/json"),
+    ]);
+    Ok(with_cache(result, cache_hints, STATE_TTL_MS, CacheScope::Private).into())
+}
+
+fn with_cache(
+    result: ReadResourceResult,
+    cache_hints: bool,
+    ttl_ms: u64,
+    scope: CacheScope,
+) -> ReadResourceResult {
+    if cache_hints {
+        result.with_ttl_ms(ttl_ms).with_cache_scope(scope)
+    } else {
+        result
+    }
+}
+
+fn daemon_error(diagnostic: Diagnostic) -> ErrorData {
+    let message = diagnostic.to_string();
+    let data = serde_json::to_value(diagnostic).ok();
+    ErrorData::internal_error(message, data)
+}
+
+fn internal_variant(expected: &str) -> ErrorData {
+    ErrorData::internal_error(
+        format!("the daemon returned a result other than {expected}"),
+        None,
+    )
+}
+
+fn size_of(text: &str) -> u64 {
+    u64::try_from(text.len()).unwrap_or(u64::MAX)
+}
+
+/// Creates the MCP-surface daemon client for the native default path.
+pub(crate) fn discover_client() -> Result<ControlClient, Diagnostic> {
+    ControlClient::discover(Surface::Mcp, env!("CARGO_PKG_VERSION"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HELP;
+
+    #[test]
+    fn help_explains_naming_trade_offs_without_prescribing_a_suffix() {
+        assert!(HELP.contains("## Choosing names"));
+        assert!(HELP.contains("Remap reserves no namespace"));
+        for trade_off in ["single-label", "search", "wildcard", ".local", "Shadowing"] {
+            assert!(HELP.contains(trade_off), "help omits {trade_off}");
+        }
+        assert!(!HELP.contains("should use"), "help prescribes a suffix");
+    }
+
+    #[test]
+    fn help_explains_target_templates() {
+        for fact in [
+            "supgang://{1}/{2}",
+            "E_GATEWAY_TEMPLATE_NAME",
+            "`{2}` needs",
+        ] {
+            assert!(HELP.contains(fact), "help omits {fact}");
+        }
+    }
+
+    #[test]
+    fn help_explains_the_peer_machine_target() {
+        for fact in [
+            "supgang://<node-id>?<service>=<port>",
+            "node ID",
+            "fingerprint",
+            "supgang expose",
+            "TCP only",
+            "127.77.0.0/16",
+            "peer_address",
+            "SERVFAIL",
+            "reachable from anything on this Mac that can open a loopback TCP",
+            "protects itself",
+            "CAP_NET_BIND_SERVICE",
+        ] {
+            assert!(HELP.contains(fact), "help omits {fact}");
+        }
+    }
+
+    #[test]
+    fn help_explains_reachability_advice_and_gateway_causes() {
+        assert!(HELP.contains("target refused connection"));
+        for cause in ["`refused`", "`timeout`", "`tls`", "`reset`"] {
+            assert!(HELP.contains(cause), "help omits {cause}");
+        }
+        assert!(HELP.contains("the probe sends no bytes"));
+    }
+}

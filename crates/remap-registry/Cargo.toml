@@ -1,0 +1,26 @@
+[package]
+name = "remap-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Single-writer persistent registry for Remap"
+readme = "../../README.md"
+
+[dependencies]
+remap-core = { path = "../remap-core", version = "=0.2.0" }
+remap-protocol = { path = "../remap-protocol", version = "=0.2.0" }
+rusqlite.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

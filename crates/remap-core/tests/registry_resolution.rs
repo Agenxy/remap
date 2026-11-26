@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Executable specifications for deterministic registry resolution.
 
 use std::error::Error;
