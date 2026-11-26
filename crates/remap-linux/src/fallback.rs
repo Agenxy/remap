@@ -7,6 +7,8 @@
 //! waits until the daemon has answered every probe for `base` of awake time.
 //! A bypass that follows a re-arm within `reset_after` doubles the wait, up
 //! to `cap`; an armed run of at least `reset_after` forgets earlier bypasses.
+//! The activation record carries the current wait, so a restarted supervisor
+//! resumes it, as macOS's bypass record does.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -27,6 +29,16 @@ impl RearmDamping {
         cap: Duration::from_secs(300),
         reset_after: Duration::from_secs(300),
     };
+
+    /// The wait after a first bypass.
+    #[must_use]
+    pub const fn base(self) -> Duration {
+        self.base
+    }
+
+    fn clamp(self, period: Duration) -> Duration {
+        period.clamp(self.base, self.cap)
+    }
 }
 
 /// The supervisor's memory of recent bypasses.
@@ -52,15 +64,41 @@ impl ResolverFallback {
         }
     }
 
-    /// A supervisor that started with a bypassed record. It remembers no
-    /// earlier bypass, so it owes the base period. Unlike a restarted macOS
-    /// supervisor it does not try at once: a lifecycle start accepts the
-    /// bypassed record as it is, and must not see it rewritten meanwhile.
+    /// A supervisor that started with a settled record, resuming the wait
+    /// that record carries. A resumed armed record counts as re-armed at
+    /// start, so a bypass within `reset_after` still doubles. A resumed
+    /// bypassed record owes its whole wait again: unlike a restarted macOS
+    /// supervisor it does not try at once, because a lifecycle start accepts
+    /// the bypassed record as it is and must not see it rewritten meanwhile.
     #[must_use]
-    pub const fn resumed_bypassed(policy: RearmDamping) -> Self {
+    pub fn resumed(policy: RearmDamping, bypassed: bool, carried: Option<Duration>) -> Self {
+        let Some(carried) = carried else {
+            return Self {
+                bypassed,
+                ..Self::armed(policy)
+            };
+        };
         Self {
-            bypassed: true,
-            ..Self::armed(policy)
+            policy,
+            required: policy.clamp(carried),
+            armed_since: (!bypassed).then_some(Duration::ZERO),
+            healthy_since: None,
+            bypassed,
+        }
+    }
+
+    /// The wait a bypass at `now` would owe, without recording it, so the
+    /// record can carry it before ordinary DNS is restored.
+    #[must_use]
+    pub fn bypass_period(&self, now: Duration) -> Duration {
+        if self.bypassed {
+            return self.required;
+        }
+        match self.armed_since {
+            Some(since) if now.saturating_sub(since) < self.policy.reset_after => {
+                self.required.saturating_mul(2).min(self.policy.cap)
+            }
+            Some(_) | None => self.policy.base,
         }
     }
 
@@ -69,13 +107,8 @@ impl ResolverFallback {
         if self.bypassed {
             return;
         }
+        self.required = self.bypass_period(now);
         self.bypassed = true;
-        self.required = match self.armed_since {
-            Some(since) if now.saturating_sub(since) < self.policy.reset_after => {
-                self.required.saturating_mul(2).min(self.policy.cap)
-            }
-            Some(_) | None => self.policy.base,
-        };
         self.armed_since = None;
         self.healthy_since = None;
     }
@@ -228,8 +261,8 @@ mod tests {
     }
 
     #[test]
-    fn a_restarted_supervisor_owes_the_base_period() {
-        let mut fallback = ResolverFallback::resumed_bypassed(RearmDamping::STANDARD);
+    fn a_restarted_supervisor_without_a_carried_wait_owes_the_base_period() {
+        let mut fallback = ResolverFallback::resumed(RearmDamping::STANDARD, true, None);
         assert!(fallback.is_bypassed());
         assert_eq!(fallback.required(), seconds(5));
         healthy_for(&mut fallback, 1, 5);
@@ -239,6 +272,39 @@ mod tests {
         fallback.note_armed(seconds(6));
         fallback.note_bypass(seconds(7));
         assert_eq!(fallback.required(), seconds(10));
+    }
+
+    #[test]
+    fn a_restarted_supervisor_resumes_the_carried_wait() {
+        let mut bypassed =
+            ResolverFallback::resumed(RearmDamping::STANDARD, true, Some(seconds(40)));
+        assert!(bypassed.is_bypassed());
+        assert_eq!(bypassed.bypass_period(seconds(0)), seconds(40));
+        healthy_for(&mut bypassed, 0, 39);
+        assert!(!bypassed.rearm_due(seconds(39)));
+        bypassed.note_probe(seconds(40), true);
+        assert!(bypassed.rearm_due(seconds(40)));
+
+        let mut armed = ResolverFallback::resumed(RearmDamping::STANDARD, false, Some(seconds(40)));
+        assert!(!armed.is_bypassed());
+        assert_eq!(armed.bypass_period(seconds(10)), seconds(80));
+        assert_eq!(armed.bypass_period(seconds(300)), seconds(5));
+        armed.note_bypass(seconds(10));
+        assert_eq!(armed.required(), seconds(80));
+
+        let clamped = ResolverFallback::resumed(RearmDamping::STANDARD, true, Some(seconds(3600)));
+        assert_eq!(clamped.required(), seconds(300));
+    }
+
+    #[test]
+    fn the_period_a_bypass_owes_is_what_recording_it_sets() {
+        let mut fallback = ResolverFallback::armed(RearmDamping::STANDARD);
+        fallback.note_bypass(seconds(0));
+        fallback.note_armed(seconds(5));
+        let owed = fallback.bypass_period(seconds(6));
+        fallback.note_bypass(seconds(6));
+        assert_eq!(fallback.required(), owed);
+        assert_eq!(fallback.bypass_period(seconds(7)), owed);
     }
 
     #[test]

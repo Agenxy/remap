@@ -243,6 +243,9 @@ where
         let Some(record) = self.store.load()? else {
             return Ok(());
         };
+        if record.has_bypassed() {
+            return self.abandon_rearm(record);
+        }
         let applied = self.backend.applied()?;
         let ownership = network_manager(&record)?;
         if applied.digest == ownership.before_connection_digest() {
@@ -331,22 +334,24 @@ where
                 &applied,
                 prior_ownership,
             )?;
-            let successor = ActivationRecord::prepare_managed_active_rebase(
+            let mut successor = ActivationRecord::prepare_managed_active_rebase(
                 metadata,
                 record.before().clone(),
                 record.owned().clone(),
                 ResolverManagerRecord::NetworkManager(Box::new(ownership)),
             )?;
+            successor.keep_fallback_of(&record, false)?;
             self.store.replace(&record, &successor)?;
             self.require_owned(&successor)?;
             return Ok(successor);
         }
-        let successor = ActivationRecord::prepare_managed(
+        let mut successor = ActivationRecord::prepare_managed(
             metadata,
             before,
             record.owned().clone(),
             ResolverManagerRecord::NetworkManager(Box::new(ownership)),
         )?;
+        successor.keep_fallback_of(&record, false)?;
         self.store.replace(&record, &successor)?;
         self.apply_owned(successor, &applied, prepared)
     }

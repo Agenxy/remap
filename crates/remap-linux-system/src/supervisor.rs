@@ -7,7 +7,9 @@ use std::time::Duration;
 use crate::channel::SystemChannel;
 use crate::native_transaction::{NativeResolverTransaction, NativeStartupObservation};
 use crate::resolver_events::{ResolverEvent, connect_monitor, next_event};
-use crate::resolver_fallback::{Supervised, bypass_if_unanswered, reconcile_bypassed};
+use crate::resolver_fallback::{
+    Supervised, bypass_if_unanswered, bypass_unreachable, reconcile_bypassed, startup_bypass,
+};
 use crate::resolver_generation::timestamp_after;
 use crate::resolver_stability::{
     ObservationStability, SteadyObservation, deadline_reached as steady_deadline_reached,
@@ -175,15 +177,21 @@ async fn initialize_supervisor(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> io::Result<InitializedSupervisor> {
     let channel = SystemChannel::new(config.system_socket.clone(), config.daemon_uid);
-    tokio::select! {
+    let channel_ready = tokio::select! {
         biased;
         result = shutdown.changed() => {
             result.map_err(|_error| io::Error::other("the supervisor shutdown monitor stopped"))?;
             return Err(startup_stopped());
         }
-        result = wait_for_channel(&channel) => result?,
+        result = wait_for_channel(&channel) => result,
+    };
+    // An installer creating ownership needs a daemon that answers; it never
+    // starts Remap DNS over one that does not.
+    if activation_creation_allowed && let Err(error) = channel_ready {
+        return Err(error);
     }
-    let session = activate_or_recover(config, activation_creation_allowed, &mut shutdown).await?;
+    let mut session =
+        activate_or_recover(config, activation_creation_allowed, &mut shutdown).await?;
     let resolver_upstreams = match upstreams(&session.record) {
         Ok(upstreams) => upstreams,
         Err(error) => {
@@ -191,23 +199,60 @@ async fn initialize_supervisor(
         }
     };
     // A bypassed record has no plan to publish; the steady loop re-arms it.
-    if session.record.phase() == ActivationPhase::Active
-        && let Err(failure) =
-            publish_if_needed(&channel, &session.record, resolver_upstreams.clone()).await
-    {
-        return startup_failure(
-            session.transaction,
-            session.provenance,
-            failure.rollback_safe,
-            failure.error,
-        )
-        .await;
+    if session.record.phase() == ActivationPhase::Active {
+        let published = match channel_ready {
+            Ok(()) => publish_if_needed(&channel, &session.record, resolver_upstreams.clone())
+                .await
+                .map(|_latest| ()),
+            Err(error) => Err(PublishFailure::unreachable(error, true)),
+        };
+        match published {
+            Ok(()) => {}
+            Err(failure)
+                if failure.unreachable && session.provenance == ActivationProvenance::Recovered =>
+            {
+                bypass_at_startup(&mut session, config.link, failure.error).await?;
+            }
+            Err(failure) => {
+                return startup_failure(
+                    session.transaction,
+                    session.provenance,
+                    failure.rollback_safe,
+                    failure.error,
+                )
+                .await;
+            }
+        }
     }
     Ok(InitializedSupervisor {
         record: session.record,
         transaction: session.transaction,
         resolver_upstreams,
     })
+}
+
+/// A recovered activation whose daemon does not answer restores ordinary
+/// DNS instead of leaving the link on loopback (ADR-0036). When the link no
+/// longer holds exactly Remap's state, nothing is written and the supervisor
+/// fails as before.
+async fn bypass_at_startup(
+    session: &mut ActivationSession,
+    link: LinkIndex,
+    unreachable: io::Error,
+) -> io::Result<()> {
+    let Ok(observation) = wait_for_stable_observation(&mut session.transaction, link).await else {
+        return Err(unreachable);
+    };
+    match startup_bypass(&mut session.transaction, &session.record, &observation) {
+        Ok(record) => {
+            session.record = record;
+            Ok(())
+        }
+        Err(error) if error.kind() == remap_linux::LinuxErrorKind::OwnershipConflict => {
+            Err(unreachable)
+        }
+        Err(error) => Err(platform_error(error)),
+    }
 }
 
 async fn reconcile_active(
@@ -239,9 +284,14 @@ async fn reconcile_active(
             *resolver_upstreams = upstreams(record)?;
         }
     }
-    let latest = publish_if_needed(channel, record, resolver_upstreams.clone())
-        .await
-        .map_err(|failure| failure.error)?;
+    let latest = match publish_if_needed(channel, record, resolver_upstreams.clone()).await {
+        Ok(latest) => latest,
+        Err(failure) if failure.unreachable && !stopped_after_rebase => {
+            return bypass_unreachable(transaction, channel, supervised, failure.error, shutdown)
+                .await;
+        }
+        Err(failure) => return Err(failure.error),
+    };
     if stopped_after_rebase {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
@@ -363,11 +413,14 @@ pub(crate) async fn converge_owned_with_store(
             .map_err(platform_error)?;
         stabilized = stabilize_active(&mut transaction, config.link).await?;
     }
-    let Some(Stabilized::Active(record, observation)) = stabilized else {
+    let Some(Stabilized::Active(_record, observation)) = stabilized else {
         return Err(conflict(
             "the update rollback has no resolver activation to converge",
         ));
     };
+    // The generation a rollback restores may predate the re-arm period, and
+    // its helper rejects a record that carries one (ADR-0036).
+    let record = transaction.forget_fallback().map_err(platform_error)?;
     if record.phase() != ActivationPhase::Active
         || record.owned().link() != config.link
         || transaction
@@ -596,7 +649,7 @@ pub(crate) async fn publish_if_needed(
     let health = channel
         .exchange(SystemCommand::ResolverHealth)
         .await
-        .map_err(PublishFailure::safe)?;
+        .map_err(|error| PublishFailure::unreachable(error, true))?;
     let activation_id = record.metadata().activation_id();
     let generation = record.metadata().generation();
     let bound = (health.activation_id, health.active_generation);
@@ -648,7 +701,7 @@ async fn resolve_ambiguous_publish(
 ) -> Result<SystemResult, PublishFailure> {
     let health = match channel.exchange(SystemCommand::ResolverHealth).await {
         Ok(health) => health,
-        Err(_health_error) => return Err(PublishFailure::ambiguous(exchange_error)),
+        Err(_health_error) => return Err(PublishFailure::unreachable(exchange_error, false)),
     };
     match plan_state(&health, activation_id, generation) {
         PlanState::Exact => Ok(health),
@@ -680,6 +733,9 @@ fn plan_state(result: &SystemResult, activation_id: Uuid, generation: u64) -> Pl
 pub(crate) struct PublishFailure {
     pub(crate) error: io::Error,
     rollback_safe: bool,
+    /// The daemon did not answer its channel at the end of the attempt, so
+    /// ordinary DNS is the safe state (ADR-0036).
+    pub(crate) unreachable: bool,
 }
 
 impl PublishFailure {
@@ -687,6 +743,7 @@ impl PublishFailure {
         Self {
             error,
             rollback_safe: true,
+            unreachable: false,
         }
     }
 
@@ -694,6 +751,15 @@ impl PublishFailure {
         Self {
             error,
             rollback_safe: false,
+            unreachable: false,
+        }
+    }
+
+    const fn unreachable(error: io::Error, rollback_safe: bool) -> Self {
+        Self {
+            error,
+            rollback_safe,
+            unreachable: true,
         }
     }
 }
