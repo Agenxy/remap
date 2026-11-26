@@ -12,10 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from tools.remap_freshness import verify_selected_xcode
+from tools.remap_freshness import pinned_mise_tool, verify_selected_xcode
 from tools.remap_release_model import canonical_bytes, sha256_file
 
-SYFT_VERSION = "1.51.1"
+# mise.toml is the toolchain source of truth; the SBOM records the pin it holds.
+SYFT_VERSION = pinned_mise_tool("syft")
 TOOL_TIMEOUT_SECONDS = 300
 
 

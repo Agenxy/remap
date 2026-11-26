@@ -95,6 +95,15 @@ def mise_tool_version(specification: object) -> str:
     raise TypeError("mise tool pins must be a version string or a table with one")
 
 
+def pinned_mise_tool(name: str) -> str:
+    """Return the exact version mise.toml pins for one tool."""
+    document = tomllib.loads((ROOT / "mise.toml").read_text(encoding="utf-8"))
+    tools = object_table(document, "tools")
+    if name not in tools:
+        raise KeyError(f"mise.toml pins no tool named {name}")
+    return mise_tool_version(tools[name])
+
+
 def verify_mise_tools() -> list[str]:
     """Compare exact mise pins with each plugin's current stable release."""
     document = tomllib.loads((ROOT / "mise.toml").read_text(encoding="utf-8"))
