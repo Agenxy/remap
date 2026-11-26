@@ -42,7 +42,7 @@ jsonschema = { version = "=0.60.2", default-features = false }
 nix = { version = "=0.31.3", default-features = false, features = ["fs", "net", "signal", "socket", "uio", "user"] }
 proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
 raunch = "=1.0.1"
-rmcp = { version = "=3.8.0", default-features = false, features = ["macros", "schemars", "server", "transport-io"] }
+rmcp = { version = "=3.11.0", default-features = false, features = ["macros", "schemars", "server", "transport-io"] }
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "limits"] }
 rustix = { version = "=1.1.6", features = ["fs", "linux_4_11"] }
 schemars = "=1.2.3"

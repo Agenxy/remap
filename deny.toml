@@ -14,7 +14,14 @@ feature-depth = 1
 
 [advisories]
 db-urls = ["https://github.com/RustSec/advisory-db"]
-ignore = []
+ignore = [
+    # chrono's maintainers have stepped back (an unmaintained notice, not a
+    # vulnerability). Remap's own two timestamp conversions could move to
+    # another crate, but rmcp requires chrono through schemars' `chrono04`
+    # feature, so it stays in the graph either way. Remove this entry when rmcp
+    # stops requiring chrono, and move Remap's own uses then.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained notice for a dependency rmcp requires; no known vulnerability" },
+]
 
 [licenses]
 confidence-threshold = 0.93

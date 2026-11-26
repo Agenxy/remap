@@ -360,7 +360,7 @@ async fn modern_discover_exposes_bounded_agent_contract() -> Result<(), Box<dyn 
     }
     let resources = client.list_resources(None).await?;
     assert_eq!(resources.resources.len(), 5);
-    assert_eq!(resources.ttl_ms, Some(3_600_000));
+    catalog::assert_fresh_hour(resources.ttl_ms);
     let dashboard_uri = resources
         .resources
         .iter()
@@ -370,7 +370,7 @@ async fn modern_discover_exposes_bounded_agent_contract() -> Result<(), Box<dyn 
     let dashboard = client
         .read_resource(ReadResourceRequestParams::new(dashboard_uri))
         .await?;
-    assert_eq!(dashboard.ttl_ms, Some(3_600_000));
+    catalog::assert_fresh_hour(dashboard.ttl_ms);
     let Some(ResourceContents::TextResourceContents { meta, .. }) = dashboard.contents.first()
     else {
         return Err(io::Error::other("dashboard was not returned as text").into());

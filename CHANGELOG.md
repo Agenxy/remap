@@ -6,6 +6,10 @@ platform claims separate.
 
 ## 0.2.0 - 2026-11-26
 
+- Updated `url` to 2.5.9 (`Url::origin()` stack overflow on nested `blob:`
+  URLs) and `rmcp` to 3.11.0 (unbounded response bodies in its HTTP clients,
+  which Remap does not enable). chrono's unmaintained notice is recorded as a
+  reviewed exception in `deny.toml`, because rmcp requires chrono.
 - The Remap panel that opens for a change now shows the mapping counts at the
   committed revision and the mappings the change left in place. Before, a host
   that opens a fresh panel per result and lets it call no tools showed the new

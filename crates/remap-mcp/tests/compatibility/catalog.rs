@@ -4,11 +4,21 @@ use std::io;
 
 use serde_json::{Value, json};
 
+/// The server sends an hour. rmcp's client cache reports what is left of it,
+/// so a test sees an hour less the milliseconds the exchange took.
+pub(super) fn assert_fresh_hour(ttl_ms: Option<u64>) {
+    const HOUR_MS: u64 = 3_600_000;
+    assert!(
+        ttl_ms.is_some_and(|ttl| (HOUR_MS - 60_000..=HOUR_MS).contains(&ttl)),
+        "expected close to an hour of cache lifetime, got {ttl_ms:?}"
+    );
+}
+
 pub(super) fn assert_modern_tool_catalog(
     tools: &rmcp::model::ListToolsResult,
 ) -> Result<(), Box<dyn Error>> {
     assert_eq!(tools.tools.len(), 12);
-    assert_eq!(tools.ttl_ms, Some(3_600_000));
+    assert_fresh_hour(tools.ttl_ms);
     assert_eq!(tools.cache_scope, Some(rmcp::model::CacheScope::Private));
     let names: Vec<&str> = tools.tools.iter().map(|tool| tool.name.as_ref()).collect();
     assert_eq!(names, expected_names());
