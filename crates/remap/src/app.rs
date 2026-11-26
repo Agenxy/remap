@@ -9,7 +9,7 @@ use crate::runtime_health::RuntimeHealth;
 use remap_mcp::system_lookup::SystemLookup;
 
 /// The release date of this version, as the changelog records it.
-const MANPAGE_DATE: &str = "2026-08-19";
+const MANPAGE_DATE: &str = "2026-11-26";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Report {
