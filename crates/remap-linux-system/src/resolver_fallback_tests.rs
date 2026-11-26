@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::{
     BypassCause, DAEMON_RESTART, Supervised, bypass_line, rearm_permitted, refusal_kind,
-    seconds_phrase, stopped_result, unanswered_summary,
+    seconds_phrase, stale_plan_identity, stopped_result, unanswered_summary,
 };
 use crate::lifecycle_hints::{BYPASS_HINT, bypass_hint};
 use crate::lifecycle_recovery::expected_daemon_plan;
@@ -204,4 +204,17 @@ fn status_explains_a_bypass_only_when_nothing_needs_recovery() -> io::Result<()>
     assert_eq!(bypass_hint(Some(&active), false), None);
     assert!(BYPASS_HINT.len() <= 512);
     Ok(())
+}
+
+#[test]
+fn a_stale_plan_is_invalidated_at_the_generation_the_daemon_holds() {
+    let activation = Uuid::from_u128(7);
+    let behind = SystemResult::new(Some(activation), Some(10), None);
+    assert_eq!(
+        stale_plan_identity(&behind, activation),
+        Some((activation, 10))
+    );
+    let other = SystemResult::new(Some(Uuid::from_u128(8)), Some(10), None);
+    assert_eq!(stale_plan_identity(&other, activation), None);
+    assert_eq!(stale_plan_identity(&health(false), activation), None);
 }

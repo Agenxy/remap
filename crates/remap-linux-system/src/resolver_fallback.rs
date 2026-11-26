@@ -232,11 +232,9 @@ pub(crate) async fn reconcile_bypassed(
     };
     // A daemon that hung through the bypass may still hold the plan; while
     // bypassed it is expected to hold none.
-    let identity = (
-        supervised.record.metadata().activation_id(),
-        supervised.record.metadata().generation(),
-    );
-    if health.activation_id == Some(identity.0) {
+    if let Some(identity) =
+        stale_plan_identity(&health, supervised.record.metadata().activation_id())
+    {
         invalidate_plan(channel, identity).await;
     }
     if !supervised.fallback.rearm_due(now) {
@@ -380,6 +378,22 @@ const fn refusal_kind(kind: LinuxErrorKind) -> bool {
             | LinuxErrorKind::UnstableObservation
             | LinuxErrorKind::ResolverUnavailable
     )
+}
+
+/// The plan a daemon still holds for this activation, at the generation the
+/// daemon reports. The daemon drops a plan only on its exact generation, and a
+/// bypass that interrupted a rebase leaves the record one generation ahead of
+/// the plan the daemon kept.
+pub(crate) fn stale_plan_identity(
+    health: &SystemResult,
+    activation_id: uuid::Uuid,
+) -> Option<(uuid::Uuid, u64)> {
+    if health.activation_id != Some(activation_id) {
+        return None;
+    }
+    health
+        .active_generation
+        .map(|generation| (activation_id, generation))
 }
 
 async fn invalidate_plan(channel: &SystemChannel, (activation_id, generation): (uuid::Uuid, u64)) {
