@@ -69,6 +69,9 @@ fn the_crate_never_writes_to_standard_output_or_error() -> TestResult {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     for entry in std::fs::read_dir(source)? {
         let path = entry?.path();
+        if path.extension().is_none_or(|extension| extension != "rs") {
+            continue;
+        }
         let text = std::fs::read_to_string(&path)?;
         for forbidden in ["print!", "println!", "eprint", "dbg!", "tracing::", "log::"] {
             assert!(
