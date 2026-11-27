@@ -157,13 +157,7 @@ impl DnsBindings {
     /// Returns a sanitized configuration or native socket failure.
     pub fn bind(config: &DnsRuntimeConfig) -> Result<Self, NetworkError> {
         config.validate()?;
-        let udp = StdUdpSocket::bind(config.listen)
-            .map_err(|error| NetworkError::io("UDP listener bind", error))?;
-        let local_addr = udp
-            .local_addr()
-            .map_err(|error| NetworkError::io("UDP listener inspection", error))?;
-        let tcp = StdTcpListener::bind(local_addr)
-            .map_err(|error| NetworkError::io("TCP listener bind", error))?;
+        let (udp, tcp) = bind_matching(config.listen, StdTcpListener::bind)?;
         Self::from_sockets(config, udp, tcp)
     }
 
@@ -225,6 +219,43 @@ impl DnsBindings {
             local_addr: udp_address,
         })
     }
+}
+
+/// How many system-chosen UDP ports `bind_matching` tries before giving up.
+const EPHEMERAL_BIND_ATTEMPTS: usize = 32;
+
+/// Binds UDP on `listen`, then TCP on the same address.
+///
+/// With port 0 the system picks the UDP port, and that number may already be
+/// held for TCP by another program. Only then is a fresh UDP port tried, a
+/// bounded number of times. An explicit port is bound once, so a port in use is
+/// reported rather than silently replaced.
+fn bind_matching(
+    listen: SocketAddr,
+    bind_tcp: impl Fn(SocketAddr) -> io::Result<StdTcpListener>,
+) -> Result<(StdUdpSocket, StdTcpListener), NetworkError> {
+    let attempts = if listen.port() == 0 {
+        EPHEMERAL_BIND_ATTEMPTS
+    } else {
+        1
+    };
+    let mut last = None;
+    for _attempt in 0..attempts {
+        let udp = StdUdpSocket::bind(listen)
+            .map_err(|error| NetworkError::io("UDP listener bind", error))?;
+        let local_addr = udp
+            .local_addr()
+            .map_err(|error| NetworkError::io("UDP listener inspection", error))?;
+        match bind_tcp(local_addr) {
+            Ok(tcp) => return Ok((udp, tcp)),
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => last = Some(error),
+            Err(error) => return Err(NetworkError::io("TCP listener bind", error)),
+        }
+    }
+    Err(NetworkError::io(
+        "TCP listener bind",
+        last.unwrap_or_else(|| io::Error::from(io::ErrorKind::AddrInUse)),
+    ))
 }
 
 impl DnsRuntime {
@@ -586,4 +617,59 @@ async fn drain_jobs(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod bind_tests {
+    use std::cell::Cell;
+    use std::io;
+    use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+
+    use super::{EPHEMERAL_BIND_ATTEMPTS, bind_matching};
+
+    fn taken(_address: SocketAddr) -> io::Result<TcpListener> {
+        Err(io::Error::from(io::ErrorKind::AddrInUse))
+    }
+
+    #[test]
+    fn a_system_chosen_port_taken_for_tcp_is_retried() -> Result<(), Box<dyn std::error::Error>> {
+        let calls = Cell::new(0_usize);
+        let (udp, tcp) = bind_matching((Ipv4Addr::LOCALHOST, 0).into(), |address| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                taken(address)
+            } else {
+                TcpListener::bind(address)
+            }
+        })?;
+        assert_eq!(calls.get(), 2);
+        assert_eq!(udp.local_addr()?, tcp.local_addr()?);
+        Ok(())
+    }
+
+    #[test]
+    fn retries_are_bounded_and_report_the_port_in_use() {
+        let calls = Cell::new(0_usize);
+        let result = bind_matching((Ipv4Addr::LOCALHOST, 0).into(), |address| {
+            calls.set(calls.get() + 1);
+            taken(address)
+        });
+        assert!(result.is_err());
+        assert_eq!(calls.get(), EPHEMERAL_BIND_ATTEMPTS);
+    }
+
+    #[test]
+    fn an_explicit_port_is_bound_once() -> Result<(), Box<dyn std::error::Error>> {
+        let reserved = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let port = reserved.local_addr()?.port();
+        drop(reserved);
+        let calls = Cell::new(0_usize);
+        let result = bind_matching((Ipv4Addr::LOCALHOST, port).into(), |address| {
+            calls.set(calls.get() + 1);
+            taken(address)
+        });
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 1);
+        Ok(())
+    }
 }

@@ -25,6 +25,27 @@ export default defineConfig({
       name: "compact-webkit",
       use: { browserName: "webkit", viewport: { width: 320, height: 800 } },
     },
+    // The `remap web` page, at desk and phone widths in both engines.
+    {
+      name: "web-desktop-chromium",
+      testDir: "tests/web",
+      use: { browserName: "chromium", viewport: { width: 1280, height: 900 } },
+    },
+    {
+      name: "web-phone-chromium",
+      testDir: "tests/web",
+      use: { browserName: "chromium", viewport: { width: 390, height: 844 } },
+    },
+    {
+      name: "web-desktop-webkit",
+      testDir: "tests/web",
+      use: { browserName: "webkit", viewport: { width: 1280, height: 900 } },
+    },
+    {
+      name: "web-phone-webkit",
+      testDir: "tests/web",
+      use: { browserName: "webkit", viewport: { width: 390, height: 844 } },
+    },
   ],
   use: {
     headless: true,

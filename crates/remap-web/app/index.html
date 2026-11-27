@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Remap</title>
+  <link rel="icon" href="/remap-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="top">
+      <div class="brand">
+        <img class="mark" src="/remap-mark.svg" alt="" width="38" height="38">
+        <div><div class="eyebrow">Name routing authority</div><h1 class="title">Remap</h1></div>
+      </div>
+      <dl class="stats" id="stats" aria-label="Registry summary" hidden>
+        <div class="stat"><dt>Revision</dt><dd id="stat-revision">Not read</dd></div>
+        <div class="stat"><dt>Mappings</dt><dd id="stat-total">Not read</dd></div>
+        <div class="stat"><dt>On</dt><dd id="stat-on">Not read</dd></div>
+      </dl>
+    </header>
+
+    <section class="panel gate" id="no-token" aria-labelledby="no-token-title" hidden>
+      <h2 id="no-token-title">Open the address remap web printed</h2>
+      <p>This page needs the private address that <code>remap web</code> printed when it started. That address ends in <code>#token=</code> followed by 64 characters.</p>
+      <p class="muted">Copy the whole line from the terminal where <code>remap web</code> is running and open it in this browser. If it has stopped, run <code>remap web</code> again for a new address.</p>
+    </section>
+
+    <main class="stack" id="app" hidden>
+      <div class="notice" id="connection">Reading the registry.</div>
+      <section id="problems-section" aria-labelledby="problems-title" hidden>
+        <h2 class="sr" id="problems-title">Needs attention</h2>
+        <ul class="problems" id="problems"></ul>
+      </section>
+
+      <section class="panel" aria-labelledby="mappings-title">
+        <div class="panel-head">
+          <h2 id="mappings-title">Mappings</h2>
+          <button class="button primary" id="add" type="button">Add mapping</button>
+        </div>
+        <div class="toolbar">
+          <div class="field search">
+            <label for="search">Search</label>
+            <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder="Name, target or kind">
+          </div>
+          <label class="check"><input id="show-disabled" type="checkbox" checked> Show mappings that are off</label>
+          <span class="count" id="count" aria-live="polite"></span>
+        </div>
+        <table id="mapping-table">
+          <caption class="sr">Mappings, one per row, with their state, target and routing</caption>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">State</th>
+              <th scope="col">Target</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Host header</th>
+              <th scope="col">Landing</th>
+              <th scope="col">Peer address</th>
+              <th scope="col"><span class="sr">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="mapping-rows"></tbody>
+        </table>
+        <p class="empty" id="empty" hidden></p>
+      </section>
+
+      <section class="panel" id="editor" aria-labelledby="editor-title" hidden>
+        <form id="mapping-form" novalidate>
+          <div class="panel-head"><h2 id="editor-title">Add mapping</h2></div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="pattern">Name</label>
+              <input id="pattern" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required aria-describedby="pattern-help">
+              <span class="help" id="pattern-help">An exact name such as api.test, or a suffix wildcard such as *.lab.</span>
+            </div>
+            <div class="field">
+              <label for="target">Target</label>
+              <input id="target" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required aria-describedby="target-help">
+              <span class="help" id="target-help">An IP address, a DNS name, an http(s) URL, or supgang://peer/service.</span>
+            </div>
+            <fieldset class="field choice" aria-describedby="host-policy-help">
+              <legend class="label">Host header</legend>
+              <div class="choices">
+                <label class="check"><input name="host-policy" type="radio" value="preserve-client"> preserve-client</label>
+                <label class="check"><input name="host-policy" type="radio" value="use-upstream" checked> use-upstream</label>
+              </div>
+              <span class="help" id="host-policy-help">preserve-client sends the name you typed; use-upstream sends the target's host. HTTP targets only.</span>
+            </fieldset>
+            <div class="field">
+              <label for="landing">Landing path</label>
+              <input id="landing" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="landing-help">
+              <span class="help" id="landing-help">Optional. Where a request for / goes, such as /dashboard. HTTP targets only.</span>
+            </div>
+          </div>
+          <label class="check editor-enabled"><input id="enabled" type="checkbox" checked> On: the name answers as soon as the change is applied</label>
+          <div class="validation" id="validation" aria-live="polite">Type a name and a target to check them.</div>
+          <div class="actions">
+            <button class="button primary" id="review" type="submit">Review change</button>
+            <button class="button" id="cancel-edit" type="button">Cancel</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel" id="receipt" aria-labelledby="receipt-title" hidden>
+        <h2 id="receipt-title" tabindex="-1">Last change</h2>
+        <div id="receipt-body"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="resolve-title">
+        <h2 id="resolve-title">Test a name</h2>
+        <form class="resolve-form" id="resolve-form" novalidate>
+          <div class="field">
+            <label for="resolve-name">Name to resolve</label>
+            <input id="resolve-name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="api.test">
+          </div>
+          <button class="button" id="resolve" type="submit">Resolve</button>
+        </form>
+        <div id="resolve-result" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <footer>Served by <code>remap web</code> on this computer only. Every change is previewed and checked against the registry revision you reviewed.</footer>
+  </div>
+
+  <dialog id="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-summary">
+    <div class="dialog-body">
+      <h2 id="confirm-title">Review change</h2>
+      <p id="confirm-summary"></p>
+      <ul class="effects" id="confirm-effects"></ul>
+      <div id="confirm-warnings"></div>
+      <div class="dialog-error" id="confirm-error" role="alert" hidden></div>
+      <div class="actions">
+        <button class="button" id="confirm-cancel" type="button" autofocus>Cancel</button>
+        <button class="button primary" id="confirm-apply" type="button">Apply</button>
+      </div>
+    </div>
+  </dialog>
+  <p class="sr" id="announcer" aria-live="polite" aria-atomic="true"></p>
+</body>
+</html>

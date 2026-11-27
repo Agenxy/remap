@@ -26,6 +26,8 @@ flowchart LR
     App["Native management app"] --> Control["Platform control adapter"]
     CLI["Rust remap CLI"] --> Control
     MCP["Rust MCP server"] --> Control
+    Console["remap console"] --> Control
+    Web["remap web on 127.0.0.1"] --> Control
     Control --> Daemon["Rust remapd"]
     Daemon --> DB["SQLite registry and operation log"]
     Daemon --> Gateway["Loopback HTTP(S) gateway"]
@@ -81,6 +83,8 @@ introduced only at their proof milestone.
 | `remap-core` | Side-effect-free names, mappings, precedence, revisions |
 | `remap-protocol` | Versioned local-control and snapshot contracts |
 | `remap-mcp` | MCP tools, resources, Apps metadata, and compatibility policy |
+| `remap-console` | Full-screen terminal interface over the control client (ADR-0041) |
+| `remap-web` | Loopback web interface and its capability-token boundary (ADR-0041) |
 | `remap-dns` | Bounded DNS parsing, synthesis, and forwarding policy |
 | `remap-registry` | SQLite materialization and bounded local operation journals |
 | `remap-gateway` | Loopback HTTP/TLS routing and connection lifecycle |
@@ -121,7 +125,7 @@ is shared by DNS, SNI, certificates, URLs, storage, and every UI.
 ## Authority and state
 
 `remapd` is the only writer of registry, route, peer, and certificate state.
-CLI, native-app, and MCP clients submit commands; they never edit SQLite or
+CLI, console, web, native-app, and MCP clients submit commands; they never edit SQLite or
 snapshots. SQLite in WAL mode is the local materialized view. Accepted
 mutations append bounded, origin-attributed journal entries and advance a
 monotonic registry revision. Replicated operations become signed at M7, when

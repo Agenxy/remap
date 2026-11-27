@@ -1,0 +1,28 @@
+[package]
+name = "remap-console"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Full-screen terminal interface for Remap"
+readme = "../../README.md"
+
+[dependencies]
+crossterm.workspace = true
+futures.workspace = true
+ratatui.workspace = true
+remap-protocol = { path = "../remap-protocol", version = "=0.2.0" }
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+remapd = { path = "../remapd", version = "=0.2.0" }
+tempfile.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

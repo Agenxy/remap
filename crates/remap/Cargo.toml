@@ -21,10 +21,12 @@ clap_complete.workspace = true
 clap_mangen.workspace = true
 getrandom.workspace = true
 hickory-proto.workspace = true
+remap-console = { path = "../remap-console", version = "=0.2.0" }
 remap-core = { path = "../remap-core", version = "=0.2.0" }
 remap-mcp = { path = "../remap-mcp", version = "=0.2.0" }
 remap-network = { path = "../remap-network", version = "=0.2.0" }
 remap-protocol = { path = "../remap-protocol", version = "=0.2.0" }
+remap-web = { path = "../remap-web", version = "=0.2.0" }
 remapd = { path = "../remapd", version = "=0.2.0" }
 serde_json.workspace = true
 tokio.workspace = true

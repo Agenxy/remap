@@ -102,8 +102,8 @@ def check() -> None:
             )
         )
         manpages = sorted(destination.glob("*.1"))
-        if len(manpages) != 22:
-            raise RuntimeError(f"generated {len(manpages)} manpages; expected 22")
+        if len(manpages) != 24:
+            raise RuntimeError(f"generated {len(manpages)} manpages; expected 24")
         run(("/usr/bin/mandoc", "-Tlint", "-Werror", *(str(path) for path in manpages)))
 
 

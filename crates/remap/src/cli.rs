@@ -19,54 +19,18 @@ const DNS_UPSTREAM: &str = "dns-upstream";
 const HTTP_LISTEN: &str = "http-listen";
 #[path = "cli/ergonomics.rs"]
 mod ergonomics;
+#[path = "cli/guidance.rs"]
+mod guidance;
+#[path = "cli/interfaces.rs"]
+mod interfaces;
+#[cfg(test)]
+#[path = "cli/interfaces_tests.rs"]
+mod interfaces_tests;
+use guidance::{DOCTOR_GUIDANCE, SET_GUIDANCE, TOP_LEVEL_EXAMPLES};
+pub(crate) use interfaces::WebAction;
 #[cfg(test)]
 #[path = "cli/ergonomics_tests.rs"]
 mod ergonomics_tests;
-const DOCTOR_GUIDANCE: &str = concat!(
-    "Checks:\n",
-    "  authority identity and registry status\n",
-    "  authenticated UDP and TCP DNS listeners\n",
-    "  authenticated HTTP gateway\n",
-    "  whether upstream DNS resolvers still answer forwarded names\n\n",
-    "Doctor never changes system state. A collected report exits successfully even when a\n",
-    "component is unavailable; automation should inspect the JSON readiness fields.\n\n",
-    "Examples:\n",
-    "  remap doctor\n",
-    "  remap --json doctor",
-);
-const SET_GUIDANCE: &str = concat!(
-    "Examples:\n",
-    "  remap set remap.test http://127.0.0.1:4270\n",
-    "  remap set '*.lab' https://example.com:9443 --host-header use-upstream\n",
-    "  remap set atlas 127.0.0.1 --expect 12 --operation-id <UUID>\n",
-    "  remap set pro.internal 'supgang://<node-id>?ssh=22,k7=7443'\n\n",
-    "A supgang://<node-id>?<service>=<port> target names a Supgang peer machine by its node ID\n",
-    "(64 lowercase hex) or fingerprint (8), never its name. Its name answers one loopback\n",
-    "address in 127.77.0.0/16, and each listed port is carried through Supgang to the service\n",
-    "the peer's owner exposes with 'supgang expose'. TCP only; UDP and unexposed services are\n",
-    "not reachable. Every listed port is reachable from anything on this Mac that can open a\n",
-    "loopback TCP connection, so list only services the peer protects itself, such as ssh.\n",
-    "The name answers only while Remap holds every listed port. On macOS the installed helper\n",
-    "creates the sockets, so ssh=22 works; on Linux ports below 1024 need\n",
-    "CAP_NET_BIND_SERVICE, and a port another service holds on every address cannot be held.\n\n",
-    "Without explicit guards, Remap reads the current revision and creates an operation ID.\n",
-    "If the response is lost after submission, the diagnostic preserves both values so the\n",
-    "state can be inspected and the identical operation retried safely.",
-);
-const TOP_LEVEL_EXAMPLES: &str = concat!(
-    "Examples:\n",
-    "  remap validate atlas http://127.0.0.1:5173\n",
-    "  remap list --all\n",
-    "  remap set remap.test http://127.0.0.1:5173\n",
-    "  remap doctor\n",
-    "  remap daemon\n",
-    "  remap mcp\n\n",
-    "Names may be bare or dotted; .test is reserved for private testing.\n",
-    "An installed Remap service owns the authority automatically.\n",
-    "Use 'remap daemon' only for an explicit foreground development instance.\n",
-    "Use --json for automation.",
-);
-
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Action {
     Completions {
@@ -116,6 +80,8 @@ pub(crate) enum Action {
     Mcp {
         data_dir: Option<PathBuf>,
     },
+    Console,
+    Web(interfaces::WebAction),
     Daemon {
         data_dir: Option<PathBuf>,
         dns_listen: Option<SocketAddr>,
@@ -192,6 +158,10 @@ pub(crate) fn parse(arguments: Vec<OsString>) -> ParseOutcome {
     let data_dir = matches.get_one::<PathBuf>("data-dir").cloned();
     let action = parse_action(&matches);
     match action {
+        Ok(Action::Console | Action::Web(_)) if json => ParseOutcome::Failure {
+            diagnostic: Diagnostic::usage(interfaces::JSON_REFUSAL),
+            json,
+        },
         Ok(Action::Mcp { .. }) if json => ParseOutcome::Failure {
             diagnostic: Diagnostic::usage(
                 "--json cannot be combined with 'mcp' because standard output carries MCP frames",
@@ -226,6 +196,7 @@ fn parse_action(matches: &clap::ArgMatches) -> Result<Action, Diagnostic> {
         "status" | "list" | "get" | "resolve" | "preview" => parse_read_action(name, command),
         "apply" | "set" | "enable" | "disable" | "remove" => parse_write_action(name, command),
         "mcp" | "daemon" => parse_service_action(name, command),
+        "console" | "web" => interfaces::parse(name, command),
         "system" => parse_system_action(command),
         _ => Err(Diagnostic::internal(format!(
             "the parsed command '{name}' is not implemented"
@@ -357,6 +328,8 @@ pub(crate) fn command() -> Command {
         .subcommand(mutation_command("remove", "Deletes an existing mapping"))
         .subcommand(daemon_command())
         .subcommand(mcp_command())
+        .subcommand(interfaces::console_command())
+        .subcommand(interfaces::web_command())
         .subcommand(system_command())
         .subcommand(
             Command::new("validate")

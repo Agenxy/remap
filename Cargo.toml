@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/remap",
+    "crates/remap-console",
     "crates/remap-core",
     "crates/remap-linux",
     "crates/remap-linux-system",
@@ -9,6 +10,7 @@ members = [
     "crates/remap-protocol",
     "crates/remap-quality",
     "crates/remap-registry",
+    "crates/remap-web",
     "crates/remapd",
 ]
 resolver = "3"
@@ -28,6 +30,7 @@ blake3 = "=1.8.7"
 clap = "=4.6.7"
 clap_complete = "=4.6.11"
 clap_mangen = "=0.3.3"
+crossterm = { version = "=0.29.0", default-features = false, features = ["bracketed-paste", "events", "event-stream", "windows"] }
 chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 futures = "=0.3.34"
 getrandom = "=0.4.3"
@@ -41,6 +44,7 @@ hyper-util = { version = "=0.1.21", features = ["client-legacy", "http1", "http2
 jsonschema = { version = "=0.60.2", default-features = false }
 nix = { version = "=0.31.3", default-features = false, features = ["fs", "net", "signal", "socket", "uio", "user"] }
 proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm_0_29"] }
 raunch = "=1.0.1"
 rmcp = { version = "=3.11.0", default-features = false, features = ["macros", "schemars", "server", "transport-io"] }
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "limits"] }
