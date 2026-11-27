@@ -72,6 +72,8 @@ pub(crate) fn execute(action: Action) -> Result<Report, Diagnostic> {
             .map(Report::Validation),
         Action::Doctor
         | Action::Mcp { .. }
+        | Action::Console
+        | Action::Web(_)
         | Action::Daemon { .. }
         | Action::Status
         | Action::SystemLifecycle { .. }

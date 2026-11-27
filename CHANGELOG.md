@@ -6,6 +6,21 @@ platform claims separate.
 
 ## Unreleased
 
+- `remap console` opens a full-screen terminal interface. `remap web` serves
+  the same interface in a browser on `127.0.0.1` until you stop it. Both show
+  status and every mapping live, and add, edit, turn on or off, remove, and
+  resolve names. Every change is previewed and applied only after you confirm
+  it, against the revision you reviewed. A change made elsewhere in the
+  meantime is shown and asked about again, never overwritten. The web
+  interface needs the secret address it prints, accepts requests only for
+  `127.0.0.1`, `localhost` and a name you pass with `--name`, and loads
+  nothing from the network (ADR-0041). Both run on macOS and Linux, riscv64
+  included.
+- A DNS listener given port 0, as `remap daemon --dns-listen 127.0.0.1:0`
+  or a test does, no longer fails when the UDP port the system picks is
+  already held for TCP; it picks another, at most 32 times. An explicit port
+  is still bound exactly once.
+
 - Pages served from a Supgang peer load completely. A peer allows only a few
   tunnels at once (four by default), and the gateway opened one per request,
   so a page's parallel requests for styles and scripts beyond the limit failed

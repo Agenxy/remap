@@ -92,8 +92,10 @@ MISE_TOOLS = cast("dict[str, object]", MISE_DOCUMENT["tools"])
 RUST_TOOLCHAIN = mise_tool_version(MISE_TOOLS["rust"])
 APP_PATHS = (
     "crates/remap-mcp/app",
+    "crates/remap-web/app",
     "tools",
     "tests/app",
+    "tests/web",
     "playwright.config.ts",
 )
 PYTHON_PATHS = (

@@ -18,6 +18,9 @@ remap set database 192.168.1.40
 remap set google.com http://127.0.0.1:9000
 ```
 
+To see and change every mapping on one screen, run `remap console` in a
+terminal or `remap web` for a browser interface on this computer.
+
 If a browser rejects the resulting certificate, origin, redirect, cookie, or
 content-security policy, that failure remains visible. Remap provides routing;
 it does not pretend arbitrary web applications are relocatable.
@@ -27,8 +30,9 @@ it does not pretend arbitrary web applications are relocatable.
 Remap has completed its portable authority, DNS, and cleartext HTTP-routing
 foundation. The repository contains a private SQLite registry behind one
 writer, authenticated local control, revision-safe preview and atomic apply,
-bounded UDP/TCP DNS, unmatched forwarding, a streaming HTTP gateway, and a
-dual-version MCP server with an MCP Apps dashboard.
+bounded UDP/TCP DNS, unmatched forwarding, a streaming HTTP gateway, a
+dual-version MCP server with an MCP Apps dashboard, and interactive console and
+loopback web interfaces.
 
 The macOS and Linux native backends are in active verification. macOS uses
 launchd socket activation and a reversible Swift SystemConfiguration adapter.
@@ -350,11 +354,13 @@ launched by an MCP host. See [the MCP guide](docs/mcp/README.md).
 ```text
 crates/remap-core       portable domain and policy primitives
 crates/remap            portable command-line client and published `remap` crate
+crates/remap-console    full-screen terminal interface (`remap console`)
 crates/remap-mcp        dual-version MCP tools, resources, subscriptions, and App
 crates/remap-network    bounded DNS, forwarding, snapshots, and HTTP data plane
 crates/remap-protocol   bounded local-control wire contract and native paths
 crates/remap-quality    native structural quality analyzer
 crates/remap-registry   authoritative SQLite registry and idempotency journal
+crates/remap-web        loopback web interface (`remap web`)
 crates/remapd           authenticated single-writer per-user daemon
 docs/architecture        system design and accepted decisions
 docs/cli                 command and structured-output reference

@@ -206,6 +206,86 @@ remap validate '*.lab' https://example.com:9443/base
 Validation canonicalizes the name, destination, inferred destination type, and
 HTTP host policy without reading or changing authority state.
 
+## Interactive interfaces
+
+Two interfaces show your mappings live and change them from one screen. Both
+are clients of the same daemon as every other command, so a change made in
+one appears in the others within seconds.
+
+Every change is previewed first. You see each mapping before and after, and
+every warning, and nothing is written until you confirm. The change is then
+applied against the revision you reviewed. If the registry changed in the
+meantime, for example from another terminal or an agent, the interface shows
+the new state and asks you again rather than overwriting it.
+
+### Console
+
+```text
+remap console
+```
+
+A full-screen terminal interface. It needs an interactive terminal; scripts
+should use `remap list` and `remap status`. It works in an 80×24 window,
+places the details beside the list in a wider one, and honours `NO_COLOR`.
+
+In the mapping form, `Tab` and `Shift-Tab` move between fields, `←` `→` or
+`space` switch the host policy, `Enter` previews and `Esc` closes. Changing the
+name of an existing mapping renames it, keeping whether it is on. In the
+confirmation, only `y` applies, so a second `Enter` can never apply a change
+you have not read; `n` or `Esc` cancels.
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` `j` `k`, `PgUp` `PgDn`, `Home` `End` | Move through mappings |
+| `/` | Filter by name or target as you type; `Enter` keeps the filter, `Esc` clears it |
+| `a` | Hide or show mappings that are turned off (shown by default) |
+| `n` | New mapping |
+| `e` | Edit the selected mapping |
+| `space` | Turn the selected mapping on or off |
+| `d` | Remove the selected mapping |
+| `r` | Resolve a name and show which mapping answers it |
+| `g` | Refresh now |
+| `?` | All keys |
+| `q`, `Esc`, `Ctrl-C` | Quit (`Esc` first clears an active filter) |
+
+### Web
+
+```text
+remap web
+remap web --port 7341
+```
+
+Serves the same views and changes in a browser, on `127.0.0.1` only, until you
+press Ctrl-C. It prints one address to open:
+
+```text
+http://127.0.0.1:52811/#token=4f0c…
+```
+
+The part after `#token=` is a secret made for this run. Anyone who has the
+whole address can change your mappings until you stop the command, so do not
+share it. The browser keeps it for the tab and removes it from the address
+bar; it never reaches a server log or another site. Your browser's history may
+keep the first address, but its token stops working when the command stops.
+
+`--port` keeps the same port across runs, so you can give the interface a name
+with Remap and open that instead. Tell the interface about the name with
+`--name`; it refuses requests for any name it was not given, which stops a
+hostile page from reaching it through DNS rebinding:
+
+```text
+remap set remap.lab http://127.0.0.1:7341/ --host-header use-upstream
+remap web --port 7341 --name remap.lab
+```
+
+The address still needs the token: open
+`http://remap.lab/#token=…` with the token `remap web` printed.
+
+The interface loads nothing from the network, follows your system's light or
+dark setting, works at phone width, and can be used entirely from the
+keyboard. See [ADR-0041](../architecture/ADR-0041-console-and-web-interfaces.md)
+for its security boundary.
+
 ## Agent host
 
 ```text

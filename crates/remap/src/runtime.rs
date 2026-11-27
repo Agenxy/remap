@@ -13,7 +13,7 @@ use remap_protocol::{
 use remapd::DaemonConfig;
 
 use crate::app::{self, Report};
-use crate::cli::{Action, MutationAction, SystemLifecycleCommand};
+use crate::cli::{Action, MutationAction, SystemLifecycleCommand, WebAction};
 use crate::diagnostic::Diagnostic;
 use crate::runtime_health::{RuntimeHealth, installation_ready, valid_challenge, verify};
 use remap_mcp::system_lookup::SystemLookup;
@@ -97,6 +97,7 @@ pub(crate) async fn execute(
             .await?;
             Ok(None)
         }
+        Action::Console | Action::Web(_) => run_interface(action, data_dir).await.map(|()| None),
         Action::Status => authority(data_dir, "status", Command::Status).await,
         Action::List {
             after,
@@ -332,6 +333,58 @@ async fn run_mcp(data_dir: Option<&Path>) -> Result<(), Diagnostic> {
     remap_mcp::serve_stdio(client)
         .await
         .map_err(Diagnostic::service)
+}
+
+/// Runs `remap console` or `remap web` (ADR-0041) until the owner stops it.
+async fn run_interface(action: Action, data_dir: Option<&Path>) -> Result<(), Diagnostic> {
+    match action {
+        Action::Web(web) => run_web(data_dir, web).await,
+        _console => remap_console::run(client(data_dir)?)
+            .await
+            .map_err(Diagnostic::service),
+    }
+}
+
+/// Serves the web interface (ADR-0041) once the authority answers, so a stopped
+/// daemon is reported before any address is printed.
+async fn run_web(data_dir: Option<&Path>, web: WebAction) -> Result<(), Diagnostic> {
+    let client = client(data_dir)?;
+    current_revision(&client).await?;
+    let options = remap_web::WebOptions {
+        port: web.port,
+        name: web.name,
+    };
+    let server = remap_web::WebServer::bind(client, options)
+        .await
+        .map_err(Diagnostic::service)?;
+    println!("{}", server.url());
+    eprintln!(
+        "Remap's web interface is listening on {} until you press Ctrl-C.\n\
+         Anyone with the address above can change your mappings; do not share it.",
+        server.local_addr()
+    );
+    server
+        .serve_until(stop_requested())
+        .await
+        .map_err(Diagnostic::service)?;
+    eprintln!("Remap's web interface stopped.");
+    Ok(())
+}
+
+/// Resolves on Ctrl-C or SIGTERM, whichever comes first.
+async fn stop_requested() {
+    let interrupt = tokio::signal::ctrl_c();
+    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        Ok(mut terminate) => {
+            tokio::select! {
+                _interrupted = interrupt => {}
+                _terminated = terminate.recv() => {}
+            }
+        }
+        Err(_unavailable) => {
+            let _interrupted = interrupt.await;
+        }
+    }
 }
 
 async fn run_daemon(
