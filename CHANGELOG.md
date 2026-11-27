@@ -4,6 +4,17 @@ Remap follows semantic versioning while the public interfaces are still young.
 Every release keeps source installation, signed distribution, and supported
 platform claims separate.
 
+## Unreleased
+
+- Pages served from a Supgang peer load completely. A peer allows only a few
+  tunnels at once (four by default), and the gateway opened one per request,
+  so a page's parallel requests for styles and scripts beyond the limit failed
+  with `502 E_GATEWAY_UPSTREAM`. The gateway now waits up to three seconds for
+  a tunnel to free. A peer that stays full is answered `503
+  E_GATEWAY_PEER_BUSY` with `Retry-After: 1`, not as a failed service
+  (ADR-0040). Supgang releases that send a refusal code are read exactly: a
+  revoked or unexposed service still fails at once.
+
 ## 0.2.0 - 2026-11-26
 
 - Updated `url` to 2.5.9 (`Url::origin()` stack overflow on nested `blob:`

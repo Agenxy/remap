@@ -15,7 +15,7 @@ use tokio::time::timeout;
 
 use crate::machine_idle::carry_until_idle;
 use crate::peer::{PeerResolveError, PeerResolver, SupgangResolver};
-use crate::supgang_stream::{StreamError, SupgangStreams};
+use crate::supgang_stream::{BUSY_PATIENCE, StreamError, SupgangStreams};
 
 /// The longest a carried connection may pass no byte in either direction.
 ///
@@ -246,12 +246,15 @@ impl Carrier {
     async fn open(&self, route: &Route) -> Result<tokio::net::UnixStream, CarryFailure> {
         let streams = self.current_streams().ok_or(CarryFailure::NoSupgang)?;
         let node = self.node(&route.selector).await?;
+        let patience = BUSY_PATIENCE.min(self.open_timeout / 2);
         streams
-            .open(&node, &route.service)
+            .open_patiently(&node, &route.service, patience)
             .await
             .map_err(|error| match error {
                 StreamError::Unavailable => CarryFailure::NoSupgang,
-                StreamError::Refused => CarryFailure::Refused,
+                StreamError::Refused | StreamError::Busy | StreamError::Declined => {
+                    CarryFailure::Refused
+                }
                 StreamError::WrongOwner => CarryFailure::WrongOwner,
                 StreamError::Malformed => CarryFailure::Malformed,
             })

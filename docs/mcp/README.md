@@ -39,8 +39,9 @@ these tools keep `openWorldHint: false` and preview stays read-only
 (ADR-0028). A failed routed request answers `502 E_GATEWAY_UPSTREAM` or
 `504 E_GATEWAY_TIMEOUT` with `Mapping:` and `Cause:` lines (`refused`,
 `timeout`, `tls`, `reset`, `unreachable`, `other`) and never the target's
-address; read the target with `remap_get`. `remap://help` also covers choosing
-names.
+address; read the target with `remap_get`. `503 E_GATEWAY_PEER_BUSY` means a
+Supgang peer had no free tunnel while the gateway waited (ADR-0040).
+`remap://help` also covers choosing names.
 
 ## Start and connect
 

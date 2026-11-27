@@ -144,6 +144,8 @@ pub(crate) struct RouteError {
     pub(crate) code: &'static str,
     pub(crate) message: &'static str,
     pub(crate) cause: Option<UpstreamCause>,
+    /// Seconds the client should wait before asking again, when known.
+    pub(crate) retry_after: Option<u8>,
 }
 
 impl RouteError {
@@ -153,6 +155,7 @@ impl RouteError {
             code,
             message,
             cause: None,
+            retry_after: None,
         }
     }
 
@@ -163,6 +166,7 @@ impl RouteError {
             code: "E_GATEWAY_UPSTREAM",
             message: cause.message(),
             cause: Some(cause),
+            retry_after: None,
         }
     }
 
@@ -173,6 +177,21 @@ impl RouteError {
             code: "E_GATEWAY_TIMEOUT",
             message: "The selected service did not answer before the routing deadline.",
             cause: Some(UpstreamCause::Timeout),
+            retry_after: None,
+        }
+    }
+
+    /// `503 E_GATEWAY_PEER_BUSY`: the peer's tunnels stayed in use while
+    /// the gateway waited for one (ADR-0040). Not an upstream failure: the
+    /// service is up, and the same request shortly after should succeed.
+    pub(crate) const fn peer_busy() -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "E_GATEWAY_PEER_BUSY",
+            message: "The peer had no free Supgang stream while Remap waited for one. \
+Retry shortly; `supgang peers` shows its tunnel use and limit.",
+            cause: None,
+            retry_after: Some(1),
         }
     }
 
@@ -201,8 +220,11 @@ impl RouteError {
                 );
             }
         }
-        Response::builder()
-            .status(self.status)
+        let mut builder = Response::builder().status(self.status);
+        if let Some(seconds) = self.retry_after {
+            builder = builder.header(hyper::header::RETRY_AFTER, seconds.to_string());
+        }
+        builder
             .header(CONTENT_TYPE, "text/plain; charset=utf-8")
             .header(hyper::header::CACHE_CONTROL, "no-store")
             .body(full_body(body))

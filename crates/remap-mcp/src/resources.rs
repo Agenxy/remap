@@ -46,7 +46,8 @@ probed, and the probe sends no bytes.
 When a routed request fails, the gateway answers `502 E_GATEWAY_UPSTREAM` or
 `504 E_GATEWAY_TIMEOUT` with the matched mapping and a cause: `refused`, `timeout`,
 `tls`, `reset`, `unreachable` or `other`. It never shows the target's address; read the
-target with `remap_get`.
+target with `remap_get`. `503 E_GATEWAY_PEER_BUSY` means a Supgang peer had no free
+tunnel while the gateway waited; the service is up, and a retry shortly succeeds.
 
 ## Templates for peer services
 
