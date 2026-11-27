@@ -132,6 +132,7 @@ async fn forward(
         },
         Err(SendError::Upstream(cause)) => Err(RouteError::upstream(cause)),
         Err(SendError::Timeout) => Err(RouteError::timeout()),
+        Err(SendError::PeerBusy) => Err(RouteError::peer_busy()),
     }
 }
 

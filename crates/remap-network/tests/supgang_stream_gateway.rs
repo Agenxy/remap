@@ -2,12 +2,14 @@
 //! Peer mappings carried through Supgang's local stream endpoint (ADR-0026),
 //! against a stand-in endpoint that speaks version 1 and pipes each stream
 //! to a real upstream: plaintext only when the owner chose it, pinned TLS
-//! verified inside the stream, WebSocket switches carried, and refusals named.
+//! verified inside the stream, WebSocket switches carried, refusals named,
+//! and a peer at its tunnel limit waited out (ADR-0040).
 
 use std::convert::Infallible;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -101,6 +103,56 @@ impl PeerResolver for Solis {
     }
 }
 
+/// How the stand-in endpoint answers a stream past its tunnel limit.
+#[derive(Clone, Copy)]
+enum OverLimit {
+    /// A coded refusal, as Supgang with refusal codes sends.
+    Coded,
+    /// A refusal without a code, as Supgang 0.2.0-alpha.21 sends.
+    Uncoded,
+    /// A close with no reply, as Supgang before #64 sends.
+    Silent,
+}
+
+/// The stand-in endpoint's per-peer tunnel limit.
+#[derive(Clone)]
+struct Limit {
+    tunnels: usize,
+    over: OverLimit,
+    active: Arc<AtomicUsize>,
+}
+
+impl Limit {
+    fn new(tunnels: usize, over: OverLimit) -> Self {
+        Self {
+            tunnels,
+            over,
+            active: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Takes a tunnel slot, or answers the stream as a peer at its limit.
+    async fn admit(&self, stream: &mut tokio::net::UnixStream) -> bool {
+        let taken = self.active.fetch_add(1, Ordering::SeqCst);
+        if taken < self.tunnels {
+            return true;
+        }
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        let _sent = match self.over {
+            OverLimit::Coded => {
+                reply(
+                    stream,
+                    br#"{"response":"error","code":"peer_at_capacity","message":"full"}"#,
+                )
+                .await
+            }
+            OverLimit::Uncoded => reply(stream, br#"{"response":"error","message":"full"}"#).await,
+            OverLimit::Silent => stream.shutdown().await,
+        };
+        false
+    }
+}
+
 /// A stand-in for Supgang's version-1 endpoint: for each request it checks
 /// the frame, then either refuses or pipes the socket to the upstream that
 /// `services` names.
@@ -108,10 +160,20 @@ fn endpoint(
     socket: &Path,
     services: Vec<(&'static str, SocketAddr)>,
 ) -> Result<(), Box<dyn Error>> {
+    endpoint_limited(socket, services, Limit::new(usize::MAX, OverLimit::Coded))
+}
+
+/// [`endpoint`], with at most `limit.tunnels` streams open at once.
+fn endpoint_limited(
+    socket: &Path,
+    services: Vec<(&'static str, SocketAddr)>,
+    limit: Limit,
+) -> Result<(), Box<dyn Error>> {
     let listener = UnixListener::bind(socket)?;
     tokio::spawn(async move {
         while let Ok((mut stream, _peer)) = listener.accept().await {
             let services = services.clone();
+            let limit = limit.clone();
             tokio::spawn(async move {
                 let mut frame = [0_u8; 61];
                 if stream.read_exact(&mut frame).await.is_err() {
@@ -131,18 +193,24 @@ fn endpoint(
                     .find(|(service, _)| *service == name)
                     .map(|(_, address)| *address);
                 let (Some(target), true) = (target, valid) else {
-                    let _sent = reply(&mut stream, br#"{"response":"error","message":"no"}"#).await;
+                    let _sent = reply(
+                        &mut stream,
+                        br#"{"response":"error","code":"refused","message":"no"}"#,
+                    )
+                    .await;
                     return;
                 };
-                let Ok(mut upstream) = TcpStream::connect(target).await else {
+                if !limit.admit(&mut stream).await {
                     return;
-                };
-                if reply(&mut stream, br#"{"response":"connected"}"#)
-                    .await
-                    .is_ok()
+                }
+                if let Ok(mut upstream) = TcpStream::connect(target).await
+                    && reply(&mut stream, br#"{"response":"connected"}"#)
+                        .await
+                        .is_ok()
                 {
                     let _copied = tokio::io::copy_bidirectional(&mut stream, &mut upstream).await;
                 }
+                limit.active.fetch_sub(1, Ordering::SeqCst);
             });
         }
     });
@@ -209,6 +277,34 @@ async fn plain_upstream(seen: Seen) -> Result<SocketAddr, Box<dyn Error>> {
     Ok(address)
 }
 
+/// An upstream that holds each connection for a moment before answering,
+/// so parallel requests hold tunnel slots at the same time.
+async fn slow_upstream() -> Result<SocketAddr, Box<dyn Error>> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let address = listener.local_addr()?;
+    tokio::spawn(async move {
+        while let Ok((mut stream, _peer)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut byte = [0_u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    match stream.read(&mut byte).await {
+                        Ok(1) => head.push(byte[0]),
+                        _ => return,
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                let _sent = stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+            });
+        }
+    });
+    Ok(address)
+}
+
 /// An HTTPS upstream serving the fixture chain.
 async fn tls_upstream() -> Result<SocketAddr, Box<dyn Error>> {
     let chain = vec![
@@ -263,6 +359,17 @@ fn gateway_with_landing(
     socket: Option<PathBuf>,
     landing: Option<&str>,
 ) -> Result<Gateway, Box<dyn Error>> {
+    let config = GatewayRuntimeConfig::new((Ipv4Addr::LOCALHOST, 0).into());
+    gateway_configured(mappings, key, socket, landing, config)
+}
+
+fn gateway_configured(
+    mappings: &[(&str, &str)],
+    key: [u8; 32],
+    socket: Option<PathBuf>,
+    landing: Option<&str>,
+    config: GatewayRuntimeConfig,
+) -> Result<Gateway, Box<dyn Error>> {
     let store = SnapshotStore::empty();
     let mut built = Vec::new();
     for (name, target) in mappings {
@@ -273,11 +380,8 @@ fn gateway_with_landing(
         );
     }
     assert!(store.publish(RegistrySnapshot::new(1, built)?));
-    let mut runtime = GatewayRuntime::bind(
-        GatewayRuntimeConfig::new((Ipv4Addr::LOCALHOST, 0).into()),
-        store,
-    )?
-    .with_peer_resolver(Arc::new(Solis { key }) as Arc<dyn PeerResolver>);
+    let mut runtime = GatewayRuntime::bind(config, store)?
+        .with_peer_resolver(Arc::new(Solis { key }) as Arc<dyn PeerResolver>);
     if let Some(socket) = socket {
         runtime = runtime.with_supgang_streams(SupgangStreams::at(socket));
     }
@@ -438,10 +542,12 @@ Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbX
 
 #[tokio::test]
 async fn a_plaintext_service_without_a_tunnel_is_refused() -> TestResult {
+    // A socket that does not exist, so the host's own Supgang is never used.
+    let directory = tempfile::tempdir()?;
     let gateway = gateway(
         &[("preview.test", "supgang+http://solis/preview")],
         pin()?,
-        None,
+        Some(endpoint_path(&directory)),
     )?;
     let (_stream, head) = exchange(gateway.address, &get("preview.test")).await?;
     assert!(head.starts_with("http/1.1 502"), "{head}");
@@ -495,4 +601,71 @@ async fn a_pinned_service_is_verified_inside_the_stream() -> TestResult {
         "a wrong key was accepted inside the stream: {head}"
     );
     mistrusted.stop().await
+}
+
+// A browser asks for a page's styles and scripts at once. A peer that allows
+// four tunnels must still serve all eight: the gateway waits for a free
+// stream instead of answering the surplus with 502 (ADR-0040).
+#[tokio::test]
+async fn parallel_requests_past_the_peer_limit_all_succeed() -> TestResult {
+    for over in [OverLimit::Coded, OverLimit::Uncoded, OverLimit::Silent] {
+        let upstream = slow_upstream().await?;
+        let directory = tempfile::tempdir()?;
+        let socket = endpoint_path(&directory);
+        endpoint_limited(&socket, vec![("preview", upstream)], Limit::new(4, over))?;
+        let gateway = gateway(
+            &[("preview.test", "supgang+http://solis/preview")],
+            pin()?,
+            Some(socket),
+        )?;
+        let mut requests = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let address = gateway.address;
+            requests.spawn(async move {
+                exchange(address, &get("preview.test"))
+                    .await
+                    .map(|(_stream, head)| head)
+                    .map_err(|error| error.to_string())
+            });
+        }
+        while let Some(head) = requests.join_next().await {
+            let head = head??;
+            assert!(head.starts_with("http/1.1 200"), "{head}");
+        }
+        gateway.stop().await?;
+    }
+    Ok(())
+}
+
+// A peer that stays full is answered as busy, with a retry hint, and never
+// as a failed upstream.
+#[tokio::test]
+async fn a_peer_that_stays_full_is_busy_not_failed() -> TestResult {
+    let upstream = slow_upstream().await?;
+    let directory = tempfile::tempdir()?;
+    let socket = endpoint_path(&directory);
+    endpoint_limited(
+        &socket,
+        vec![("preview", upstream)],
+        Limit::new(0, OverLimit::Coded),
+    )?;
+    let mut config = GatewayRuntimeConfig::new((Ipv4Addr::LOCALHOST, 0).into());
+    config.upstream_timeout = Duration::from_millis(600);
+    let gateway = gateway_configured(
+        &[("preview.test", "supgang+http://solis/preview")],
+        pin()?,
+        Some(socket),
+        None,
+        config,
+    )?;
+    let (mut stream, head) = exchange(gateway.address, &get("preview.test")).await?;
+    assert!(head.starts_with("http/1.1 503"), "{head}");
+    assert!(head.contains("retry-after: 1\r\n"), "{head}");
+    let mut body = Vec::new();
+    timeout(Duration::from_secs(5), stream.read_to_end(&mut body)).await??;
+    let body = String::from_utf8(body)?;
+    assert!(body.contains("E_GATEWAY_PEER_BUSY"), "{body}");
+    assert!(body.contains("Mapping: preview.test"), "{body}");
+    assert!(!body.contains("E_GATEWAY_UPSTREAM"), "{body}");
+    gateway.stop().await
 }

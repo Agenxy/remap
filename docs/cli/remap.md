@@ -190,6 +190,11 @@ The causes are `refused`, `timeout`, `tls`, `reset`, `unreachable` and `other`.
 `504 E_GATEWAY_TIMEOUT` always has cause `timeout`. The response never shows the
 target's address or port; `remap get` shows it to you.
 
+A Supgang peer allows only so many tunnels at once (`supgang peers` shows its
+use and limit). When every tunnel is in use, the gateway waits up to three
+seconds for one to free. If none does, it answers `503 E_GATEWAY_PEER_BUSY` with
+`Retry-After: 1`. That means the service is up and busy, not broken (ADR-0040).
+
 ## Validate without the daemon
 
 ```text

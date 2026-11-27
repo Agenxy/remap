@@ -22,7 +22,7 @@ use tokio_rustls::TlsConnector;
 
 use crate::failure::UpstreamCause;
 use crate::proxy::ProxyClient;
-use crate::supgang_stream::{StreamError, SupgangStreams};
+use crate::supgang_stream::{BUSY_PATIENCE, StreamError, SupgangStreams};
 
 /// How the request leaves the gateway.
 pub(crate) enum Dialer {
@@ -55,6 +55,8 @@ pub(crate) enum SendError {
     Upstream(UpstreamCause),
     /// Nothing answered before the routing deadline.
     Timeout,
+    /// The peer had no free stream, and none freed while the gateway waited.
+    PeerBusy,
 }
 
 impl Dialer {
@@ -74,15 +76,19 @@ impl Dialer {
                 })
                 .await
             }
-            Self::Stream(dial) => timeout(deadline, dial.send(request)).await,
+            Self::Stream(dial) => timeout(deadline, dial.send(request, deadline)).await,
         };
         sent.unwrap_or(Err(SendError::Timeout))
     }
 }
 
 impl StreamDial {
-    async fn send(self, request: Request<Incoming>) -> Result<Response<Incoming>, SendError> {
-        let stream = match self.streams.open(&self.node, &self.service).await {
+    async fn send(
+        self,
+        request: Request<Incoming>,
+        deadline: Duration,
+    ) -> Result<Response<Incoming>, SendError> {
+        let stream = match self.open(deadline).await {
             Ok(stream) => stream,
             Err(refused) => {
                 let client = self.fallback.ok_or_else(|| stream_refused(&refused))?;
@@ -104,6 +110,22 @@ impl StreamDial {
             }
             None => exchange(stream, request).await,
         }
+    }
+}
+
+impl StreamDial {
+    /// A service with a direct fallback asks for a stream once and takes
+    /// the fallback when the peer is busy. A tunnel-only service waits for
+    /// a free stream for part of the routing deadline, leaving the rest for
+    /// the exchange itself.
+    async fn open(&self, deadline: Duration) -> Result<tokio::net::UnixStream, StreamError> {
+        if self.fallback.is_some() {
+            return self.streams.open(&self.node, &self.service).await;
+        }
+        let patience = BUSY_PATIENCE.min(deadline / 2);
+        self.streams
+            .open_patiently(&self.node, &self.service, patience)
+            .await
     }
 }
 
@@ -133,6 +155,7 @@ fn upstream(error: &(dyn std::error::Error + 'static)) -> SendError {
 /// used at all is reported without guessing at the network beyond it.
 const fn stream_refused(error: &StreamError) -> SendError {
     SendError::Upstream(match error {
+        StreamError::Busy => return SendError::PeerBusy,
         StreamError::Refused => UpstreamCause::Refused,
         StreamError::Unavailable | StreamError::WrongOwner | StreamError::Malformed => {
             UpstreamCause::Other
