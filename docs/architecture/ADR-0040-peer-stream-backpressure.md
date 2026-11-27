@@ -32,8 +32,13 @@ What was wrong was how Remap answered it:
 1. **Classify the refusal.** Supgang's local control reply may carry a stable
    `code` next to its `message`.
    - These codes are transient and are waited out: `peer_at_capacity`,
-     `peer_full`, `runtime_full`, `session_failed`, `not_connected` and
-     `authorization_lapsed`.
+     `upstream_unavailable`, `peer_full`, `runtime_full`, `session_failed`,
+     `not_connected` and `authorization_lapsed`.
+   - `refused` is asked again for at most 300 ms. Peers older than
+     Supgang's `upstream_unavailable` reply send `refused` both for a service
+     that is not exposed and for one whose own listener briefly turned a
+     connection away under a burst. A short grace covers the second case
+     without making the first one slow.
    - Every other code, including codes this client does not know, is a final
      refusal and fails at once, as before.
    - A refusal without a code, and a close before the first reply byte, come

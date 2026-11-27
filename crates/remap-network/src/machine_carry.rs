@@ -252,7 +252,9 @@ impl Carrier {
             .await
             .map_err(|error| match error {
                 StreamError::Unavailable => CarryFailure::NoSupgang,
-                StreamError::Refused | StreamError::Busy => CarryFailure::Refused,
+                StreamError::Refused | StreamError::Busy | StreamError::Declined => {
+                    CarryFailure::Refused
+                }
                 StreamError::WrongOwner => CarryFailure::WrongOwner,
                 StreamError::Malformed => CarryFailure::Malformed,
             })

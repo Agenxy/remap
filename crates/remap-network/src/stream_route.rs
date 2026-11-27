@@ -156,7 +156,7 @@ fn upstream(error: &(dyn std::error::Error + 'static)) -> SendError {
 const fn stream_refused(error: &StreamError) -> SendError {
     SendError::Upstream(match error {
         StreamError::Busy => return SendError::PeerBusy,
-        StreamError::Refused => UpstreamCause::Refused,
+        StreamError::Refused | StreamError::Declined => UpstreamCause::Refused,
         StreamError::Unavailable | StreamError::WrongOwner | StreamError::Malformed => {
             UpstreamCause::Other
         }

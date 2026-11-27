@@ -40,10 +40,16 @@ pub(crate) const BUSY_PATIENCE: Duration = Duration::from_secs(3);
 const FIRST_BACKOFF: Duration = Duration::from_millis(20);
 /// The longest pause between two asks of a busy peer.
 const MAX_BACKOFF: Duration = Duration::from_millis(250);
+/// How long a plain `refused` is asked again. Peers before Supgang's
+/// `upstream_unavailable` reply send `refused` both for a service that is
+/// not exposed and for one whose own listener briefly turned a connection
+/// away, so it gets a short grace, not the full patience.
+const REFUSED_GRACE: Duration = Duration::from_millis(300);
 /// Refusal codes Supgang sends for a condition that ends on its own: a
 /// tunnel slot frees, or the session to the peer is re-established.
-const TRANSIENT_CODES: [&str; 6] = [
+const TRANSIENT_CODES: [&str; 7] = [
     "peer_at_capacity",
+    "upstream_unavailable",
     "peer_full",
     "runtime_full",
     "session_failed",
@@ -64,6 +70,10 @@ pub enum StreamError {
     /// Supgang declined for now: the peer's tunnels are all in use or its
     /// session is being re-established. Asking again shortly may succeed.
     Busy,
+    /// Supgang sent `refused`, which an older peer also sends when the
+    /// service's own listener turned a connection away. Asked again only
+    /// briefly; reported as [`StreamError::Refused`].
+    Declined,
     /// The reply was not the shape version 1 defines.
     Malformed,
 }
@@ -73,7 +83,7 @@ impl fmt::Display for StreamError {
         formatter.write_str(match self {
             Self::Unavailable => "Supgang's stream endpoint is not available",
             Self::WrongOwner => "Supgang's stream endpoint is not this user's",
-            Self::Refused => "Supgang refused a stream to that service",
+            Self::Refused | Self::Declined => "Supgang refused a stream to that service",
             Self::Busy => "the peer has no free stream right now",
             Self::Malformed => "Supgang's stream reply could not be read",
         })
@@ -105,6 +115,7 @@ impl Reply {
         match self.code.as_deref() {
             None => StreamError::Busy,
             Some(code) if TRANSIENT_CODES.contains(&code) => StreamError::Busy,
+            Some("refused") => StreamError::Declined,
             Some(_) => StreamError::Refused,
         }
     }
@@ -165,7 +176,8 @@ impl SupgangStreams {
 
     /// Opens a stream like [`Self::open`], asking again with a growing
     /// pause while the peer is [`StreamError::Busy`], for at most
-    /// `patience`. Every other answer is returned at once.
+    /// `patience`, and while it is [`StreamError::Declined`], for at most
+    /// the shorter refusal grace. Every other answer is returned at once.
     ///
     /// # Errors
     ///
@@ -176,16 +188,23 @@ impl SupgangStreams {
         service: &str,
         patience: Duration,
     ) -> Result<UnixStream, StreamError> {
-        let give_up = Instant::now() + patience;
+        let started = Instant::now();
         let mut pause = FIRST_BACKOFF;
         loop {
-            match self.open(node, service).await {
-                Err(StreamError::Busy) if Instant::now() + pause < give_up => {
-                    sleep(pause).await;
-                    pause = (pause * 2).min(MAX_BACKOFF);
-                }
-                answered => return answered,
+            let answered = self.open(node, service).await;
+            let budget = match answered {
+                Err(StreamError::Busy) => patience,
+                Err(StreamError::Declined) => REFUSED_GRACE.min(patience),
+                _ => return answered,
+            };
+            if started.elapsed() + pause >= budget {
+                return answered.map_err(|error| match error {
+                    StreamError::Declined => StreamError::Refused,
+                    other => other,
+                });
             }
+            sleep(pause).await;
+            pause = (pause * 2).min(MAX_BACKOFF);
         }
     }
 }
@@ -257,6 +276,7 @@ mod tests {
     fn only_a_transient_code_or_no_code_is_waited_out() {
         for code in [
             "peer_at_capacity",
+            "upstream_unavailable",
             "peer_full",
             "session_failed",
             "not_connected",
@@ -264,7 +284,11 @@ mod tests {
             let json = format!(r#"{{"response":"error","code":"{code}","message":"m"}}"#);
             assert_eq!(refusal(&json), Some(StreamError::Busy), "{code}");
         }
-        for code in ["revoked", "refused", "invalid_name", "a-future-code"] {
+        assert_eq!(
+            refusal(r#"{"response":"error","code":"refused","message":"m"}"#),
+            Some(StreamError::Declined)
+        );
+        for code in ["revoked", "invalid_name", "unknown", "a-future-code"] {
             let json = format!(r#"{{"response":"error","code":"{code}","message":"m"}}"#);
             assert_eq!(refusal(&json), Some(StreamError::Refused), "{code}");
         }
